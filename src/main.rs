@@ -243,50 +243,188 @@ async fn get_collection(
     let _guard = state.io_lock.lock().await;
     let data = load_resource(&state.folder, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
-    let (filters, sort_columns) = split_collection_query_params(query_params);
+    let parsed = parse_collection_query_params(query_params)?;
 
-    if filters.is_empty() && sort_columns.is_empty() {
+    if parsed.filters.is_empty() && parsed.sort_columns.is_empty() && parsed.pagination.is_none() {
         return Ok(Json(data));
     }
 
-    let filtered = if filters.is_empty() {
+    let filtered = if parsed.filters.is_empty() {
         data
     } else {
-        filter_collection_data(data, &filters)?
+        filter_collection_data(data, &parsed.filters)?
     };
 
-    if sort_columns.is_empty() {
-        return Ok(Json(filtered));
+    let sorted = if parsed.sort_columns.is_empty() {
+        filtered
+    } else {
+        sort_collection_data(filtered, &parsed.sort_columns)?
+    };
+
+    if let Some(pagination) = parsed.pagination {
+        return Ok(Json(paginate_collection_data(sorted, pagination)?));
     }
 
-    let sorted = sort_collection_data(filtered, &sort_columns)?;
     Ok(Json(sorted))
 }
 
-fn split_collection_query_params(
+#[derive(Debug, Clone, Copy)]
+enum FilterOperator {
+    Eq,
+    Ne,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+    In,
+    Contains,
+    StartsWith,
+    EndsWith,
+}
+
+#[derive(Debug, Clone)]
+struct FilterCondition {
+    field_path: String,
+    operator: FilterOperator,
+    value: String,
+}
+
+#[derive(Debug, Clone)]
+struct SortColumn {
+    field_path: String,
+    descending: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Pagination {
+    page: usize,
+    per_page: usize,
+}
+
+#[derive(Debug, Default)]
+struct ParsedCollectionQuery {
+    filters: Vec<FilterCondition>,
+    sort_columns: Vec<SortColumn>,
+    pagination: Option<Pagination>,
+}
+
+fn parse_collection_query_params(
     query_params: Vec<(String, String)>,
-) -> (Vec<(String, String)>, Vec<String>) {
+) -> Result<ParsedCollectionQuery, AppError> {
     let mut filters = Vec::new();
     let mut sort_columns = Vec::new();
+    let mut page = None;
+    let mut per_page = None;
 
     for (key, value) in query_params {
-        if key == "sort" {
+        if key == "sort" || key == "_sort" {
             for column in value.split(',') {
                 let column = column.trim();
                 if !column.is_empty() {
-                    sort_columns.push(column.to_string());
+                    let (descending, field_path) = if let Some(stripped) = column.strip_prefix('-')
+                    {
+                        (true, stripped)
+                    } else {
+                        (false, column)
+                    };
+
+                    if !field_path.is_empty() {
+                        sort_columns.push(SortColumn {
+                            field_path: field_path.to_string(),
+                            descending,
+                        });
+                    }
                 }
             }
             continue;
         }
 
-        filters.push((key, value));
+        if key == "page" || key == "_page" {
+            page = Some(parse_positive_usize(&key, &value)?);
+            continue;
+        }
+
+        if key == "per_page" || key == "_per_page" {
+            per_page = Some(parse_positive_usize(&key, &value)?);
+            continue;
+        }
+
+        let (field_path, operator) = parse_filter_key(&key)?;
+
+        filters.push(FilterCondition {
+            field_path,
+            operator,
+            value,
+        });
     }
 
-    (filters, sort_columns)
+    let pagination = match (page, per_page) {
+        (None, None) => None,
+        (Some(page), Some(per_page)) => Some(Pagination { page, per_page }),
+        (Some(page), None) => Some(Pagination { page, per_page: 10 }),
+        (None, Some(per_page)) => Some(Pagination { page: 1, per_page }),
+    };
+
+    Ok(ParsedCollectionQuery {
+        filters,
+        sort_columns,
+        pagination,
+    })
 }
 
-fn filter_collection_data(data: Value, filters: &[(String, String)]) -> Result<Value, AppError> {
+fn parse_positive_usize(key: &str, value: &str) -> Result<usize, AppError> {
+    let parsed = value.parse::<usize>().map_err(|_| {
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Invalid value for '{key}': '{value}'"),
+        )
+    })?;
+
+    if parsed == 0 {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!("'{key}' must be greater than 0"),
+        ));
+    }
+
+    Ok(parsed)
+}
+
+fn parse_filter_key(key: &str) -> Result<(String, FilterOperator), AppError> {
+    let Some((field_path, operator)) = key.split_once(':') else {
+        return Ok((key.to_string(), FilterOperator::Eq));
+    };
+
+    let operator = match operator {
+        "eq" => FilterOperator::Eq,
+        "ne" => FilterOperator::Ne,
+        "lt" => FilterOperator::Lt,
+        "lte" => FilterOperator::Lte,
+        "gt" => FilterOperator::Gt,
+        "gte" => FilterOperator::Gte,
+        "in" => FilterOperator::In,
+        "contains" => FilterOperator::Contains,
+        "startsWith" => FilterOperator::StartsWith,
+        "endsWith" => FilterOperator::EndsWith,
+        _ => {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                format!("Unsupported filter operator '{operator}' in '{key}'"),
+            ));
+        }
+    };
+
+    if field_path.is_empty() {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Invalid filter key '{key}'"),
+        ));
+    }
+
+    Ok((field_path.to_string(), operator))
+}
+
+fn filter_collection_data(data: Value, filters: &[FilterCondition]) -> Result<Value, AppError> {
     let items = data
         .as_array()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
@@ -300,7 +438,7 @@ fn filter_collection_data(data: Value, filters: &[(String, String)]) -> Result<V
     Ok(Value::Array(filtered))
 }
 
-fn sort_collection_data(data: Value, sort_columns: &[String]) -> Result<Value, AppError> {
+fn sort_collection_data(data: Value, sort_columns: &[SortColumn]) -> Result<Value, AppError> {
     let items = data
         .as_array()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
@@ -310,14 +448,14 @@ fn sort_collection_data(data: Value, sort_columns: &[String]) -> Result<Value, A
     Ok(Value::Array(sorted))
 }
 
-fn compare_items_by_columns(left: &Value, right: &Value, sort_columns: &[String]) -> Ordering {
-    let left_object = left.as_object();
-    let right_object = right.as_object();
-
+fn compare_items_by_columns(left: &Value, right: &Value, sort_columns: &[SortColumn]) -> Ordering {
     for column in sort_columns {
-        let left_value = left_object.and_then(|obj| obj.get(column));
-        let right_value = right_object.and_then(|obj| obj.get(column));
-        let cmp = compare_optional_values(left_value, right_value);
+        let left_value = get_value_at_path(left, &column.field_path);
+        let right_value = get_value_at_path(right, &column.field_path);
+        let mut cmp = compare_optional_values(left_value, right_value);
+        if column.descending {
+            cmp = cmp.reverse();
+        }
         if cmp != Ordering::Equal {
             return cmp;
         }
@@ -349,16 +487,104 @@ fn compare_json_values(left: &Value, right: &Value) -> Ordering {
     }
 }
 
-fn item_matches_filters(item: &Value, filters: &[(String, String)]) -> bool {
-    let Some(object) = item.as_object() else {
-        return false;
+fn item_matches_filters(item: &Value, filters: &[FilterCondition]) -> bool {
+    filters.iter().all(|condition| {
+        let Some(actual) = get_value_at_path(item, &condition.field_path) else {
+            return false;
+        };
+
+        matches_filter(actual, condition)
+    })
+}
+
+fn matches_filter(actual: &Value, condition: &FilterCondition) -> bool {
+    match condition.operator {
+        FilterOperator::Eq => value_to_filter_string(actual) == condition.value,
+        FilterOperator::Ne => value_to_filter_string(actual) != condition.value,
+        FilterOperator::Lt => {
+            compare_with_expected(actual, &condition.value).is_some_and(|cmp| cmp == Ordering::Less)
+        }
+        FilterOperator::Lte => compare_with_expected(actual, &condition.value)
+            .is_some_and(|cmp| cmp == Ordering::Less || cmp == Ordering::Equal),
+        FilterOperator::Gt => compare_with_expected(actual, &condition.value)
+            .is_some_and(|cmp| cmp == Ordering::Greater),
+        FilterOperator::Gte => compare_with_expected(actual, &condition.value)
+            .is_some_and(|cmp| cmp == Ordering::Greater || cmp == Ordering::Equal),
+        FilterOperator::In => condition
+            .value
+            .split(',')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .any(|v| value_to_filter_string(actual) == v),
+        FilterOperator::Contains => actual.as_str().is_some_and(|text| {
+            text.to_lowercase()
+                .contains(&condition.value.to_lowercase())
+        }),
+        FilterOperator::StartsWith => actual.as_str().is_some_and(|text| {
+            text.to_lowercase()
+                .starts_with(&condition.value.to_lowercase())
+        }),
+        FilterOperator::EndsWith => actual.as_str().is_some_and(|text| {
+            text.to_lowercase()
+                .ends_with(&condition.value.to_lowercase())
+        }),
+    }
+}
+
+fn compare_with_expected(actual: &Value, expected: &str) -> Option<Ordering> {
+    if let Some(actual_num) = actual.as_f64() {
+        let expected_num = expected.parse::<f64>().ok()?;
+        return actual_num.partial_cmp(&expected_num);
+    }
+
+    if let Some(actual_bool) = actual.as_bool() {
+        let expected_bool = expected.parse::<bool>().ok()?;
+        return Some(actual_bool.cmp(&expected_bool));
+    }
+
+    Some(value_to_filter_string(actual).as_str().cmp(expected))
+}
+
+fn get_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut current = value;
+
+    for segment in path.split('.') {
+        let object = current.as_object()?;
+        current = object.get(segment)?;
+    }
+
+    Some(current)
+}
+
+fn paginate_collection_data(data: Value, pagination: Pagination) -> Result<Value, AppError> {
+    let items = data
+        .as_array()
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
+
+    let total_items = items.len();
+    let pages = if total_items == 0 {
+        1
+    } else {
+        total_items.div_ceil(pagination.per_page)
+    };
+    let page = pagination.page.min(pages.max(1));
+    let start = (page - 1) * pagination.per_page;
+    let end = (start + pagination.per_page).min(total_items);
+    let data = if start < total_items {
+        items[start..end].to_vec()
+    } else {
+        Vec::new()
     };
 
-    filters.iter().all(|(key, expected)| {
-        object
-            .get(key)
-            .is_some_and(|value| value_to_filter_string(value) == *expected)
-    })
+    Ok(serde_json::json!({
+        "first": 1,
+        "prev": if page > 1 { Some(page - 1) } else { None::<usize> },
+        "next": if page < pages { Some(page + 1) } else { None::<usize> },
+        "last": pages,
+        "pages": pages,
+        "items": total_items,
+        "data": data,
+    }))
 }
 
 fn value_to_filter_string(value: &Value) -> String {
@@ -902,8 +1128,16 @@ mod tests {
         let filtered = filter_collection_data(
             data,
             &[
-                ("role".to_string(), "admin".to_string()),
-                ("active".to_string(), "true".to_string()),
+                FilterCondition {
+                    field_path: "role".to_string(),
+                    operator: FilterOperator::Eq,
+                    value: "admin".to_string(),
+                },
+                FilterCondition {
+                    field_path: "active".to_string(),
+                    operator: FilterOperator::Eq,
+                    value: "true".to_string(),
+                },
             ],
         )
         .expect("filter collection");
@@ -922,7 +1156,14 @@ mod tests {
             {"id": 3, "role": "admin", "name": "Bob"}
         ]);
 
-        let sorted = sort_collection_data(data.clone(), &["id".to_string()]).expect("sort by id");
+        let sorted = sort_collection_data(
+            data.clone(),
+            &[SortColumn {
+                field_path: "id".to_string(),
+                descending: false,
+            }],
+        )
+        .expect("sort by id");
         assert_eq!(
             sorted,
             serde_json::json!([
@@ -932,8 +1173,20 @@ mod tests {
             ])
         );
 
-        let sorted_multi = sort_collection_data(data, &["role".to_string(), "name".to_string()])
-            .expect("sort by role and name");
+        let sorted_multi = sort_collection_data(
+            data,
+            &[
+                SortColumn {
+                    field_path: "role".to_string(),
+                    descending: false,
+                },
+                SortColumn {
+                    field_path: "name".to_string(),
+                    descending: false,
+                },
+            ],
+        )
+        .expect("sort by role and name");
         assert_eq!(
             sorted_multi,
             serde_json::json!([
@@ -945,21 +1198,76 @@ mod tests {
     }
 
     #[test]
-    fn splits_query_params_into_filters_and_sort_columns() {
-        let (filters, sort_columns) = split_collection_query_params(vec![
-            ("role".to_string(), "admin".to_string()),
-            ("sort".to_string(), "role,name".to_string()),
-            ("active".to_string(), "true".to_string()),
-            ("sort".to_string(), "id".to_string()),
+    fn supports_advanced_filter_operators_and_pagination() {
+        let data = serde_json::json!([
+            {"id": 1, "title": "Hello World", "views": 150, "author": {"name": "Typicode"}},
+            {"id": 2, "title": "Other post", "views": 80, "author": {"name": "Alice"}},
+            {"id": 3, "title": "hello rust", "views": 200, "author": {"name": "Typicode"}}
         ]);
 
+        let filtered = filter_collection_data(
+            data.clone(),
+            &[
+                FilterCondition {
+                    field_path: "views".to_string(),
+                    operator: FilterOperator::Gt,
+                    value: "100".to_string(),
+                },
+                FilterCondition {
+                    field_path: "title".to_string(),
+                    operator: FilterOperator::Contains,
+                    value: "hello".to_string(),
+                },
+                FilterCondition {
+                    field_path: "author.name".to_string(),
+                    operator: FilterOperator::Eq,
+                    value: "Typicode".to_string(),
+                },
+            ],
+        )
+        .expect("filter collection");
+
         assert_eq!(
-            filters,
-            vec![
-                ("role".to_string(), "admin".to_string()),
-                ("active".to_string(), "true".to_string())
-            ]
+            filtered,
+            serde_json::json!([
+                {"id": 1, "title": "Hello World", "views": 150, "author": {"name": "Typicode"}},
+                {"id": 3, "title": "hello rust", "views": 200, "author": {"name": "Typicode"}}
+            ])
         );
-        assert_eq!(sort_columns, vec!["role", "name", "id"]);
+
+        let paged = paginate_collection_data(
+            data,
+            Pagination {
+                page: 2,
+                per_page: 2,
+            },
+        )
+        .expect("paginate collection");
+        assert_eq!(paged["items"], 3);
+        assert_eq!(paged["pages"], 2);
+        assert_eq!(paged["prev"], 1);
+        assert_eq!(paged["next"], serde_json::Value::Null);
+        assert_eq!(paged["data"].as_array().expect("array").len(), 1);
+    }
+
+    #[test]
+    fn splits_query_params_into_filters_and_sort_columns() {
+        let parsed = parse_collection_query_params(vec![
+            ("role".to_string(), "admin".to_string()),
+            ("_sort".to_string(), "-role,name".to_string()),
+            ("active".to_string(), "true".to_string()),
+            ("sort".to_string(), "id".to_string()),
+            ("_page".to_string(), "2".to_string()),
+            ("_per_page".to_string(), "25".to_string()),
+        ])
+        .expect("parse query params");
+
+        assert_eq!(parsed.filters.len(), 2);
+        assert_eq!(parsed.filters[0].field_path, "role");
+        assert!(matches!(parsed.filters[0].operator, FilterOperator::Eq));
+        assert_eq!(parsed.sort_columns.len(), 3);
+        assert_eq!(parsed.sort_columns[0].field_path, "role");
+        assert!(parsed.sort_columns[0].descending);
+        assert_eq!(parsed.pagination.unwrap().page, 2);
     }
 }

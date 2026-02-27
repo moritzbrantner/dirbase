@@ -26,8 +26,10 @@ you get:
 - `GET /` lists all available resources discovered from `*.json` files.
 - While the server is running, file additions, edits, and deletions in the selected folder are watched and the available endpoints update automatically.
 - `GET /{resource}` returns the whole JSON document from `{resource}.json` (array or object).
-- `GET /{resource}?field=value&other=...` filters array resources by one or more exact-match query parameters.
-- `GET /{resource}?sort=column` sorts array resources ascending by a column; pass multiple columns with commas (for example `sort=role,name`) or repeated `sort` params.
+- `GET /{resource}?field=value&other=...` filters array resources (default operator is `eq`).
+- Advanced filters use `field:operator=value` and support: `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `contains`, `startsWith`, and `endsWith` (for example `views:gt=100`, `author.name:eq=typicode`, `title:contains=hello`).
+- Sorting supports `sort` and `_sort` keywords; use `-column` for descending and comma-separated multi-sort (for example `_sort=author.name,-views`).
+- Pagination supports `page`/`_page` and `per_page`/`_per_page`. Array responses become an object containing `{ first, prev, next, last, pages, items, data }`.
 - Item routes (`/{resource}/{id}`) assume the resource file is a JSON array of objects with an `id` field.
 - `POST /{resource}` appends a new object to the array and auto-generates a numeric `id` if none is provided.
 - `PUT`, `PATCH`, and `DELETE` mutate the corresponding array item and persist changes to disk.
