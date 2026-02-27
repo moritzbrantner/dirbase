@@ -139,6 +139,90 @@ fn query_parameters_return_clear_400_errors_for_invalid_values() {
         bad_operator.contains("\"error\":\"Unsupported filter operator 'unknown' in 'title:unknown'\""),
         "{bad_operator}"
     );
+
+    let bad_per_page = http_get("127.0.0.1:3015", "/posts?per_page=abc");
+    assert!(
+        bad_per_page.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+        "{bad_per_page}"
+    );
+    assert!(
+        bad_per_page.contains("\"error\":\"Invalid value for 'per_page': 'abc'\""),
+        "{bad_per_page}"
+    );
+}
+
+#[test]
+fn query_parameters_support_unprefixed_pagination_aliases() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("posts.json"),
+        r#"[
+  {"id": 1, "title": "one"},
+  {"id": 2, "title": "two"},
+  {"id": 3, "title": "three"},
+  {"id": 4, "title": "four"}
+]
+"#,
+    )
+    .expect("write posts");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3016")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3016", Duration::from_secs(5));
+
+    let page_two = http_get("127.0.0.1:3016", "/posts?page=2&per_page=2");
+    assert!(page_two.starts_with("HTTP/1.1 200 OK\r\n"), "{page_two}");
+    let payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&page_two)).expect("valid json body");
+    assert_eq!(payload["prev"], 1);
+    assert_eq!(payload["next"], serde_json::Value::Null);
+    assert_eq!(payload["last"], 2);
+
+    let ids = payload["data"]
+        .as_array()
+        .expect("array response")
+        .iter()
+        .map(|item| item["id"].as_i64().expect("numeric id"))
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec![3, 4]);
+}
+
+#[test]
+fn retrieval_returns_400_for_invalid_resource_name() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(temp.path().join("users.json"), "[]\n").expect("write users");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3017")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3017", Duration::from_secs(5));
+
+    let response = http_get("127.0.0.1:3017", "/users..bad/1");
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+        "{response}"
+    );
+    assert!(
+        response.contains("\"error\":\"Resource name must only contain letters, numbers, underscore, and dash\""),
+        "{response}"
+    );
 }
 
 fn wait_for_server(addr: &str, timeout: Duration) {
