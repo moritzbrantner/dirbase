@@ -30,6 +30,9 @@ you get:
 - `POST /{resource}` appends a new object to the array and auto-generates a numeric `id` if none is provided.
 - `PUT`, `PATCH`, and `DELETE` mutate the corresponding item and persist changes to disk.
 - `--readonly` disables mutation routes and only serves `GET` endpoints.
+- Schema validation is enabled automatically when `{folder}/schema.dbml` exists.
+- Use `--schema <path>` to load a DBML schema from a custom location.
+- When a schema is active, resources must map to DBML tables and row values must match declared column types.
 
 ## Quick start
 
@@ -58,6 +61,9 @@ cargo run -- --folder ./data --bind 127.0.0.1:3000
 
 # Read-only mode (only GET routes)
 cargo run -- --folder ./data --bind 127.0.0.1:3000 --readonly
+
+# Explicit schema file (if not using ./data/schema.dbml)
+cargo run -- --folder ./data --schema ./schema.dbml
 ```
 
 ### 3) Try the API
