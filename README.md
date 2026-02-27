@@ -27,6 +27,7 @@ you get:
 - While the server is running, file additions, edits, and deletions in the selected folder are watched and the available endpoints update automatically.
 - `GET /{resource}` returns the whole JSON document from `{resource}.json` (array or object).
 - `GET /{resource}?field=value&other=...` filters array resources by one or more exact-match query parameters.
+- `GET /{resource}?sort=column` sorts array resources ascending by a column; pass multiple columns with commas (for example `sort=role,name`) or repeated `sort` params.
 - Item routes (`/{resource}/{id}`) assume the resource file is a JSON array of objects with an `id` field.
 - `POST /{resource}` appends a new object to the array and auto-generates a numeric `id` if none is provided.
 - `PUT`, `PATCH`, and `DELETE` mutate the corresponding array item and persist changes to disk.

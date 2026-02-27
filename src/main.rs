@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     collections::BTreeSet,
     fs,
     io::Write,
@@ -237,18 +238,52 @@ async fn list_resources(State(state): State<AppState>) -> Result<Json<Value>, Ap
 async fn get_collection(
     State(state): State<AppState>,
     AxumPath(resource): AxumPath<String>,
-    Query(filters): Query<Vec<(String, String)>>,
+    Query(query_params): Query<Vec<(String, String)>>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.io_lock.lock().await;
     let data = load_resource(&state.folder, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
+    let (filters, sort_columns) = split_collection_query_params(query_params);
 
-    if filters.is_empty() {
+    if filters.is_empty() && sort_columns.is_empty() {
         return Ok(Json(data));
     }
 
-    let filtered = filter_collection_data(data, &filters)?;
-    Ok(Json(filtered))
+    let filtered = if filters.is_empty() {
+        data
+    } else {
+        filter_collection_data(data, &filters)?
+    };
+
+    if sort_columns.is_empty() {
+        return Ok(Json(filtered));
+    }
+
+    let sorted = sort_collection_data(filtered, &sort_columns)?;
+    Ok(Json(sorted))
+}
+
+fn split_collection_query_params(
+    query_params: Vec<(String, String)>,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let mut filters = Vec::new();
+    let mut sort_columns = Vec::new();
+
+    for (key, value) in query_params {
+        if key == "sort" {
+            for column in value.split(',') {
+                let column = column.trim();
+                if !column.is_empty() {
+                    sort_columns.push(column.to_string());
+                }
+            }
+            continue;
+        }
+
+        filters.push((key, value));
+    }
+
+    (filters, sort_columns)
 }
 
 fn filter_collection_data(data: Value, filters: &[(String, String)]) -> Result<Value, AppError> {
@@ -263,6 +298,55 @@ fn filter_collection_data(data: Value, filters: &[(String, String)]) -> Result<V
         .collect::<Vec<_>>();
 
     Ok(Value::Array(filtered))
+}
+
+fn sort_collection_data(data: Value, sort_columns: &[String]) -> Result<Value, AppError> {
+    let items = data
+        .as_array()
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
+
+    let mut sorted = items.to_vec();
+    sorted.sort_by(|a, b| compare_items_by_columns(a, b, sort_columns));
+    Ok(Value::Array(sorted))
+}
+
+fn compare_items_by_columns(left: &Value, right: &Value, sort_columns: &[String]) -> Ordering {
+    let left_object = left.as_object();
+    let right_object = right.as_object();
+
+    for column in sort_columns {
+        let left_value = left_object.and_then(|obj| obj.get(column));
+        let right_value = right_object.and_then(|obj| obj.get(column));
+        let cmp = compare_optional_values(left_value, right_value);
+        if cmp != Ordering::Equal {
+            return cmp;
+        }
+    }
+
+    Ordering::Equal
+}
+
+fn compare_optional_values(left: Option<&Value>, right: Option<&Value>) -> Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => compare_json_values(left, right),
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn compare_json_values(left: &Value, right: &Value) -> Ordering {
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => left
+            .as_f64()
+            .zip(right.as_f64())
+            .and_then(|(l, r)| l.partial_cmp(&r))
+            .unwrap_or(Ordering::Equal),
+        (Value::Bool(left), Value::Bool(right)) => left.cmp(right),
+        (Value::String(left), Value::String(right)) => left.cmp(right),
+        (Value::Null, Value::Null) => Ordering::Equal,
+        _ => value_to_filter_string(left).cmp(&value_to_filter_string(right)),
+    }
 }
 
 fn item_matches_filters(item: &Value, filters: &[(String, String)]) -> bool {
@@ -828,5 +912,54 @@ mod tests {
             filtered,
             serde_json::json!([{"id": 1, "role": "admin", "active": true}])
         );
+    }
+
+    #[test]
+    fn sorts_collection_items_by_one_or_more_columns() {
+        let data = serde_json::json!([
+            {"id": 2, "role": "admin", "name": "Zed"},
+            {"id": 1, "role": "member", "name": "Ada"},
+            {"id": 3, "role": "admin", "name": "Bob"}
+        ]);
+
+        let sorted = sort_collection_data(data.clone(), &["id".to_string()]).expect("sort by id");
+        assert_eq!(
+            sorted,
+            serde_json::json!([
+                {"id": 1, "role": "member", "name": "Ada"},
+                {"id": 2, "role": "admin", "name": "Zed"},
+                {"id": 3, "role": "admin", "name": "Bob"}
+            ])
+        );
+
+        let sorted_multi = sort_collection_data(data, &["role".to_string(), "name".to_string()])
+            .expect("sort by role and name");
+        assert_eq!(
+            sorted_multi,
+            serde_json::json!([
+                {"id": 3, "role": "admin", "name": "Bob"},
+                {"id": 2, "role": "admin", "name": "Zed"},
+                {"id": 1, "role": "member", "name": "Ada"}
+            ])
+        );
+    }
+
+    #[test]
+    fn splits_query_params_into_filters_and_sort_columns() {
+        let (filters, sort_columns) = split_collection_query_params(vec![
+            ("role".to_string(), "admin".to_string()),
+            ("sort".to_string(), "role,name".to_string()),
+            ("active".to_string(), "true".to_string()),
+            ("sort".to_string(), "id".to_string()),
+        ]);
+
+        assert_eq!(
+            filters,
+            vec![
+                ("role".to_string(), "admin".to_string()),
+                ("active".to_string(), "true".to_string())
+            ]
+        );
+        assert_eq!(sort_columns, vec!["role", "name", "id"]);
     }
 }

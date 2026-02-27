@@ -76,6 +76,58 @@ fn collection_supports_filtering_with_multiple_query_parameters() {
     );
 }
 
+#[test]
+fn collection_supports_sorting_by_multiple_columns() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let users_path = temp.path().join("users.json");
+
+    let users = serde_json::json!([
+        {"id": 3, "name": "Zed", "role": "admin"},
+        {"id": 1, "name": "Ada", "role": "member"},
+        {"id": 2, "name": "Bob", "role": "admin"}
+    ]);
+
+    std::fs::write(
+        users_path,
+        serde_json::to_string_pretty(&users).expect("serialize users"),
+    )
+    .expect("write users json");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3004")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3004", Duration::from_secs(5));
+
+    let response = http_get("127.0.0.1:3004", "/users?sort=role,name");
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK\r\n"),
+        "expected 200 OK response, got: {response}"
+    );
+
+    let body = response
+        .split("\r\n\r\n")
+        .nth(1)
+        .expect("response should have body");
+    let users: serde_json::Value = serde_json::from_str(body).expect("valid json body");
+    let sorted_ids = users
+        .as_array()
+        .expect("array response")
+        .iter()
+        .map(|item| item["id"].as_i64().expect("numeric id"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(sorted_ids, vec![2, 3, 1]);
+}
+
 fn wait_for_server(addr: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
 
