@@ -8,7 +8,7 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{Path as AxumPath, State},
+    extract::{Path as AxumPath, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
@@ -170,11 +170,54 @@ async fn list_resources(State(state): State<AppState>) -> Result<Json<Value>, Ap
 async fn get_collection(
     State(state): State<AppState>,
     AxumPath(resource): AxumPath<String>,
+    Query(filters): Query<Vec<(String, String)>>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.io_lock.lock().await;
     let data = load_resource(&state.folder, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
-    Ok(Json(data))
+
+    if filters.is_empty() {
+        return Ok(Json(data));
+    }
+
+    let filtered = filter_collection_data(data, &filters)?;
+    Ok(Json(filtered))
+}
+
+fn filter_collection_data(data: Value, filters: &[(String, String)]) -> Result<Value, AppError> {
+    let items = data
+        .as_array()
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
+
+    let filtered = items
+        .iter()
+        .filter(|item| item_matches_filters(item, filters))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Ok(Value::Array(filtered))
+}
+
+fn item_matches_filters(item: &Value, filters: &[(String, String)]) -> bool {
+    let Some(object) = item.as_object() else {
+        return false;
+    };
+
+    filters.iter().all(|(key, expected)| {
+        object
+            .get(key)
+            .is_some_and(|value| value_to_filter_string(value) == *expected)
+    })
+}
+
+fn value_to_filter_string(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Number(number) => number.to_string(),
+        Value::Bool(boolean) => boolean.to_string(),
+        Value::Null => "null".to_string(),
+        _ => value.to_string(),
+    }
 }
 
 async fn create_item(
@@ -645,5 +688,28 @@ mod tests {
 
         let unknown_col = serde_json::json!([{"id": 1, "name": "Ada", "role": "admin"}]);
         assert!(validate_resource_data(&state, "users", &unknown_col).is_err());
+    }
+
+    #[test]
+    fn filters_collection_items_with_multiple_query_params() {
+        let data = serde_json::json!([
+            {"id": 1, "role": "admin", "active": true},
+            {"id": 2, "role": "admin", "active": false},
+            {"id": 3, "role": "member", "active": true}
+        ]);
+
+        let filtered = filter_collection_data(
+            data,
+            &[
+                ("role".to_string(), "admin".to_string()),
+                ("active".to_string(), "true".to_string()),
+            ],
+        )
+        .expect("filter collection");
+
+        assert_eq!(
+            filtered,
+            serde_json::json!([{"id": 1, "role": "admin", "active": true}])
+        );
     }
 }

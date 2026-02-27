@@ -26,6 +26,7 @@ you get:
 - `GET /` lists all available resources discovered from `*.json` files.
 - While the server is running, file additions, edits, and deletions in the selected folder are watched and the available endpoints update automatically.
 - `GET /{resource}` returns the whole JSON document from `{resource}.json`.
+- `GET /{resource}?field=value&other=...` filters array resources by one or more exact-match query parameters.
 - Item routes (`/{resource}/{id}`) assume the resource file is a JSON array of objects with an `id` field.
 - `POST /{resource}` appends a new object to the array and auto-generates a numeric `id` if none is provided.
 - `PUT`, `PATCH`, and `DELETE` mutate the corresponding item and persist changes to disk.
