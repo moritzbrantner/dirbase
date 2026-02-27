@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs,
     net::SocketAddr,
     path::{Path, PathBuf},
@@ -18,6 +18,10 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
+
+mod schema;
+
+use schema::{ColumnType, Schema, TableSchema, load_schema};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -60,31 +64,6 @@ struct AppError {
 #[derive(Serialize)]
 struct ErrorBody {
     error: String,
-}
-
-#[derive(Clone, Debug)]
-struct Schema {
-    tables: BTreeMap<String, TableSchema>,
-}
-
-#[derive(Clone, Debug)]
-struct TableSchema {
-    columns: BTreeMap<String, ColumnSchema>,
-}
-
-#[derive(Clone, Debug)]
-struct ColumnSchema {
-    column_type: ColumnType,
-    nullable: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ColumnType {
-    Integer,
-    Float,
-    Boolean,
-    String,
-    Json,
 }
 
 impl AppError {
@@ -340,114 +319,6 @@ impl AppState {
     }
 }
 
-fn load_schema(folder: &Path, schema_path: Option<&Path>) -> Result<Option<Schema>, String> {
-    let resolved_path = if let Some(path) = schema_path {
-        path.to_path_buf()
-    } else {
-        let default = folder.join("schema.dbml");
-        if default.exists() {
-            default
-        } else {
-            return Ok(None);
-        }
-    };
-
-    let raw = fs::read_to_string(&resolved_path)
-        .map_err(|err| format!("{}: {err}", resolved_path.display()))?;
-    parse_dbml_schema(&raw).map(Some)
-}
-
-fn parse_dbml_schema(input: &str) -> Result<Schema, String> {
-    let mut tables = BTreeMap::new();
-    let mut current_table: Option<(String, TableSchema)> = None;
-
-    for (index, raw_line) in input.lines().enumerate() {
-        let line_number = index + 1;
-        let line = raw_line.split("//").next().unwrap_or_default().trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        if let Some((table_name, table)) = current_table.as_mut() {
-            if line == "}" {
-                let (name, table) = current_table.take().expect("present table");
-                tables.insert(name, table);
-                continue;
-            }
-
-            if line.starts_with("indexes") || line.starts_with("note") {
-                continue;
-            }
-
-            let (column_name, column_schema) = parse_column_line(line)
-                .map_err(|err| format!("line {line_number} (table {table_name}): {err}"))?;
-            table.columns.insert(column_name, column_schema);
-            continue;
-        }
-
-        if line.starts_with("Table ") {
-            let remainder = line.trim_start_matches("Table ").trim();
-            let name = remainder
-                .trim_end_matches('{')
-                .trim()
-                .trim_matches('"')
-                .to_string();
-            if name.is_empty() {
-                return Err(format!("line {line_number}: table name is missing"));
-            }
-
-            current_table = Some((
-                name,
-                TableSchema {
-                    columns: BTreeMap::new(),
-                },
-            ));
-        }
-    }
-
-    if let Some((name, _)) = current_table {
-        return Err(format!("Table '{name}' is missing closing '}}'"));
-    }
-
-    Ok(Schema { tables })
-}
-
-fn parse_column_line(line: &str) -> Result<(String, ColumnSchema), String> {
-    let mut parts = line
-        .splitn(3, char::is_whitespace)
-        .filter(|s| !s.is_empty());
-    let name = parts
-        .next()
-        .ok_or_else(|| "column name is missing".to_string())?;
-    let raw_type = parts
-        .next()
-        .ok_or_else(|| format!("column type is missing for '{name}'"))?;
-
-    let attrs = parts.next().unwrap_or_default().to_ascii_lowercase();
-    let nullable = !attrs.contains("not null") && !attrs.contains("pk");
-
-    let normalized_type = raw_type
-        .split('(')
-        .next()
-        .unwrap_or(raw_type)
-        .to_ascii_lowercase();
-    let column_type = match normalized_type.as_str() {
-        "int" | "integer" | "bigint" | "smallint" | "serial" => ColumnType::Integer,
-        "float" | "double" | "decimal" | "real" | "numeric" => ColumnType::Float,
-        "bool" | "boolean" => ColumnType::Boolean,
-        "json" | "jsonb" => ColumnType::Json,
-        _ => ColumnType::String,
-    };
-
-    Ok((
-        name.to_string(),
-        ColumnSchema {
-            column_type,
-            nullable,
-        },
-    ))
-}
-
 fn validate_resource_data(state: &AppState, resource: &str, data: &Value) -> Result<(), AppError> {
     let Some(table) = state.schema_table(resource)? else {
         return Ok(());
@@ -697,6 +568,7 @@ fn start_resource_watcher(folder: Arc<PathBuf>, resources: Arc<RwLock<BTreeSet<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schema::parse_dbml_schema;
 
     #[test]
     fn validates_resource_names() {
@@ -743,26 +615,6 @@ mod tests {
             resources.into_iter().collect::<Vec<_>>(),
             vec!["posts".to_string(), "users".to_string()]
         );
-    }
-
-    #[test]
-    fn parses_dbml_schema() {
-        let schema = parse_dbml_schema(
-            r#"
-            Table users {
-              id int [pk]
-              name varchar [not null]
-              active bool
-            }
-            "#,
-        )
-        .expect("parse schema");
-
-        let users = schema.tables.get("users").expect("users table");
-        assert_eq!(users.columns["id"].column_type, ColumnType::Integer);
-        assert_eq!(users.columns["name"].column_type, ColumnType::String);
-        assert_eq!(users.columns["active"].column_type, ColumnType::Boolean);
-        assert!(!users.columns["id"].nullable);
     }
 
     #[test]
