@@ -184,6 +184,96 @@ fn collection_supports_operator_filters_nested_fields_desc_sort_and_pagination_k
     assert_eq!(ids, vec![2, 4]);
 }
 
+#[test]
+fn collection_rejects_invalid_filter_operator_and_invalid_pagination_values() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let users_path = temp.path().join("users.json");
+
+    let users = serde_json::json!([
+        {"id": 1, "name": "Ada", "role": "admin"},
+        {"id": 2, "name": "Bob", "role": "member"}
+    ]);
+
+    std::fs::write(
+        users_path,
+        serde_json::to_string_pretty(&users).expect("serialize users"),
+    )
+    .expect("write users json");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3006")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3006", Duration::from_secs(5));
+
+    let invalid_operator = http_get("127.0.0.1:3006", "/users?role:badop=admin");
+    assert!(
+        invalid_operator.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+        "expected 400 Bad Request response, got: {invalid_operator}"
+    );
+
+    let invalid_page = http_get("127.0.0.1:3006", "/users?_page=0&_per_page=2");
+    assert!(
+        invalid_page.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+        "expected 400 Bad Request response, got: {invalid_page}"
+    );
+}
+
+#[test]
+fn collection_clamps_pagination_page_to_last_page() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let users_path = temp.path().join("users.json");
+
+    let users = serde_json::json!([
+        {"id": 1, "name": "Ada"},
+        {"id": 2, "name": "Bob"},
+        {"id": 3, "name": "Cara"}
+    ]);
+
+    std::fs::write(
+        users_path,
+        serde_json::to_string_pretty(&users).expect("serialize users"),
+    )
+    .expect("write users json");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3007")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3007", Duration::from_secs(5));
+
+    let response = http_get("127.0.0.1:3007", "/users?_page=99&_per_page=2");
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+
+    let body = parse_http_body(&response);
+    let payload: serde_json::Value = serde_json::from_str(body).expect("valid json body");
+    assert_eq!(payload["last"], 2);
+    assert_eq!(payload["prev"], 1);
+    assert_eq!(payload["next"], serde_json::Value::Null);
+
+    let ids = payload["data"]
+        .as_array()
+        .expect("array response")
+        .iter()
+        .map(|item| item["id"].as_i64().expect("numeric id"))
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec![3]);
+}
+
 fn wait_for_server(addr: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
 

@@ -123,3 +123,13 @@ npx folder-server --folder ./data --bind 127.0.0.1:3000
 - Item-level endpoints (`/{resource}/{id}`) expect array-based resources (`[{"id": ...}, ...]`).
 - Object resources support `GET /{resource}`, `PUT /{resource}`, and `PATCH /{resource}`.
 - Invalid JSON in a file returns a 500 with an error payload.
+
+## Development checks
+
+Before committing or opening a PR, always run linting and tests:
+
+```bash
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+```
