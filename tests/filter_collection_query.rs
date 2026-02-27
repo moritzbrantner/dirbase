@@ -76,6 +76,85 @@ fn collection_supports_filtering_with_multiple_query_parameters() {
     );
 }
 
+#[test]
+fn collection_supports_pagination_with_next_query_parameter() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let users_path = temp.path().join("users.json");
+
+    let users = (1..=20)
+        .map(|id| {
+            serde_json::json!({
+                "id": id,
+                "name": Name().fake::<String>(),
+                "role": if id % 2 == 0 { "admin" } else { "member" }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    std::fs::write(
+        users_path,
+        serde_json::to_string_pretty(&users).expect("serialize fake users"),
+    )
+    .expect("write users json");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3002")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3002", Duration::from_secs(5));
+
+    let response = http_get("127.0.0.1:3002", "/users?next=10");
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK\r\n"),
+        "expected 200 OK response, got: {response}"
+    );
+    assert!(
+        response.contains("\"id\":11")
+            && response.contains("\"id\":20")
+            && !response.contains("\"id\":10"),
+        "expected paginated body starting at id 11 and containing only 10 items, got: {response}"
+    );
+}
+
+#[test]
+fn collection_rejects_duplicate_next_query_parameter() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let users_path = temp.path().join("users.json");
+    std::fs::write(users_path, "[]").expect("write users json");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3003")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3003", Duration::from_secs(5));
+
+    let response = http_get("127.0.0.1:3003", "/users?next=1&next=2");
+
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+        "expected 400 Bad Request response, got: {response}"
+    );
+    assert!(
+        response.contains("Query parameter 'next' can only be specified once"),
+        "expected duplicate next validation message, got: {response}"
+    );
+}
+
 fn wait_for_server(addr: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
 

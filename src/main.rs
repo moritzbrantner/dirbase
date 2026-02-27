@@ -26,6 +26,8 @@ mod schema;
 
 use schema::{ColumnType, Schema, TableSchema, load_schema};
 
+const DEFAULT_PAGE_SIZE: usize = 10;
+
 #[derive(Parser, Debug)]
 #[command(
     author,
@@ -237,18 +239,61 @@ async fn list_resources(State(state): State<AppState>) -> Result<Json<Value>, Ap
 async fn get_collection(
     State(state): State<AppState>,
     AxumPath(resource): AxumPath<String>,
-    Query(filters): Query<Vec<(String, String)>>,
+    Query(params): Query<Vec<(String, String)>>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.io_lock.lock().await;
     let data = load_resource(&state.folder, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
 
-    if filters.is_empty() {
+    let (next, filters) = split_collection_query_params(params)?;
+
+    if !data.is_array() {
+        if next.is_some() || !filters.is_empty() {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "Query parameters are only supported for JSON array resources",
+            ));
+        }
+
         return Ok(Json(data));
     }
 
+    if filters.is_empty() {
+        return Ok(Json(paginate_collection_data(data, next)?));
+    }
+
     let filtered = filter_collection_data(data, &filters)?;
-    Ok(Json(filtered))
+    Ok(Json(paginate_collection_data(filtered, next)?))
+}
+
+fn split_collection_query_params(
+    params: Vec<(String, String)>,
+) -> Result<(Option<usize>, Vec<(String, String)>), AppError> {
+    let mut next = None;
+    let mut filters = Vec::new();
+
+    for (key, value) in params {
+        if key == "next" {
+            if next.is_some() {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "Query parameter 'next' can only be specified once",
+                ));
+            }
+
+            next = Some(value.parse::<usize>().map_err(|_| {
+                AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "Query parameter 'next' must be a non-negative integer",
+                )
+            })?);
+            continue;
+        }
+
+        filters.push((key, value));
+    }
+
+    Ok((next, filters))
 }
 
 fn filter_collection_data(data: Value, filters: &[(String, String)]) -> Result<Value, AppError> {
@@ -263,6 +308,22 @@ fn filter_collection_data(data: Value, filters: &[(String, String)]) -> Result<V
         .collect::<Vec<_>>();
 
     Ok(Value::Array(filtered))
+}
+
+fn paginate_collection_data(data: Value, next: Option<usize>) -> Result<Value, AppError> {
+    let items = data
+        .as_array()
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
+
+    let start = next.unwrap_or(0);
+    let paginated = items
+        .iter()
+        .skip(start)
+        .take(DEFAULT_PAGE_SIZE)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Ok(Value::Array(paginated))
 }
 
 fn item_matches_filters(item: &Value, filters: &[(String, String)]) -> bool {
