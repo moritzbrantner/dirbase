@@ -33,6 +33,10 @@ struct Cli {
     /// Bind address, e.g. 127.0.0.1:3000
     #[arg(short, long, default_value = "127.0.0.1:3000")]
     bind: SocketAddr,
+
+    /// Enable read-only mode (only GET endpoints are exposed)
+    #[arg(long)]
+    readonly: bool,
 }
 
 #[derive(Clone)]
@@ -98,20 +102,27 @@ async fn main() {
         io_lock: Arc::new(Mutex::new(())),
     };
 
-    start_resource_watcher(state.folder.clone(), state.resources.clone());
+    let app = if cli.readonly {
+        Router::new()
+            .route("/", get(list_resources))
+            .route("/{resource}", get(get_collection))
+            .route("/{resource}/{id}", get(get_item))
+            .with_state(state)
+    } else {
+        Router::new()
+            .route("/", get(list_resources))
+            .route("/{resource}", get(get_collection).post(create_item))
+            .route(
+                "/{resource}/{id}",
+                get(get_item)
+                    .put(replace_item)
+                    .patch(patch_item)
+                    .delete(delete_item),
+            )
+            .with_state(state)
+    };
 
-    let app = Router::new()
-        .route("/", get(list_resources))
-        .route("/{resource}", get(get_collection).post(create_item))
-        .route(
-            "/{resource}/{id}",
-            get(get_item)
-                .put(replace_item)
-                .patch(patch_item)
-                .delete(delete_item),
-        )
-        .with_state(state);
-
+    tracing::info!(readonly = cli.readonly, "Readonly mode");
     tracing::info!("Listening on http://{}", cli.bind);
     let listener = tokio::net::TcpListener::bind(cli.bind)
         .await
