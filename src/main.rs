@@ -102,6 +102,8 @@ async fn main() {
         io_lock: Arc::new(Mutex::new(())),
     };
 
+    start_resource_watcher(state.folder.clone(), state.resources.clone());
+
     let app = if cli.readonly {
         Router::new()
             .route("/", get(list_resources))

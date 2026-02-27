@@ -60,18 +60,12 @@ fn wait_for_server(addr: &str, timeout: Duration) {
 
 fn http_get(addr: &str, path: &str) -> String {
     let mut stream = TcpStream::connect(addr).expect("connect to server");
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-    );
+    let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
 
-    stream
-        .write_all(request.as_bytes())
-        .expect("write request");
+    stream.write_all(request.as_bytes()).expect("write request");
 
     let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .expect("read response");
+    stream.read_to_string(&mut response).expect("read response");
 
     response
 }
