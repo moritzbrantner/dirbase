@@ -45,7 +45,10 @@ fn retrieval_supports_string_ids_and_returns_404_for_missing_item() {
     wait_for_server("127.0.0.1:3013", Duration::from_secs(5));
 
     let get_existing = http_get("127.0.0.1:3013", "/users/user-1");
-    assert!(get_existing.starts_with("HTTP/1.1 200 OK\r\n"), "{get_existing}");
+    assert!(
+        get_existing.starts_with("HTTP/1.1 200 OK\r\n"),
+        "{get_existing}"
+    );
     let existing_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&get_existing)).expect("valid json body");
     assert_eq!(existing_payload["name"], "Ada");
@@ -89,7 +92,10 @@ fn query_parameters_support_pagination_defaults_when_page_or_size_is_missing() {
     wait_for_server("127.0.0.1:3014", Duration::from_secs(5));
 
     let per_page_only = http_get("127.0.0.1:3014", "/posts?_per_page=2");
-    assert!(per_page_only.starts_with("HTTP/1.1 200 OK\r\n"), "{per_page_only}");
+    assert!(
+        per_page_only.starts_with("HTTP/1.1 200 OK\r\n"),
+        "{per_page_only}"
+    );
     let per_page_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&per_page_only)).expect("valid json body");
     assert_eq!(per_page_payload["first"], 1);
@@ -127,7 +133,10 @@ fn query_parameters_return_clear_400_errors_for_invalid_values() {
     wait_for_server("127.0.0.1:3015", Duration::from_secs(5));
 
     let bad_page = http_get("127.0.0.1:3015", "/posts?_page=0");
-    assert!(bad_page.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{bad_page}");
+    assert!(
+        bad_page.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+        "{bad_page}"
+    );
     assert!(bad_page.contains("\"error\":\"'_page' must be greater than 0\""));
 
     let bad_operator = http_get("127.0.0.1:3015", "/posts?title:unknown=value");
@@ -136,7 +145,8 @@ fn query_parameters_return_clear_400_errors_for_invalid_values() {
         "{bad_operator}"
     );
     assert!(
-        bad_operator.contains("\"error\":\"Unsupported filter operator 'unknown' in 'title:unknown'\""),
+        bad_operator
+            .contains("\"error\":\"Unsupported filter operator 'unknown' in 'title:unknown'\""),
         "{bad_operator}"
     );
 
@@ -220,7 +230,9 @@ fn retrieval_returns_400_for_invalid_resource_name() {
         "{response}"
     );
     assert!(
-        response.contains("\"error\":\"Resource name must only contain letters, numbers, underscore, and dash\""),
+        response.contains(
+            "\"error\":\"Resource name must only contain letters, numbers, underscore, and dash\""
+        ),
         "{response}"
     );
 }
