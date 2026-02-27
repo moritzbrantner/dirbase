@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     net::SocketAddr,
     path::{Path, PathBuf},
@@ -37,6 +37,10 @@ struct Cli {
     /// Enable read-only mode (only GET endpoints are exposed)
     #[arg(long)]
     readonly: bool,
+
+    /// Optional DBML schema file. If omitted, {folder}/schema.dbml is used when present.
+    #[arg(long)]
+    schema: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -44,6 +48,7 @@ struct AppState {
     folder: Arc<PathBuf>,
     resources: Arc<RwLock<BTreeSet<String>>>,
     io_lock: Arc<Mutex<()>>,
+    schema: Arc<Option<Schema>>,
 }
 
 #[derive(Debug)]
@@ -55,6 +60,31 @@ struct AppError {
 #[derive(Serialize)]
 struct ErrorBody {
     error: String,
+}
+
+#[derive(Clone, Debug)]
+struct Schema {
+    tables: BTreeMap<String, TableSchema>,
+}
+
+#[derive(Clone, Debug)]
+struct TableSchema {
+    columns: BTreeMap<String, ColumnSchema>,
+}
+
+#[derive(Clone, Debug)]
+struct ColumnSchema {
+    column_type: ColumnType,
+    nullable: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ColumnType {
+    Integer,
+    Float,
+    Boolean,
+    String,
+    Json,
 }
 
 impl AppError {
@@ -91,6 +121,14 @@ async fn main() {
         std::process::exit(1);
     }
 
+    let schema = match load_schema(&cli.folder, cli.schema.as_deref()) {
+        Ok(schema) => schema,
+        Err(err) => {
+            eprintln!("Failed to load schema: {err}");
+            std::process::exit(1);
+        }
+    };
+
     let initial_resources = scan_resources(&cli.folder).unwrap_or_else(|err| {
         eprintln!("Failed to scan data folder {}: {err}", cli.folder.display());
         BTreeSet::new()
@@ -100,6 +138,7 @@ async fn main() {
         folder: Arc::new(cli.folder),
         resources: Arc::new(RwLock::new(initial_resources)),
         io_lock: Arc::new(Mutex::new(())),
+        schema: Arc::new(schema),
     };
 
     start_resource_watcher(state.folder.clone(), state.resources.clone());
@@ -155,6 +194,7 @@ async fn get_collection(
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.io_lock.lock().await;
     let data = load_resource(&state.folder, &resource)?;
+    validate_resource_data(&state, &resource, &data)?;
     Ok(Json(data))
 }
 
@@ -166,6 +206,7 @@ async fn create_item(
     let _guard = state.io_lock.lock().await;
 
     let mut data = load_resource(&state.folder, &resource)?;
+    validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array_mut()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
@@ -174,13 +215,11 @@ async fn create_item(
         .as_object_mut()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object"))?;
 
-    if !item.contains_key("id") {
-        let next_id = next_numeric_id(array);
-        item.insert("id".to_string(), Value::from(next_id));
-    }
+    maybe_fill_missing_id(item, array, state.schema_table(&resource)?)?;
 
     let created = Value::Object(item.clone());
     array.push(created.clone());
+    validate_resource_data(&state, &resource, &data)?;
     write_resource(&state.folder, &resource, &data)?;
 
     Ok((StatusCode::CREATED, Json(created)))
@@ -192,6 +231,7 @@ async fn get_item(
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.io_lock.lock().await;
     let data = load_resource(&state.folder, &resource)?;
+    validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
@@ -216,13 +256,17 @@ async fn replace_item(
     let object = payload
         .as_object_mut()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object"))?;
-    object.insert("id".to_string(), coerce_id_value(&id));
+    object.insert(
+        "id".to_string(),
+        coerce_id_value(&id, state.schema_table(&resource)?),
+    );
 
     let replacement = Value::Object(object.clone());
     let position = find_item_index(array, &id)
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
     array[position] = replacement.clone();
 
+    validate_resource_data(&state, &resource, &data)?;
     write_resource(&state.folder, &resource, &data)?;
     Ok(Json(replacement))
 }
@@ -234,6 +278,7 @@ async fn patch_item(
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.io_lock.lock().await;
     let mut data = load_resource(&state.folder, &resource)?;
+    validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array_mut()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
@@ -255,6 +300,7 @@ async fn patch_item(
     }
 
     let updated = Value::Object(current.clone());
+    validate_resource_data(&state, &resource, &data)?;
     write_resource(&state.folder, &resource, &data)?;
     Ok(Json(updated))
 }
@@ -265,6 +311,7 @@ async fn delete_item(
 ) -> Result<StatusCode, AppError> {
     let _guard = state.io_lock.lock().await;
     let mut data = load_resource(&state.folder, &resource)?;
+    validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array_mut()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
@@ -273,8 +320,236 @@ async fn delete_item(
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
     array.remove(index);
 
+    validate_resource_data(&state, &resource, &data)?;
     write_resource(&state.folder, &resource, &data)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+impl AppState {
+    fn schema_table(&self, resource: &str) -> Result<Option<&TableSchema>, AppError> {
+        let Some(schema) = self.schema.as_ref() else {
+            return Ok(None);
+        };
+
+        schema.tables.get(resource).map(Some).ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                format!("Resource '{resource}' is not defined in schema"),
+            )
+        })
+    }
+}
+
+fn load_schema(folder: &Path, schema_path: Option<&Path>) -> Result<Option<Schema>, String> {
+    let resolved_path = if let Some(path) = schema_path {
+        path.to_path_buf()
+    } else {
+        let default = folder.join("schema.dbml");
+        if default.exists() {
+            default
+        } else {
+            return Ok(None);
+        }
+    };
+
+    let raw = fs::read_to_string(&resolved_path)
+        .map_err(|err| format!("{}: {err}", resolved_path.display()))?;
+    parse_dbml_schema(&raw).map(Some)
+}
+
+fn parse_dbml_schema(input: &str) -> Result<Schema, String> {
+    let mut tables = BTreeMap::new();
+    let mut current_table: Option<(String, TableSchema)> = None;
+
+    for (index, raw_line) in input.lines().enumerate() {
+        let line_number = index + 1;
+        let line = raw_line.split("//").next().unwrap_or_default().trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some((table_name, table)) = current_table.as_mut() {
+            if line == "}" {
+                let (name, table) = current_table.take().expect("present table");
+                tables.insert(name, table);
+                continue;
+            }
+
+            if line.starts_with("indexes") || line.starts_with("note") {
+                continue;
+            }
+
+            let (column_name, column_schema) = parse_column_line(line)
+                .map_err(|err| format!("line {line_number} (table {table_name}): {err}"))?;
+            table.columns.insert(column_name, column_schema);
+            continue;
+        }
+
+        if line.starts_with("Table ") {
+            let remainder = line.trim_start_matches("Table ").trim();
+            let name = remainder
+                .trim_end_matches('{')
+                .trim()
+                .trim_matches('"')
+                .to_string();
+            if name.is_empty() {
+                return Err(format!("line {line_number}: table name is missing"));
+            }
+
+            current_table = Some((
+                name,
+                TableSchema {
+                    columns: BTreeMap::new(),
+                },
+            ));
+        }
+    }
+
+    if let Some((name, _)) = current_table {
+        return Err(format!("Table '{name}' is missing closing '}}'"));
+    }
+
+    Ok(Schema { tables })
+}
+
+fn parse_column_line(line: &str) -> Result<(String, ColumnSchema), String> {
+    let mut parts = line
+        .splitn(3, char::is_whitespace)
+        .filter(|s| !s.is_empty());
+    let name = parts
+        .next()
+        .ok_or_else(|| "column name is missing".to_string())?;
+    let raw_type = parts
+        .next()
+        .ok_or_else(|| format!("column type is missing for '{name}'"))?;
+
+    let attrs = parts.next().unwrap_or_default().to_ascii_lowercase();
+    let nullable = !attrs.contains("not null") && !attrs.contains("pk");
+
+    let normalized_type = raw_type
+        .split('(')
+        .next()
+        .unwrap_or(raw_type)
+        .to_ascii_lowercase();
+    let column_type = match normalized_type.as_str() {
+        "int" | "integer" | "bigint" | "smallint" | "serial" => ColumnType::Integer,
+        "float" | "double" | "decimal" | "real" | "numeric" => ColumnType::Float,
+        "bool" | "boolean" => ColumnType::Boolean,
+        "json" | "jsonb" => ColumnType::Json,
+        _ => ColumnType::String,
+    };
+
+    Ok((
+        name.to_string(),
+        ColumnSchema {
+            column_type,
+            nullable,
+        },
+    ))
+}
+
+fn validate_resource_data(state: &AppState, resource: &str, data: &Value) -> Result<(), AppError> {
+    let Some(table) = state.schema_table(resource)? else {
+        return Ok(());
+    };
+
+    let array = data
+        .as_array()
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
+
+    for (index, item) in array.iter().enumerate() {
+        let object = item.as_object().ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                format!("Row {index} in resource '{resource}' is not an object"),
+            )
+        })?;
+
+        for key in object.keys() {
+            if !table.columns.contains_key(key) {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    format!("Row {index} in resource '{resource}' contains unknown column '{key}'"),
+                ));
+            }
+        }
+
+        for (column_name, column) in &table.columns {
+            match object.get(column_name) {
+                Some(Value::Null) if !column.nullable => {
+                    return Err(AppError::new(
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "Row {index} in resource '{resource}' has null for non-null column '{column_name}'"
+                        ),
+                    ));
+                }
+                Some(value) if !value_matches_type(value, &column.column_type) => {
+                    return Err(AppError::new(
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "Row {index} in resource '{resource}' has invalid type for '{column_name}'"
+                        ),
+                    ));
+                }
+                None if !column.nullable => {
+                    return Err(AppError::new(
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "Row {index} in resource '{resource}' is missing non-null column '{column_name}'"
+                        ),
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn value_matches_type(value: &Value, column_type: &ColumnType) -> bool {
+    if value.is_null() {
+        return true;
+    }
+
+    match column_type {
+        ColumnType::Integer => value.as_i64().is_some() || value.as_u64().is_some(),
+        ColumnType::Float => value.is_number(),
+        ColumnType::Boolean => value.is_boolean(),
+        ColumnType::String => value.is_string(),
+        ColumnType::Json => true,
+    }
+}
+
+fn maybe_fill_missing_id(
+    item: &mut serde_json::Map<String, Value>,
+    array: &[Value],
+    table: Option<&TableSchema>,
+) -> Result<(), AppError> {
+    if item.contains_key("id") {
+        return Ok(());
+    }
+
+    let id_column = table.and_then(|table| table.columns.get("id"));
+    if let Some(column) = id_column {
+        if matches!(column.column_type, ColumnType::Integer | ColumnType::Float) {
+            item.insert("id".to_string(), Value::from(next_numeric_id(array)));
+            return Ok(());
+        }
+
+        if !column.nullable {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "Payload is missing required non-numeric id column",
+            ));
+        }
+
+        return Ok(());
+    }
+
+    item.insert("id".to_string(), Value::from(next_numeric_id(array)));
+    Ok(())
 }
 
 fn load_resource(folder: &Path, resource: &str) -> Result<Value, AppError> {
@@ -349,9 +624,15 @@ fn next_numeric_id(items: &[Value]) -> i64 {
         .map_or(1, |max| max + 1)
 }
 
-fn coerce_id_value(id: &str) -> Value {
-    id.parse::<i64>()
-        .map_or_else(|_| Value::String(id.to_string()), Value::from)
+fn coerce_id_value(id: &str, table: Option<&TableSchema>) -> Value {
+    match table.and_then(|table| table.columns.get("id")) {
+        Some(column) if matches!(column.column_type, ColumnType::String) => {
+            Value::String(id.to_string())
+        }
+        _ => id
+            .parse::<i64>()
+            .map_or_else(|_| Value::String(id.to_string()), Value::from),
+    }
 }
 
 fn scan_resources(folder: &Path) -> Result<BTreeSet<String>, std::io::Error> {
@@ -462,5 +743,55 @@ mod tests {
             resources.into_iter().collect::<Vec<_>>(),
             vec!["posts".to_string(), "users".to_string()]
         );
+    }
+
+    #[test]
+    fn parses_dbml_schema() {
+        let schema = parse_dbml_schema(
+            r#"
+            Table users {
+              id int [pk]
+              name varchar [not null]
+              active bool
+            }
+            "#,
+        )
+        .expect("parse schema");
+
+        let users = schema.tables.get("users").expect("users table");
+        assert_eq!(users.columns["id"].column_type, ColumnType::Integer);
+        assert_eq!(users.columns["name"].column_type, ColumnType::String);
+        assert_eq!(users.columns["active"].column_type, ColumnType::Boolean);
+        assert!(!users.columns["id"].nullable);
+    }
+
+    #[test]
+    fn validates_rows_against_schema() {
+        let schema = parse_dbml_schema(
+            r#"
+            Table users {
+              id int [pk]
+              name varchar [not null]
+              active bool
+            }
+            "#,
+        )
+        .expect("parse schema");
+
+        let state = AppState {
+            folder: Arc::new(PathBuf::from(".")),
+            resources: Arc::new(RwLock::new(BTreeSet::new())),
+            io_lock: Arc::new(Mutex::new(())),
+            schema: Arc::new(Some(schema)),
+        };
+
+        let ok = serde_json::json!([{"id": 1, "name": "Ada", "active": true}]);
+        assert!(validate_resource_data(&state, "users", &ok).is_ok());
+
+        let wrong_type = serde_json::json!([{"id": "oops", "name": "Ada"}]);
+        assert!(validate_resource_data(&state, "users", &wrong_type).is_err());
+
+        let unknown_col = serde_json::json!([{"id": 1, "name": "Ada", "role": "admin"}]);
+        assert!(validate_resource_data(&state, "users", &unknown_col).is_err());
     }
 }
