@@ -189,17 +189,18 @@ fn parse_ref_line(
     let (source_table, source_column) = parse_ref_side(left.trim(), line_number)?;
     let (target_table, target_column) = parse_ref_side(right.trim(), line_number)?;
 
-    if let Some((name, table)) = current_table
-        && *name == source_table
-    {
-        table.foreign_keys.insert(
-            source_column,
-            ForeignKey {
-                target_table,
-                target_column,
-            },
-        );
-        return Ok(());
+    match current_table {
+        Some((name, table)) if *name == source_table => {
+            table.foreign_keys.insert(
+                source_column,
+                ForeignKey {
+                    target_table,
+                    target_column,
+                },
+            );
+            return Ok(());
+        }
+        _ => {}
     }
 
     let Some(table) = tables.get_mut(&source_table) else {

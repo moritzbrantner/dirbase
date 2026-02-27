@@ -618,8 +618,9 @@ fn embed_collection_data(
 
         let mut lookup = HashMap::new();
         for item in target_items {
-            if let Some(object) = item.as_object()
-                && let Some(key) = object.get(&fk.target_column)
+            if let Some((_, key)) = item
+                .as_object()
+                .and_then(|object| object.get(&fk.target_column).map(|key| (object, key)))
             {
                 lookup.insert(value_to_filter_string(key), item.clone());
             }
