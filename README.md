@@ -71,6 +71,40 @@ curl -X POST http://127.0.0.1:3000/users \
   -d '{"name":"Grace"}'
 ```
 
+## npm package pipeline (Rust + esbuild)
+
+This repository now contains a Node package wrapper in [`js/`](./js) that bundles a tiny CLI launcher with **esbuild** and ships the compiled Rust binary.
+
+### Build the npm package locally
+
+```bash
+cd js
+npm install
+npm run build
+npm pack
+```
+
+`npm run build` performs three steps:
+
+1. bundle `src/index.ts` and `src/cli.ts` using esbuild,
+2. compile Rust in release mode,
+3. copy the resulting `folder-server` binary into `js/bin/` so the npm package can execute it.
+
+### Publish pipeline
+
+A GitHub Actions workflow is provided at `.github/workflows/rust-to-npm.yml`.
+
+- Trigger: pushing tags matching `npm-v*` (or manual `workflow_dispatch`).
+- Toolchain: Rust stable + Node 20.
+- Steps: `npm ci` → `npm run build` → `npm publish`.
+- Secret required: `NPM_TOKEN`.
+
+Once published, users can run:
+
+```bash
+npx folder-server --folder ./data --bind 127.0.0.1:3000
+```
+
 ## Notes
 
 - Resource names are restricted to letters, numbers, `_`, and `-`.

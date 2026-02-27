@@ -1,0 +1,33 @@
+{
+  "name": "folder-server",
+  "version": "0.1.0",
+  "description": "npm wrapper around the folder-server Rust binary",
+  "type": "module",
+  "bin": {
+    "folder-server": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "scripts": {
+    "build:js": "node esbuild.config.mjs",
+    "build:rust": "cargo build --release --manifest-path ../Cargo.toml",
+    "copy:binary": "node scripts/copy-rust-binary.mjs",
+    "build": "npm run build:js && npm run build:rust && npm run copy:binary",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "rust",
+    "json-server",
+    "cli"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
