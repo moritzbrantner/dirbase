@@ -1278,15 +1278,14 @@ mod tests {
 
     #[test]
     fn rejects_invalid_query_filter_and_pagination_values() {
-        let invalid_operator = parse_collection_query_params(vec![(
-            "role:unknown".to_string(),
-            "admin".to_string(),
-        )])
-        .expect_err("invalid operator should fail");
+        let invalid_operator =
+            parse_collection_query_params(vec![("role:unknown".to_string(), "admin".to_string())])
+                .expect_err("invalid operator should fail");
         assert_eq!(invalid_operator.status, StatusCode::BAD_REQUEST);
 
-        let invalid_page = parse_collection_query_params(vec![("page".to_string(), "0".to_string())])
-            .expect_err("page 0 should fail");
+        let invalid_page =
+            parse_collection_query_params(vec![("page".to_string(), "0".to_string())])
+                .expect_err("page 0 should fail");
         assert_eq!(invalid_page.status, StatusCode::BAD_REQUEST);
 
         let invalid_per_page =
