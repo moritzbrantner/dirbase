@@ -982,10 +982,15 @@ fn scan_resources(folder: &Path) -> Result<BTreeSet<String>, std::io::Error> {
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("json")
-            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-            && is_valid_resource_name(stem)
-        {
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+
+        if is_valid_resource_name(stem) {
             resources.insert(stem.to_owned());
         }
     }
