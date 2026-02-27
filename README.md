@@ -55,6 +55,15 @@ JSON
 cargo run -- --folder ./data --bind 127.0.0.1:3000
 ```
 
+You can also place a `folder-server.toml` file in the current working directory and omit CLI flags:
+
+```toml
+folder = "./data"
+bind = "127.0.0.1:3000"
+```
+
+When both config file values and CLI flags are provided, CLI flags win.
+
 ### 3) Try the API
 
 ```bash

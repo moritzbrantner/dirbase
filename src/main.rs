@@ -13,6 +13,7 @@ use axum::{
     routing::get,
 };
 use clap::Parser;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -25,11 +26,23 @@ use tokio::sync::Mutex;
 )]
 struct Cli {
     /// Folder containing .json files
-    #[arg(short, long, default_value = "./data")]
-    folder: PathBuf,
+    #[arg(short, long)]
+    folder: Option<PathBuf>,
 
     /// Bind address, e.g. 127.0.0.1:3000
-    #[arg(short, long, default_value = "127.0.0.1:3000")]
+    #[arg(short, long)]
+    bind: Option<SocketAddr>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileConfig {
+    folder: Option<PathBuf>,
+    bind: Option<SocketAddr>,
+}
+
+#[derive(Debug)]
+struct ResolvedConfig {
+    folder: PathBuf,
     bind: SocketAddr,
 }
 
@@ -76,16 +89,18 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
-    if let Err(err) = fs::create_dir_all(&cli.folder) {
+    let config = resolve_config(cli);
+
+    if let Err(err) = fs::create_dir_all(&config.folder) {
         eprintln!(
             "Failed to create data folder {}: {err}",
-            cli.folder.display()
+            config.folder.display()
         );
         std::process::exit(1);
     }
 
     let state = AppState {
-        folder: Arc::new(cli.folder),
+        folder: Arc::new(config.folder.clone()),
         io_lock: Arc::new(Mutex::new(())),
     };
 
@@ -101,8 +116,8 @@ async fn main() {
         )
         .with_state(state);
 
-    tracing::info!("Listening on http://{}", cli.bind);
-    let listener = tokio::net::TcpListener::bind(cli.bind)
+    tracing::info!("Listening on http://{}", config.bind);
+    let listener = tokio::net::TcpListener::bind(config.bind)
         .await
         .expect("binding server listener");
     axum::serve(listener, app).await.expect("running server");
@@ -258,6 +273,82 @@ async fn delete_item(
     Ok(StatusCode::NO_CONTENT)
 }
 
+fn resolve_config(cli: Cli) -> ResolvedConfig {
+    let file_config = load_config_file(Path::new("folder-server.toml"));
+
+    ResolvedConfig {
+        folder: cli
+            .folder
+            .or_else(|| file_config.as_ref().and_then(|cfg| cfg.folder.clone()))
+            .unwrap_or_else(|| PathBuf::from("./data")),
+        bind: cli
+            .bind
+            .or_else(|| file_config.as_ref().and_then(|cfg| cfg.bind))
+            .unwrap_or_else(default_bind),
+    }
+}
+
+fn load_config_file(path: &Path) -> Option<FileConfig> {
+    if !path.exists() {
+        return None;
+    }
+
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            eprintln!("Failed to read config file {}: {err}", path.display());
+            return None;
+        }
+    };
+
+    match parse_simple_config(&raw) {
+        Ok(config) => Some(config),
+        Err(err) => {
+            eprintln!("Failed to parse config file {}: {err}", path.display());
+            None
+        }
+    }
+}
+
+fn parse_simple_config(raw: &str) -> Result<FileConfig, String> {
+    let mut config = FileConfig {
+        folder: None,
+        bind: None,
+    };
+
+    for (line_number, line) in raw.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let (key, value) = trimmed
+            .split_once('=')
+            .ok_or_else(|| format!("line {} is missing '='", line_number + 1))?;
+
+        let key = key.trim();
+        let value = value.trim().trim_matches('"');
+
+        match key {
+            "folder" => config.folder = Some(PathBuf::from(value)),
+            "bind" => {
+                config.bind = Some(value.parse::<SocketAddr>().map_err(|e| {
+                    format!("line {} has invalid bind address: {e}", line_number + 1)
+                })?)
+            }
+            _ => {}
+        }
+    }
+
+    Ok(config)
+}
+
+fn default_bind() -> SocketAddr {
+    "127.0.0.1:3000"
+        .parse()
+        .expect("parsing default bind address")
+}
+
 fn load_resource(folder: &Path, resource: &str) -> Result<Value, AppError> {
     let file = resource_file_path(folder, resource)?;
     if !file.exists() {
@@ -368,5 +459,72 @@ mod tests {
         let loaded = load_resource(temp.path(), "users").expect("load resource");
 
         assert_eq!(value, loaded);
+    }
+
+    #[test]
+    fn resolves_values_from_config_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let previous = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(temp.path()).expect("set cwd");
+
+        fs::write(
+            "folder-server.toml",
+            r#"folder = "./seed"
+bind = "127.0.0.1:4100"
+"#,
+        )
+        .expect("write config");
+
+        let resolved = resolve_config(Cli {
+            folder: None,
+            bind: None,
+        });
+
+        std::env::set_current_dir(previous).expect("restore cwd");
+
+        assert_eq!(resolved.folder, PathBuf::from("./seed"));
+        assert_eq!(resolved.bind, "127.0.0.1:4100".parse().expect("socket"));
+    }
+
+    #[test]
+    fn parses_simple_config() {
+        let config = parse_simple_config(
+            r#"folder = "./data"
+# comment
+bind = "127.0.0.1:3001"
+"#,
+        )
+        .expect("parse config");
+
+        assert_eq!(config.folder, Some(PathBuf::from("./data")));
+        assert_eq!(
+            config.bind,
+            Some("127.0.0.1:3001".parse().expect("socket address"))
+        );
+    }
+
+    #[test]
+    fn cli_arguments_override_config_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let previous = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(temp.path()).expect("set cwd");
+
+        fs::write(
+            "folder-server.toml",
+            r#"folder = "./seed"
+bind = "127.0.0.1:4100"
+"#,
+        )
+        .expect("write config");
+
+        let resolved = resolve_config(Cli {
+            folder: Some(PathBuf::from("./cli")),
+            bind: Some("127.0.0.1:4200".parse().expect("socket")),
+        });
+
+        std::env::set_current_dir(previous).expect("restore cwd");
+
+        assert_eq!(resolved.folder, PathBuf::from("./cli"));
+        assert_eq!(resolved.bind, "127.0.0.1:4200".parse().expect("socket"));
     }
 }
