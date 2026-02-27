@@ -1,0 +1,23 @@
+[
+  {
+    "id": 1,
+    "name": "Alice Johnson",
+    "email": "alice.johnson@example.edu",
+    "year": 2,
+    "major": "Computer Science"
+  },
+  {
+    "id": 2,
+    "name": "Ben Carter",
+    "email": "ben.carter@example.edu",
+    "year": 1,
+    "major": "Mathematics"
+  },
+  {
+    "id": 3,
+    "name": "Carla Nguyen",
+    "email": "carla.nguyen@example.edu",
+    "year": 3,
+    "major": "Physics"
+  }
+]

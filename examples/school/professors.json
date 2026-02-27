@@ -1,0 +1,14 @@
+[
+  {
+    "id": 1,
+    "name": "Dr. Elena Rivera",
+    "department": "Computer Science",
+    "email": "elena.rivera@example.edu"
+  },
+  {
+    "id": 2,
+    "name": "Dr. Marcus Lee",
+    "department": "Mathematics",
+    "email": "marcus.lee@example.edu"
+  }
+]
