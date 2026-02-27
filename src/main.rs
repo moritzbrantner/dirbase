@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     fs,
     io::Write,
     net::SocketAddr,
@@ -245,7 +245,11 @@ async fn get_collection(
     validate_resource_data(&state, &resource, &data)?;
     let parsed = parse_collection_query_params(query_params)?;
 
-    if parsed.filters.is_empty() && parsed.sort_columns.is_empty() && parsed.pagination.is_none() {
+    if parsed.filters.is_empty()
+        && parsed.sort_columns.is_empty()
+        && parsed.pagination.is_none()
+        && parsed.embeds.is_empty()
+    {
         return Ok(Json(data));
     }
 
@@ -261,11 +265,17 @@ async fn get_collection(
         sort_collection_data(filtered, &parsed.sort_columns)?
     };
 
+    let embedded = if parsed.embeds.is_empty() {
+        sorted
+    } else {
+        embed_collection_data(&state, &resource, sorted, &parsed.embeds)?
+    };
+
     if let Some(pagination) = parsed.pagination {
-        return Ok(Json(paginate_collection_data(sorted, pagination)?));
+        return Ok(Json(paginate_collection_data(embedded, pagination)?));
     }
 
-    Ok(Json(sorted))
+    Ok(Json(embedded))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -306,6 +316,7 @@ struct ParsedCollectionQuery {
     filters: Vec<FilterCondition>,
     sort_columns: Vec<SortColumn>,
     pagination: Option<Pagination>,
+    embeds: Vec<String>,
 }
 
 fn parse_collection_query_params(
@@ -315,6 +326,7 @@ fn parse_collection_query_params(
     let mut sort_columns = Vec::new();
     let mut page = None;
     let mut per_page = None;
+    let mut embeds = Vec::new();
 
     for (key, value) in query_params {
         if key == "sort" || key == "_sort" {
@@ -349,6 +361,16 @@ fn parse_collection_query_params(
             continue;
         }
 
+        if key == "embed" || key == "_embed" {
+            for field in value.split(',') {
+                let field = field.trim();
+                if !field.is_empty() {
+                    embeds.push(field.to_string());
+                }
+            }
+            continue;
+        }
+
         let (field_path, operator) = parse_filter_key(&key)?;
 
         filters.push(FilterCondition {
@@ -369,6 +391,7 @@ fn parse_collection_query_params(
         filters,
         sort_columns,
         pagination,
+        embeds,
     })
 }
 
@@ -554,6 +577,74 @@ fn get_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     }
 
     Some(current)
+}
+
+fn embed_collection_data(
+    state: &AppState,
+    resource: &str,
+    data: Value,
+    embeds: &[String],
+) -> Result<Value, AppError> {
+    let table = state.schema_table(resource)?.ok_or_else(|| {
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            "Embedding requires an active schema with foreign key definitions",
+        )
+    })?;
+
+    let items = data
+        .as_array()
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
+    let mut embedded_items = items.to_vec();
+
+    for embed in embeds {
+        let fk = table.foreign_keys.get(embed).ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                format!("Cannot embed '{embed}' for resource '{resource}'"),
+            )
+        })?;
+
+        let target_resource = load_resource(&state.folder, &fk.target_table)?;
+        let target_items = target_resource.as_array().ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Embedded resource '{}' is not a JSON array",
+                    fk.target_table
+                ),
+            )
+        })?;
+
+        let mut lookup = HashMap::new();
+        for item in target_items {
+            if let Some(object) = item.as_object()
+                && let Some(key) = object.get(&fk.target_column)
+            {
+                lookup.insert(value_to_filter_string(key), item.clone());
+            }
+        }
+
+        for item in &mut embedded_items {
+            let Some(object) = item.as_object_mut() else {
+                continue;
+            };
+
+            let Some(current_value) = object.get(embed).cloned() else {
+                continue;
+            };
+
+            if current_value.is_object() || current_value.is_null() {
+                continue;
+            }
+
+            let key = value_to_filter_string(&current_value);
+            let replacement = lookup.get(&key).cloned().unwrap_or(Value::Null);
+            object.insert(embed.clone(), replacement);
+        }
+    }
+
+    Ok(Value::Array(embedded_items))
 }
 
 fn paginate_collection_data(data: Value, pagination: Pagination) -> Result<Value, AppError> {
@@ -1264,6 +1355,7 @@ mod tests {
             ("sort".to_string(), "id".to_string()),
             ("_page".to_string(), "2".to_string()),
             ("_per_page".to_string(), "25".to_string()),
+            ("embed".to_string(), "author_id,team_id".to_string()),
         ])
         .expect("parse query params");
 
@@ -1274,6 +1366,7 @@ mod tests {
         assert_eq!(parsed.sort_columns[0].field_path, "role");
         assert!(parsed.sort_columns[0].descending);
         assert_eq!(parsed.pagination.unwrap().page, 2);
+        assert_eq!(parsed.embeds, vec!["author_id", "team_id"]);
     }
 
     #[test]

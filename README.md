@@ -30,6 +30,7 @@ you get:
 - Advanced filters use `field:operator=value` and support: `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `contains`, `startsWith`, and `endsWith` (for example `views:gt=100`, `author.name:eq=typicode`, `title:contains=hello`).
 - Sorting supports `sort` and `_sort` keywords; use `-column` for descending and comma-separated multi-sort (for example `_sort=author.name,-views`).
 - Pagination supports `page`/`_page` and `per_page`/`_per_page`. Array responses become an object containing `{ first, prev, next, last, pages, items, data }`.
+- Embedding supports `embed` and `_embed` keywords to replace foreign key fields with the related object from another table when schema foreign keys are defined (for example `embed=author_id`).
 - Item routes (`/{resource}/{id}`) assume the resource file is a JSON array of objects with an `id` field.
 - `POST /{resource}` appends a new object to the array and auto-generates a numeric `id` if none is provided.
 - `PUT`, `PATCH`, and `DELETE` mutate the corresponding array item and persist changes to disk.
