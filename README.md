@@ -27,6 +27,7 @@ you get:
 - While the server is running, file additions, edits, and deletions in the selected folder are watched and the available endpoints update automatically.
 - `GET /{resource}` returns the whole JSON document from `{resource}.json` (array or object).
 - `GET /{resource}?field=value&other=...` filters array resources by one or more exact-match query parameters.
+- `GET /{resource}?next=10` paginates array resources by returning up to 10 rows starting from index `10` (`next` defaults to `0`).
 - Item routes (`/{resource}/{id}`) assume the resource file is a JSON array of objects with an `id` field.
 - `POST /{resource}` appends a new object to the array and auto-generates a numeric `id` if none is provided.
 - `PUT`, `PATCH`, and `DELETE` mutate the corresponding array item and persist changes to disk.
@@ -120,3 +121,16 @@ npx folder-server --folder ./data --bind 127.0.0.1:3000
 - Item-level endpoints (`/{resource}/{id}`) expect array-based resources (`[{"id": ...}, ...]`).
 - Object resources support `GET /{resource}`, `PUT /{resource}`, and `PATCH /{resource}`.
 - Invalid JSON in a file returns a 500 with an error payload.
+
+
+## Query parameter ideas
+
+Potential future query parameters that would complement existing filtering and `next` pagination:
+
+- `limit=<n>`: configure page size instead of using the default 10 items.
+- `sort=<field>` and `order=asc|desc`: sort results by one field before pagination.
+- `fields=a,b,c`: project only selected fields for lighter responses.
+- `q=<text>`: full-text contains match across string fields.
+- `cursor=<token>`: stable cursor-based pagination for mutable datasets.
+- `include_total=true`: include total matching count in response metadata.
+- `filter.<field>.gt=<value>` / `lt` / `in`: richer comparison operators.
