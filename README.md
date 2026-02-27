@@ -28,6 +28,7 @@ you get:
 - Item routes (`/{resource}/{id}`) assume the resource file is a JSON array of objects with an `id` field.
 - `POST /{resource}` appends a new object to the array and auto-generates a numeric `id` if none is provided.
 - `PUT`, `PATCH`, and `DELETE` mutate the corresponding item and persist changes to disk.
+- `--readonly` disables mutation routes and only serves `GET` endpoints.
 
 ## Quick start
 
@@ -53,6 +54,9 @@ JSON
 
 ```bash
 cargo run -- --folder ./data --bind 127.0.0.1:3000
+
+# Read-only mode (only GET routes)
+cargo run -- --folder ./data --bind 127.0.0.1:3000 --readonly
 ```
 
 ### 3) Try the API

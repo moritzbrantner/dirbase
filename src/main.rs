@@ -10,7 +10,7 @@ use axum::{
     extract::{Path as AxumPath, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{MethodRouter, get},
 };
 use clap::Parser;
 use serde::Serialize;
@@ -31,6 +31,10 @@ struct Cli {
     /// Bind address, e.g. 127.0.0.1:3000
     #[arg(short, long, default_value = "127.0.0.1:3000")]
     bind: SocketAddr,
+
+    /// Enable read-only mode (only GET endpoints are exposed)
+    #[arg(long)]
+    readonly: bool,
 }
 
 #[derive(Clone)]
@@ -89,23 +93,41 @@ async fn main() {
         io_lock: Arc::new(Mutex::new(())),
     };
 
-    let app = Router::new()
-        .route("/", get(list_resources))
-        .route("/{resource}", get(get_collection).post(create_item))
-        .route(
-            "/{resource}/{id}",
-            get(get_item)
-                .put(replace_item)
-                .patch(patch_item)
-                .delete(delete_item),
-        )
-        .with_state(state);
+    let app = build_app(state, cli.readonly);
 
+    tracing::info!(readonly = cli.readonly, "Readonly mode");
     tracing::info!("Listening on http://{}", cli.bind);
     let listener = tokio::net::TcpListener::bind(cli.bind)
         .await
         .expect("binding server listener");
     axum::serve(listener, app).await.expect("running server");
+}
+
+fn build_app(state: AppState, readonly: bool) -> Router {
+    Router::new()
+        .route("/", get(list_resources))
+        .route("/{resource}", collection_routes(readonly))
+        .route("/{resource}/{id}", item_routes(readonly))
+        .with_state(state)
+}
+
+fn collection_routes(readonly: bool) -> MethodRouter<AppState> {
+    if readonly {
+        get(get_collection)
+    } else {
+        get(get_collection).post(create_item)
+    }
+}
+
+fn item_routes(readonly: bool) -> MethodRouter<AppState> {
+    if readonly {
+        get(get_item)
+    } else {
+        get(get_item)
+            .put(replace_item)
+            .patch(patch_item)
+            .delete(delete_item)
+    }
 }
 
 async fn list_resources(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
@@ -338,6 +360,9 @@ fn coerce_id_value(id: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::http::{Method, Request};
+    use tower::util::ServiceExt;
 
     #[test]
     fn validates_resource_names() {
@@ -368,5 +393,50 @@ mod tests {
         let loaded = load_resource(temp.path(), "users").expect("load resource");
 
         assert_eq!(value, loaded);
+    }
+
+    #[test]
+    fn readonly_routes_only_allow_get() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_resource(temp.path(), "users", &serde_json::json!([])).expect("seed resource");
+
+        let state = AppState {
+            folder: Arc::new(temp.path().to_path_buf()),
+            io_lock: Arc::new(Mutex::new(())),
+        };
+        let app = build_app(state, true);
+
+        let post_response = tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(async {
+                app.clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(Method::POST)
+                            .uri("/users")
+                            .header("content-type", "application/json")
+                            .body(Body::from(r#"{"name":"x"}"#))
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("response")
+            });
+
+        let delete_response = tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(async {
+                app.oneshot(
+                    Request::builder()
+                        .method(Method::DELETE)
+                        .uri("/users/1")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response")
+            });
+
+        assert_eq!(post_response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(delete_response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 }
