@@ -17,7 +17,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use serde_json::Value;
@@ -102,6 +102,13 @@ impl IntoResponse for AppError {
 
 #[tokio::main]
 async fn main() {
+    if std::env::args_os().len() == 1 {
+        let mut command = Cli::command();
+        command.print_help().expect("print CLI help");
+        println!();
+        return;
+    }
+
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
