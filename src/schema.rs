@@ -12,6 +12,13 @@ pub struct Schema {
 #[derive(Clone, Debug)]
 pub struct TableSchema {
     pub columns: BTreeMap<String, ColumnSchema>,
+    pub foreign_keys: BTreeMap<String, ForeignKey>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ForeignKey {
+    pub target_table: String,
+    pub target_column: String,
 }
 
 #[derive(Clone, Debug)]
@@ -79,7 +86,15 @@ pub fn parse_dbml_schema(input: &str) -> Result<Schema, String> {
 
             let (column_name, column_schema) = parse_column_line(line)
                 .map_err(|err| format!("line {line_number} (table {table_name}): {err}"))?;
+            if let Some(reference) = parse_inline_reference(line) {
+                table.foreign_keys.insert(column_name.clone(), reference);
+            }
             table.columns.insert(column_name, column_schema);
+            continue;
+        }
+
+        if line.starts_with("Ref:") {
+            parse_ref_line(line, line_number, &mut tables, current_table.as_mut())?;
             continue;
         }
 
@@ -98,6 +113,7 @@ pub fn parse_dbml_schema(input: &str) -> Result<Schema, String> {
                 name,
                 TableSchema {
                     columns: BTreeMap::new(),
+                    foreign_keys: BTreeMap::new(),
                 },
             ));
         }
@@ -146,6 +162,75 @@ fn parse_column_line(line: &str) -> Result<(String, ColumnSchema), String> {
     ))
 }
 
+fn parse_inline_reference(line: &str) -> Option<ForeignKey> {
+    let ref_pos = line.find("ref:")?;
+    let after_ref = &line[ref_pos + 4..];
+    let arrow_pos = after_ref.find('>')?;
+    let target = after_ref[arrow_pos + 1..].trim().trim_matches(']').trim();
+    let (target_table, target_column) = target.split_once('.')?;
+
+    Some(ForeignKey {
+        target_table: target_table.trim().trim_matches('"').to_string(),
+        target_column: target_column.trim().trim_matches('"').to_string(),
+    })
+}
+
+fn parse_ref_line(
+    line: &str,
+    line_number: usize,
+    tables: &mut BTreeMap<String, TableSchema>,
+    current_table: Option<&mut (String, TableSchema)>,
+) -> Result<(), String> {
+    let expression = line.trim_start_matches("Ref:").trim();
+    let (left, right) = expression
+        .split_once('>')
+        .ok_or_else(|| format!("line {line_number}: invalid Ref expression '{line}'"))?;
+
+    let (source_table, source_column) = parse_ref_side(left.trim(), line_number)?;
+    let (target_table, target_column) = parse_ref_side(right.trim(), line_number)?;
+
+    match current_table {
+        Some((name, table)) if *name == source_table => {
+            table.foreign_keys.insert(
+                source_column,
+                ForeignKey {
+                    target_table,
+                    target_column,
+                },
+            );
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    let Some(table) = tables.get_mut(&source_table) else {
+        return Err(format!(
+            "line {line_number}: Ref source table '{source_table}' not found"
+        ));
+    };
+
+    table.foreign_keys.insert(
+        source_column,
+        ForeignKey {
+            target_table,
+            target_column,
+        },
+    );
+
+    Ok(())
+}
+
+fn parse_ref_side(side: &str, line_number: usize) -> Result<(String, String), String> {
+    let cleaned = side.trim().trim_matches('"');
+    let (table, column) = cleaned
+        .split_once('.')
+        .ok_or_else(|| format!("line {line_number}: invalid Ref side '{side}'"))?;
+    Ok((
+        table.trim().trim_matches('"').to_string(),
+        column.trim().trim_matches('"').to_string(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +253,33 @@ mod tests {
         assert_eq!(users.columns["name"].column_type, ColumnType::String);
         assert_eq!(users.columns["active"].column_type, ColumnType::Boolean);
         assert!(!users.columns["id"].nullable);
+    }
+
+    #[test]
+    fn parses_inline_and_top_level_refs() {
+        let schema = parse_dbml_schema(
+            r#"
+            Table users {
+              id int [pk]
+              name varchar
+            }
+
+            Table posts {
+              id int [pk]
+              user_id int [ref: > users.id]
+            }
+
+            Ref: posts.user_id > users.id
+            "#,
+        )
+        .expect("parse schema");
+
+        let posts = schema.tables.get("posts").expect("posts table");
+        let fk = posts
+            .foreign_keys
+            .get("user_id")
+            .expect("user_id foreign key");
+        assert_eq!(fk.target_table, "users");
+        assert_eq!(fk.target_column, "id");
     }
 }

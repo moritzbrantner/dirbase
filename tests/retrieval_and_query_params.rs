@@ -207,6 +207,68 @@ fn query_parameters_support_unprefixed_pagination_aliases() {
 }
 
 #[test]
+fn query_parameters_support_embed_for_foreign_keys() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("schema.dbml"),
+        r#"
+Table users {
+  id int [pk]
+  name varchar
+}
+
+Table posts {
+  id int [pk]
+  title varchar
+  author_id int [ref: > users.id]
+}
+"#,
+    )
+    .expect("write schema");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"id": 1, "name": "Ada"},
+  {"id": 2, "name": "Grace"}
+]
+"#,
+    )
+    .expect("write users");
+    fs::write(
+        temp.path().join("posts.json"),
+        r#"[
+  {"id": 1, "title": "Hello", "author_id": 1},
+  {"id": 2, "title": "World", "author_id": 2}
+]
+"#,
+    )
+    .expect("write posts");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3018")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3018", Duration::from_secs(5));
+
+    let response = http_get("127.0.0.1:3018", "/posts?embed=author_id");
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+
+    let payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&response)).expect("valid json body");
+    assert_eq!(payload[0]["author_id"]["id"], 1);
+    assert_eq!(payload[0]["author_id"]["name"], "Ada");
+    assert_eq!(payload[1]["author_id"]["id"], 2);
+    assert_eq!(payload[1]["author_id"]["name"], "Grace");
+}
+
+#[test]
 fn retrieval_returns_400_for_invalid_resource_name() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(temp.path().join("users.json"), "[]\n").expect("write users");
