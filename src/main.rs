@@ -1,15 +1,18 @@
 use std::{
     collections::BTreeSet,
     fs,
+    io::Write,
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex as StdMutex, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
     Json, Router,
     extract::{Path as AxumPath, Query, State},
-    http::StatusCode,
+    http::{Request, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -45,6 +48,14 @@ struct Cli {
     /// Optional DBML schema file. If omitted, {folder}/schema.dbml is used when present.
     #[arg(long)]
     schema: Option<PathBuf>,
+
+    /// Enable request logging to a file.
+    #[arg(long)]
+    log: bool,
+
+    /// Log file name/path. Defaults to requests.log in current directory.
+    #[arg(long, default_value = "requests.log")]
+    logname: PathBuf,
 }
 
 #[derive(Clone)]
@@ -53,6 +64,7 @@ struct AppState {
     resources: Arc<RwLock<BTreeSet<String>>>,
     io_lock: Arc<Mutex<()>>,
     schema: Arc<Option<Schema>>,
+    request_log: Option<Arc<StdMutex<fs::File>>>,
 }
 
 #[derive(Debug)]
@@ -118,20 +130,42 @@ async fn main() {
         resources: Arc::new(RwLock::new(initial_resources)),
         io_lock: Arc::new(Mutex::new(())),
         schema: Arc::new(schema),
+        request_log: if cli.log {
+            match fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&cli.logname)
+            {
+                Ok(file) => Some(Arc::new(StdMutex::new(file))),
+                Err(err) => {
+                    eprintln!("Failed to open log file {}: {err}", cli.logname.display());
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            None
+        },
     };
 
     start_resource_watcher(state.folder.clone(), state.resources.clone());
 
+    let app_state = state.clone();
     let app = if cli.readonly {
         Router::new()
             .route("/", get(list_resources))
             .route("/{resource}", get(get_collection))
             .route("/{resource}/{id}", get(get_item))
-            .with_state(state)
+            .with_state(app_state)
     } else {
         Router::new()
             .route("/", get(list_resources))
-            .route("/{resource}", get(get_collection).post(create_item))
+            .route(
+                "/{resource}",
+                get(get_collection)
+                    .post(create_item)
+                    .put(replace_resource_object)
+                    .patch(patch_resource_object),
+            )
             .route(
                 "/{resource}/{id}",
                 get(get_item)
@@ -139,7 +173,16 @@ async fn main() {
                     .patch(patch_item)
                     .delete(delete_item),
             )
-            .with_state(state)
+            .with_state(app_state)
+    };
+
+    let app = if cli.log {
+        app.layer(middleware::from_fn_with_state(
+            state.clone(),
+            log_requests_middleware,
+        ))
+    } else {
+        app
     };
 
     tracing::info!(readonly = cli.readonly, "Readonly mode");
@@ -148,6 +191,30 @@ async fn main() {
         .await
         .expect("binding server listener");
     axum::serve(listener, app).await.expect("running server");
+}
+
+async fn log_requests_middleware(
+    State(state): State<AppState>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let response = next.run(request).await;
+    let status = response.status();
+
+    if let Some(log_file) = &state.request_log {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default();
+        let line = format!("{timestamp} {method} {path} {}\n", status.as_u16());
+        if let Ok(mut file) = log_file.lock() {
+            let _ = file.write_all(line.as_bytes());
+        }
+    }
+
+    response
 }
 
 async fn list_resources(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
@@ -345,6 +412,55 @@ async fn delete_item(
     validate_resource_data(&state, &resource, &data)?;
     write_resource(&state.folder, &resource, &data)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn replace_resource_object(
+    State(state): State<AppState>,
+    AxumPath(resource): AxumPath<String>,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    let _guard = state.io_lock.lock().await;
+    let mut data = load_resource(&state.folder, &resource)?;
+    if !data.is_object() {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "Resource is not a JSON object",
+        ));
+    }
+
+    if !payload.is_object() {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "Payload must be a JSON object",
+        ));
+    }
+
+    data = payload;
+    write_resource(&state.folder, &resource, &data)?;
+    Ok(Json(data))
+}
+
+async fn patch_resource_object(
+    State(state): State<AppState>,
+    AxumPath(resource): AxumPath<String>,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    let _guard = state.io_lock.lock().await;
+    let mut data = load_resource(&state.folder, &resource)?;
+    let current = data
+        .as_object_mut()
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON object"))?;
+    let patch = payload
+        .as_object()
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object"))?;
+
+    for (key, value) in patch {
+        current.insert(key.clone(), value.clone());
+    }
+
+    let updated = Value::Object(current.clone());
+    write_resource(&state.folder, &resource, &data)?;
+    Ok(Json(updated))
 }
 
 impl AppState {
@@ -678,6 +794,7 @@ mod tests {
             resources: Arc::new(RwLock::new(BTreeSet::new())),
             io_lock: Arc::new(Mutex::new(())),
             schema: Arc::new(Some(schema)),
+            request_log: None,
         };
 
         let ok = serde_json::json!([{"id": 1, "name": "Ada", "active": true}]);

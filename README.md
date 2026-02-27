@@ -25,11 +25,13 @@ you get:
 
 - `GET /` lists all available resources discovered from `*.json` files.
 - While the server is running, file additions, edits, and deletions in the selected folder are watched and the available endpoints update automatically.
-- `GET /{resource}` returns the whole JSON document from `{resource}.json`.
+- `GET /{resource}` returns the whole JSON document from `{resource}.json` (array or object).
 - `GET /{resource}?field=value&other=...` filters array resources by one or more exact-match query parameters.
 - Item routes (`/{resource}/{id}`) assume the resource file is a JSON array of objects with an `id` field.
 - `POST /{resource}` appends a new object to the array and auto-generates a numeric `id` if none is provided.
-- `PUT`, `PATCH`, and `DELETE` mutate the corresponding item and persist changes to disk.
+- `PUT`, `PATCH`, and `DELETE` mutate the corresponding array item and persist changes to disk.
+- For object resources, `PUT /{resource}` replaces the full object and `PATCH /{resource}` merges fields.
+- `--log` enables request logging and `--logname <path>` selects the log output file (default `requests.log`).
 - `--readonly` disables mutation routes and only serves `GET` endpoints.
 - Schema validation is enabled automatically when `{folder}/schema.dbml` exists.
 - Use `--schema <path>` to load a DBML schema from a custom location.
@@ -115,5 +117,6 @@ npx folder-server --folder ./data --bind 127.0.0.1:3000
 ## Notes
 
 - Resource names are restricted to letters, numbers, `_`, and `-`.
-- For item-level endpoints, this tool currently expects array-based resources (`[{"id": ...}, ...]`).
+- Item-level endpoints (`/{resource}/{id}`) expect array-based resources (`[{"id": ...}, ...]`).
+- Object resources support `GET /{resource}`, `PUT /{resource}`, and `PATCH /{resource}`.
 - Invalid JSON in a file returns a 500 with an error payload.
