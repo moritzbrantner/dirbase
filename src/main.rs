@@ -1,8 +1,9 @@
 use std::{
+    collections::BTreeSet,
     fs,
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 use axum::{
@@ -13,6 +14,7 @@ use axum::{
     routing::get,
 };
 use clap::Parser;
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -40,6 +42,7 @@ struct Cli {
 #[derive(Clone)]
 struct AppState {
     folder: Arc<PathBuf>,
+    resources: Arc<RwLock<BTreeSet<String>>>,
     io_lock: Arc<Mutex<()>>,
 }
 
@@ -88,8 +91,14 @@ async fn main() {
         std::process::exit(1);
     }
 
+    let initial_resources = scan_resources(&cli.folder).unwrap_or_else(|err| {
+        eprintln!("Failed to scan data folder {}: {err}", cli.folder.display());
+        BTreeSet::new()
+    });
+
     let state = AppState {
         folder: Arc::new(cli.folder),
+        resources: Arc::new(RwLock::new(initial_resources)),
         io_lock: Arc::new(Mutex::new(())),
     };
 
@@ -122,24 +131,19 @@ async fn main() {
 }
 
 async fn list_resources(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
-    let _guard = state.io_lock.lock().await;
-    let mut resources = Vec::new();
+    let resources = state
+        .resources
+        .read()
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Resource cache lock poisoned",
+            )
+        })?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
 
-    let entries = fs::read_dir(&*state.folder)
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    for entry in entries {
-        let entry =
-            entry.map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("json")
-            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-        {
-            resources.push(stem.to_owned());
-        }
-    }
-
-    resources.sort();
     Ok(Json(serde_json::json!({ "resources": resources })))
 }
 
@@ -348,6 +352,65 @@ fn coerce_id_value(id: &str) -> Value {
         .map_or_else(|_| Value::String(id.to_string()), Value::from)
 }
 
+fn scan_resources(folder: &Path) -> Result<BTreeSet<String>, std::io::Error> {
+    let mut resources = BTreeSet::new();
+    let entries = fs::read_dir(folder)?;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("json")
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            && is_valid_resource_name(stem)
+        {
+            resources.insert(stem.to_owned());
+        }
+    }
+
+    Ok(resources)
+}
+
+fn start_resource_watcher(folder: Arc<PathBuf>, resources: Arc<RwLock<BTreeSet<String>>>) {
+    std::thread::spawn(move || {
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let mut watcher = match RecommendedWatcher::new(
+            move |result| {
+                let _ = tx.send(result);
+            },
+            Config::default(),
+        ) {
+            Ok(watcher) => watcher,
+            Err(err) => {
+                tracing::error!("Failed to create filesystem watcher: {err}");
+                return;
+            }
+        };
+
+        if let Err(err) = watcher.watch(&folder, RecursiveMode::NonRecursive) {
+            tracing::error!("Failed to watch folder {}: {err}", folder.display());
+            return;
+        }
+
+        for event in rx {
+            match event {
+                Ok(_) => match scan_resources(&folder) {
+                    Ok(new_resources) => {
+                        if let Ok(mut cache) = resources.write() {
+                            *cache = new_resources;
+                        }
+                    }
+                    Err(err) => tracing::error!(
+                        "Failed to refresh resources for folder {}: {err}",
+                        folder.display()
+                    ),
+                },
+                Err(err) => tracing::warn!("File watch event error: {err}"),
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,5 +444,21 @@ mod tests {
         let loaded = load_resource(temp.path(), "users").expect("load resource");
 
         assert_eq!(value, loaded);
+    }
+
+    #[test]
+    fn scans_only_valid_json_resource_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(temp.path().join("users.json"), "[]").expect("write users");
+        fs::write(temp.path().join("posts.json"), "[]").expect("write posts");
+        fs::write(temp.path().join("notes.txt"), "hello").expect("write txt");
+        fs::write(temp.path().join("bad name.json"), "[]").expect("write invalid");
+
+        let resources = scan_resources(temp.path()).expect("scan resources");
+
+        assert_eq!(
+            resources.into_iter().collect::<Vec<_>>(),
+            vec!["posts".to_string(), "users".to_string()]
+        );
     }
 }
