@@ -1275,4 +1275,53 @@ mod tests {
         assert!(parsed.sort_columns[0].descending);
         assert_eq!(parsed.pagination.unwrap().page, 2);
     }
+
+    #[test]
+    fn rejects_invalid_query_filter_and_pagination_values() {
+        let invalid_operator = parse_collection_query_params(vec![(
+            "role:unknown".to_string(),
+            "admin".to_string(),
+        )])
+        .expect_err("invalid operator should fail");
+        assert_eq!(invalid_operator.status, StatusCode::BAD_REQUEST);
+
+        let invalid_page = parse_collection_query_params(vec![("page".to_string(), "0".to_string())])
+            .expect_err("page 0 should fail");
+        assert_eq!(invalid_page.status, StatusCode::BAD_REQUEST);
+
+        let invalid_per_page =
+            parse_collection_query_params(vec![("per_page".to_string(), "abc".to_string())])
+                .expect_err("non numeric per_page should fail");
+        assert_eq!(invalid_per_page.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn paginates_past_last_page_by_clamping_to_last_page() {
+        let data = serde_json::json!([
+            {"id": 1, "name": "a"},
+            {"id": 2, "name": "b"},
+            {"id": 3, "name": "c"}
+        ]);
+
+        let paged = paginate_collection_data(
+            data,
+            Pagination {
+                page: 5,
+                per_page: 2,
+            },
+        )
+        .expect("paginate collection");
+
+        assert_eq!(paged["last"], 2);
+        assert_eq!(paged["prev"], 1);
+        assert_eq!(paged["next"], serde_json::Value::Null);
+
+        let ids = paged["data"]
+            .as_array()
+            .expect("array response")
+            .iter()
+            .map(|item| item["id"].as_i64().expect("numeric id"))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![3]);
+    }
 }
