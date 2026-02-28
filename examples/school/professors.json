@@ -3,12 +3,21 @@
     "id": 1,
     "name": "Dr. Elena Rivera",
     "department": "Computer Science",
-    "email": "elena.rivera@example.edu"
+    "email": "elena.rivera@example.edu",
+    "tenured": true
   },
   {
     "id": 2,
     "name": "Dr. Marcus Lee",
     "department": "Mathematics",
-    "email": "marcus.lee@example.edu"
+    "email": "marcus.lee@example.edu",
+    "tenured": true
+  },
+  {
+    "id": 3,
+    "name": "Dr. Priya Shah",
+    "department": "Biology",
+    "email": "priya.shah@example.edu",
+    "tenured": false
   }
 ]
