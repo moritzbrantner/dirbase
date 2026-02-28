@@ -19,8 +19,13 @@ use axum::{
 };
 use clap::{CommandFactory, Parser};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlparser::{
+    ast::{BinaryOperator, Expr, Select, SelectItem, SetExpr, Statement, Value as SqlValue},
+    dialect::GenericDialect,
+    parser::Parser as SqlParser,
+};
 use tokio::sync::Mutex;
 
 mod schema;
@@ -162,6 +167,7 @@ async fn main() {
         Router::new()
             .route("/", get(list_resources))
             .route("/graphql", get(graphql).post(graphql))
+            .route("/sql", get(sql_query).post(sql_query_post))
             .route("/{resource}", get(get_collection))
             .route("/{resource}/{id}", get(get_item))
             .with_state(app_state)
@@ -169,6 +175,7 @@ async fn main() {
         Router::new()
             .route("/", get(list_resources))
             .route("/graphql", get(graphql).post(graphql))
+            .route("/sql", get(sql_query).post(sql_query_post))
             .route(
                 "/{resource}",
                 get(get_collection)
@@ -249,6 +256,88 @@ async fn list_resources(State(state): State<AppState>) -> Result<Json<Value>, Ap
         .collect::<Vec<_>>();
 
     Ok(Json(serde_json::json!({ "resources": resources })))
+}
+
+#[derive(Deserialize)]
+struct SqlGetParams {
+    q: String,
+}
+
+#[derive(Deserialize)]
+struct SqlPostBody {
+    query: String,
+}
+
+#[derive(Debug)]
+struct ParsedSqlQuery {
+    resource: String,
+    selected_columns: Option<Vec<String>>,
+    filters: Vec<FilterCondition>,
+    sort_columns: Vec<SortColumn>,
+    pagination: Option<Pagination>,
+}
+
+async fn sql_query(
+    State(state): State<AppState>,
+    Query(params): Query<SqlGetParams>,
+) -> Result<Json<Value>, AppError> {
+    run_sql_query(state, params.q).await
+}
+
+async fn sql_query_post(
+    State(state): State<AppState>,
+    Json(payload): Json<SqlPostBody>,
+) -> Result<Json<Value>, AppError> {
+    run_sql_query(state, payload.query).await
+}
+
+async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, AppError> {
+    let parsed = parse_sql_query(&query)?;
+
+    let _guard = state.io_lock.lock().await;
+    let data = load_resource(&state.folder, &parsed.resource)?;
+    validate_resource_data(&state, &parsed.resource, &data)?;
+
+    let filtered = if parsed.filters.is_empty() {
+        data
+    } else {
+        filter_collection_data(data, &parsed.filters)?
+    };
+
+    let sorted = if parsed.sort_columns.is_empty() {
+        filtered
+    } else {
+        sort_collection_data(filtered, &parsed.sort_columns)?
+    };
+
+    let paginated_rows = if let Some(pagination) = parsed.pagination {
+        let paginated = paginate_collection_data(sorted, pagination)?;
+        paginated
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Invalid pagination payload",
+                )
+            })?
+    } else {
+        sorted
+            .as_array()
+            .cloned()
+            .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?
+    };
+
+    let rows = apply_column_selection(paginated_rows, parsed.selected_columns)?;
+    let row_count = rows.len();
+
+    Ok(Json(serde_json::json!({
+        "dialect": "generic",
+        "query": query,
+        "row_count": row_count,
+        "rows": rows,
+    })))
 }
 
 async fn get_collection(
@@ -409,6 +498,423 @@ fn parse_collection_query_params(
         pagination,
         embeds,
     })
+}
+
+fn parse_sql_query(query: &str) -> Result<ParsedSqlQuery, AppError> {
+    let dialect = GenericDialect {};
+    let statements = SqlParser::parse_sql(&dialect, query).map_err(|err| {
+        AppError::new(StatusCode::BAD_REQUEST, format!("Invalid SQL query: {err}"))
+    })?;
+
+    if statements.len() != 1 {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "Only a single SQL statement is supported",
+        ));
+    }
+
+    let statement = statements.into_iter().next().expect("single statement");
+    let select = match statement {
+        Statement::Query(query_box) => {
+            if !query_box.limit_by.is_empty() {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "LIMIT BY is not supported",
+                ));
+            }
+
+            if query_box.with.is_some() {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "WITH clauses are not supported",
+                ));
+            }
+
+            let offset = parse_sql_offset(query_box.offset)?;
+            let limit = parse_sql_limit(query_box.limit)?;
+
+            let pagination = match (limit, offset) {
+                (None, None) => None,
+                (Some(per_page), Some(offset)) => Some(Pagination {
+                    page: (offset / per_page) + 1,
+                    per_page,
+                }),
+                (Some(per_page), None) => Some(Pagination { page: 1, per_page }),
+                (None, Some(_)) => {
+                    return Err(AppError::new(
+                        StatusCode::BAD_REQUEST,
+                        "OFFSET requires LIMIT",
+                    ));
+                }
+            };
+
+            let sort_columns = parse_sql_order_by(query_box.order_by.as_ref())?;
+
+            match *query_box.body {
+                SetExpr::Select(select) => parse_sql_select(*select, sort_columns, pagination)?,
+                _ => {
+                    return Err(AppError::new(
+                        StatusCode::BAD_REQUEST,
+                        "Only SELECT queries are supported",
+                    ));
+                }
+            }
+        }
+        _ => {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "Only SELECT statements are supported",
+            ));
+        }
+    };
+
+    Ok(select)
+}
+
+fn parse_sql_select(
+    select: Select,
+    sort_columns: Vec<SortColumn>,
+    pagination: Option<Pagination>,
+) -> Result<ParsedSqlQuery, AppError> {
+    if !matches!(select.group_by, sqlparser::ast::GroupByExpr::Expressions(ref exprs, _) if exprs.is_empty())
+    {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "GROUP BY is not supported",
+        ));
+    }
+
+    if select.having.is_some() {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "HAVING is not supported",
+        ));
+    }
+
+    if select.distinct.is_some() {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "DISTINCT is not supported",
+        ));
+    }
+
+    if select.from.len() != 1 {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "Exactly one table/resource in FROM is required",
+        ));
+    }
+
+    let from = &select.from[0];
+    if !from.joins.is_empty() {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "JOIN is not supported",
+        ));
+    }
+
+    let resource = match &from.relation {
+        sqlparser::ast::TableFactor::Table { name, .. } => name,
+        _ => {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "Unsupported FROM clause",
+            ));
+        }
+    };
+    let resource = resource
+        .0
+        .last()
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Missing table/resource name"))?
+        .value
+        .clone();
+
+    let selected_columns = parse_sql_projection(&select.projection)?;
+    let filters = if let Some(selection) = select.selection {
+        parse_sql_where(&selection)?
+    } else {
+        Vec::new()
+    };
+
+    Ok(ParsedSqlQuery {
+        resource,
+        selected_columns,
+        filters,
+        sort_columns,
+        pagination,
+    })
+}
+
+fn parse_sql_projection(projection: &[SelectItem]) -> Result<Option<Vec<String>>, AppError> {
+    if projection.len() == 1 && matches!(projection[0], SelectItem::Wildcard(_)) {
+        return Ok(None);
+    }
+
+    let mut columns = Vec::new();
+    for item in projection {
+        match item {
+            SelectItem::UnnamedExpr(Expr::Identifier(identifier)) => {
+                columns.push(identifier.value.clone())
+            }
+            SelectItem::UnnamedExpr(Expr::CompoundIdentifier(parts)) => {
+                let column = parts.last().ok_or_else(|| {
+                    AppError::new(StatusCode::BAD_REQUEST, "Invalid column reference")
+                })?;
+                columns.push(column.value.clone());
+            }
+            SelectItem::ExprWithAlias { .. } => {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "Column aliases are not supported",
+                ));
+            }
+            SelectItem::UnnamedExpr(Expr::Function(_)) => {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "Aggregate/functions are not supported",
+                ));
+            }
+            _ => {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "Unsupported SELECT projection",
+                ));
+            }
+        }
+    }
+
+    Ok(Some(columns))
+}
+
+fn parse_sql_where(expr: &Expr) -> Result<Vec<FilterCondition>, AppError> {
+    match expr {
+        Expr::BinaryOp { left, op, right } if *op == BinaryOperator::And => {
+            let mut left_filters = parse_sql_where(left)?;
+            let mut right_filters = parse_sql_where(right)?;
+            left_filters.append(&mut right_filters);
+            Ok(left_filters)
+        }
+        Expr::BinaryOp { left, op, right } => {
+            let field_path = parse_sql_column_expr(left)?;
+            let value = parse_sql_literal(right)?;
+            let operator = match op {
+                BinaryOperator::Eq => FilterOperator::Eq,
+                BinaryOperator::NotEq => FilterOperator::Ne,
+                BinaryOperator::Lt => FilterOperator::Lt,
+                BinaryOperator::LtEq => FilterOperator::Lte,
+                BinaryOperator::Gt => FilterOperator::Gt,
+                BinaryOperator::GtEq => FilterOperator::Gte,
+                _ => {
+                    return Err(AppError::new(
+                        StatusCode::BAD_REQUEST,
+                        format!("Unsupported WHERE operator '{op}'"),
+                    ));
+                }
+            };
+
+            Ok(vec![FilterCondition {
+                field_path,
+                operator,
+                value,
+            }])
+        }
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => {
+            if *negated {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "NOT IN is not supported",
+                ));
+            }
+
+            let field_path = parse_sql_column_expr(expr)?;
+            let values = list
+                .iter()
+                .map(parse_sql_literal)
+                .collect::<Result<Vec<_>, _>>()?
+                .join(",");
+
+            Ok(vec![FilterCondition {
+                field_path,
+                operator: FilterOperator::In,
+                value: values,
+            }])
+        }
+        Expr::Like {
+            negated,
+            expr,
+            pattern,
+            ..
+        } => {
+            if *negated {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "NOT LIKE is not supported",
+                ));
+            }
+
+            let field_path = parse_sql_column_expr(expr)?;
+            let pattern = parse_sql_literal(pattern)?;
+            let (operator, value) = sql_like_to_filter(&pattern)?;
+
+            Ok(vec![FilterCondition {
+                field_path,
+                operator,
+                value,
+            }])
+        }
+        _ => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "Unsupported WHERE clause. Only AND-combined simple predicates are supported",
+        )),
+    }
+}
+
+fn parse_sql_column_expr(expr: &Expr) -> Result<String, AppError> {
+    match expr {
+        Expr::Identifier(identifier) => Ok(identifier.value.clone()),
+        Expr::CompoundIdentifier(parts) => Ok(parts
+            .iter()
+            .map(|part| part.value.clone())
+            .collect::<Vec<_>>()
+            .join(".")),
+        _ => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "Expected a column identifier",
+        )),
+    }
+}
+
+fn parse_sql_literal(expr: &Expr) -> Result<String, AppError> {
+    match expr {
+        Expr::Value(value) => parse_sql_value(value),
+        Expr::UnaryOp { op, expr } if op.to_string() == "-" => {
+            let value = parse_sql_literal(expr)?;
+            Ok(format!("-{value}"))
+        }
+        _ => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "Expected a literal value",
+        )),
+    }
+}
+
+fn parse_sql_value(value: &SqlValue) -> Result<String, AppError> {
+    match value {
+        SqlValue::SingleQuotedString(v) | SqlValue::DoubleQuotedString(v) => Ok(v.clone()),
+        SqlValue::Number(v, _) => Ok(v.clone()),
+        SqlValue::Boolean(v) => Ok(v.to_string()),
+        SqlValue::Null => Ok("null".to_string()),
+        _ => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "Unsupported literal value",
+        )),
+    }
+}
+
+fn parse_sql_order_by(
+    order_by: Option<&sqlparser::ast::OrderBy>,
+) -> Result<Vec<SortColumn>, AppError> {
+    let Some(order_by) = order_by else {
+        return Ok(Vec::new());
+    };
+
+    order_by
+        .exprs
+        .iter()
+        .map(|expr| {
+            let field_path = parse_sql_column_expr(&expr.expr)?;
+            Ok(SortColumn {
+                field_path,
+                descending: expr.asc == Some(false),
+            })
+        })
+        .collect()
+}
+
+fn parse_sql_limit(expr: Option<Expr>) -> Result<Option<usize>, AppError> {
+    expr.map(|value| parse_sql_usize_literal(&value, "LIMIT"))
+        .transpose()
+}
+
+fn parse_sql_offset(offset: Option<sqlparser::ast::Offset>) -> Result<Option<usize>, AppError> {
+    offset
+        .map(|offset| parse_sql_usize_literal(&offset.value, "OFFSET"))
+        .transpose()
+}
+
+fn parse_sql_usize_literal(expr: &Expr, clause: &str) -> Result<usize, AppError> {
+    let value = parse_sql_literal(expr)?;
+    let parsed = value.parse::<usize>().map_err(|_| {
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!("{clause} must be a non-negative integer"),
+        )
+    })?;
+
+    if parsed == 0 && clause == "LIMIT" {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "LIMIT must be greater than 0",
+        ));
+    }
+
+    Ok(parsed)
+}
+
+fn sql_like_to_filter(pattern: &str) -> Result<(FilterOperator, String), AppError> {
+    let starts = pattern.starts_with('%');
+    let ends = pattern.ends_with('%');
+    let core = pattern.trim_matches('%').to_string();
+
+    if pattern.matches('%').count() > usize::from(starts) + usize::from(ends) {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "LIKE only supports prefix/suffix wildcards",
+        ));
+    }
+
+    if starts && ends {
+        return Ok((FilterOperator::Contains, core));
+    }
+    if starts {
+        return Ok((FilterOperator::EndsWith, core));
+    }
+    if ends {
+        return Ok((FilterOperator::StartsWith, core));
+    }
+
+    Ok((FilterOperator::Eq, core))
+}
+
+fn apply_column_selection(
+    rows: Vec<Value>,
+    selected_columns: Option<Vec<String>>,
+) -> Result<Vec<Value>, AppError> {
+    let Some(selected_columns) = selected_columns else {
+        return Ok(rows);
+    };
+
+    rows.into_iter()
+        .map(|row| {
+            let object = row.as_object().ok_or_else(|| {
+                AppError::new(StatusCode::BAD_REQUEST, "Resource row is not a JSON object")
+            })?;
+
+            let mut projected = serde_json::Map::new();
+            for column in &selected_columns {
+                let value = get_value_at_path(&Value::Object(object.clone()), column)
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                projected.insert(column.clone(), value);
+            }
+
+            Ok(Value::Object(projected))
+        })
+        .collect()
 }
 
 fn parse_positive_usize(key: &str, value: &str) -> Result<usize, AppError> {
