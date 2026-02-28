@@ -30,7 +30,7 @@ use tokio::sync::Mutex;
 
 mod schema;
 
-use schema::{ColumnType, Schema, TableSchema, load_schema};
+use schema::{ColumnSchema, ColumnType, Schema, TableSchema, is_valid_identifier, load_schema};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -292,16 +292,17 @@ async fn sql_query_post(
 }
 
 async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, AppError> {
-    let parsed = parse_sql_query(&query)?;
+    let parsed = parse_sql_query(&query, &state)?;
 
     let _guard = state.io_lock.lock().await;
     let data = load_resource(&state.folder, &parsed.resource)?;
     validate_resource_data(&state, &parsed.resource, &data)?;
 
+    let table = state.schema_table(&parsed.resource)?;
     let filtered = if parsed.filters.is_empty() {
         data
     } else {
-        filter_collection_data(data, &parsed.filters)?
+        filter_collection_data(data, &parsed.filters, table)?
     };
 
     let sorted = if parsed.sort_columns.is_empty() {
@@ -361,7 +362,7 @@ async fn get_collection(
     let filtered = if parsed.filters.is_empty() {
         data
     } else {
-        filter_collection_data(data, &parsed.filters)?
+        filter_collection_data(data, &parsed.filters, None)?
     };
 
     let sorted = if parsed.sort_columns.is_empty() {
@@ -395,6 +396,8 @@ enum FilterOperator {
     Contains,
     StartsWith,
     EndsWith,
+    IsNull,
+    IsNotNull,
 }
 
 #[derive(Debug, Clone)]
@@ -402,6 +405,14 @@ struct FilterCondition {
     field_path: String,
     operator: FilterOperator,
     value: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ComparableValue {
+    Null,
+    Number(f64),
+    Bool(bool),
+    String(String),
 }
 
 #[derive(Debug, Clone)]
@@ -500,7 +511,67 @@ fn parse_collection_query_params(
     })
 }
 
-fn parse_sql_query(query: &str) -> Result<ParsedSqlQuery, AppError> {
+fn validate_sql_identifier(identifier: &str, kind: &str) -> Result<(), AppError> {
+    if !is_valid_identifier(identifier) {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Invalid {kind} identifier '{identifier}'"),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_sql_query_fields(
+    state: &AppState,
+    resource: &str,
+    selected_columns: Option<&[String]>,
+    filters: &[FilterCondition],
+    sort_columns: &[SortColumn],
+) -> Result<(), AppError> {
+    let Some(table) = state.schema_table(resource)? else {
+        return Ok(());
+    };
+
+    if let Some(selected_columns) = selected_columns {
+        for column in selected_columns {
+            if !table.columns.contains_key(column) {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    format!("Unknown column '{column}' for resource '{resource}'"),
+                ));
+            }
+        }
+    }
+
+    for filter in filters {
+        if !table.columns.contains_key(&filter.field_path) {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Unknown column '{}' in WHERE clause for resource '{}'",
+                    filter.field_path, resource
+                ),
+            ));
+        }
+    }
+
+    for sort in sort_columns {
+        if !table.columns.contains_key(&sort.field_path) {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Unknown column '{}' in ORDER BY clause for resource '{}'",
+                    sort.field_path, resource
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery, AppError> {
     let dialect = GenericDialect {};
     let statements = SqlParser::parse_sql(&dialect, query).map_err(|err| {
         AppError::new(StatusCode::BAD_REQUEST, format!("Invalid SQL query: {err}"))
@@ -551,7 +622,9 @@ fn parse_sql_query(query: &str) -> Result<ParsedSqlQuery, AppError> {
             let sort_columns = parse_sql_order_by(query_box.order_by.as_ref())?;
 
             match *query_box.body {
-                SetExpr::Select(select) => parse_sql_select(*select, sort_columns, pagination)?,
+                SetExpr::Select(select) => {
+                    parse_sql_select(*select, sort_columns, pagination, state)?
+                }
                 _ => {
                     return Err(AppError::new(
                         StatusCode::BAD_REQUEST,
@@ -575,6 +648,7 @@ fn parse_sql_select(
     select: Select,
     sort_columns: Vec<SortColumn>,
     pagination: Option<Pagination>,
+    state: &AppState,
 ) -> Result<ParsedSqlQuery, AppError> {
     if !matches!(select.group_by, sqlparser::ast::GroupByExpr::Expressions(ref exprs, _) if exprs.is_empty())
     {
@@ -629,12 +703,21 @@ fn parse_sql_select(
         .value
         .clone();
 
+    validate_sql_identifier(&resource, "resource")?;
     let selected_columns = parse_sql_projection(&select.projection)?;
     let filters = if let Some(selection) = select.selection {
         parse_sql_where(&selection)?
     } else {
         Vec::new()
     };
+
+    validate_sql_query_fields(
+        state,
+        &resource,
+        selected_columns.as_deref(),
+        &filters,
+        &sort_columns,
+    )?;
 
     Ok(ParsedSqlQuery {
         resource,
@@ -654,12 +737,14 @@ fn parse_sql_projection(projection: &[SelectItem]) -> Result<Option<Vec<String>>
     for item in projection {
         match item {
             SelectItem::UnnamedExpr(Expr::Identifier(identifier)) => {
+                validate_sql_identifier(&identifier.value, "column")?;
                 columns.push(identifier.value.clone())
             }
             SelectItem::UnnamedExpr(Expr::CompoundIdentifier(parts)) => {
                 let column = parts.last().ok_or_else(|| {
                     AppError::new(StatusCode::BAD_REQUEST, "Invalid column reference")
                 })?;
+                validate_sql_identifier(&column.value, "column")?;
                 columns.push(column.value.clone());
             }
             SelectItem::ExprWithAlias { .. } => {
@@ -698,8 +783,24 @@ fn parse_sql_where(expr: &Expr) -> Result<Vec<FilterCondition>, AppError> {
             let field_path = parse_sql_column_expr(left)?;
             let value = parse_sql_literal(right)?;
             let operator = match op {
-                BinaryOperator::Eq => FilterOperator::Eq,
-                BinaryOperator::NotEq => FilterOperator::Ne,
+                BinaryOperator::Eq => {
+                    if value.eq_ignore_ascii_case("null") {
+                        return Err(AppError::new(
+                            StatusCode::BAD_REQUEST,
+                            "Use IS NULL instead of = NULL",
+                        ));
+                    }
+                    FilterOperator::Eq
+                }
+                BinaryOperator::NotEq => {
+                    if value.eq_ignore_ascii_case("null") {
+                        return Err(AppError::new(
+                            StatusCode::BAD_REQUEST,
+                            "Use IS NOT NULL instead of != NULL",
+                        ));
+                    }
+                    FilterOperator::Ne
+                }
                 BinaryOperator::Lt => FilterOperator::Lt,
                 BinaryOperator::LtEq => FilterOperator::Lte,
                 BinaryOperator::Gt => FilterOperator::Gt,
@@ -711,6 +812,15 @@ fn parse_sql_where(expr: &Expr) -> Result<Vec<FilterCondition>, AppError> {
                     ));
                 }
             };
+
+            if !matches!(operator, FilterOperator::Eq | FilterOperator::Ne)
+                && value.eq_ignore_ascii_case("null")
+            {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "NULL can only be compared with IS NULL / IS NOT NULL",
+                ));
+            }
 
             Ok(vec![FilterCondition {
                 field_path,
@@ -766,6 +876,22 @@ fn parse_sql_where(expr: &Expr) -> Result<Vec<FilterCondition>, AppError> {
                 value,
             }])
         }
+        Expr::IsNull(expr) => {
+            let field_path = parse_sql_column_expr(expr)?;
+            Ok(vec![FilterCondition {
+                field_path,
+                operator: FilterOperator::IsNull,
+                value: String::new(),
+            }])
+        }
+        Expr::IsNotNull(expr) => {
+            let field_path = parse_sql_column_expr(expr)?;
+            Ok(vec![FilterCondition {
+                field_path,
+                operator: FilterOperator::IsNotNull,
+                value: String::new(),
+            }])
+        }
         _ => Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "Unsupported WHERE clause. Only AND-combined simple predicates are supported",
@@ -775,12 +901,17 @@ fn parse_sql_where(expr: &Expr) -> Result<Vec<FilterCondition>, AppError> {
 
 fn parse_sql_column_expr(expr: &Expr) -> Result<String, AppError> {
     match expr {
-        Expr::Identifier(identifier) => Ok(identifier.value.clone()),
-        Expr::CompoundIdentifier(parts) => Ok(parts
-            .iter()
-            .map(|part| part.value.clone())
-            .collect::<Vec<_>>()
-            .join(".")),
+        Expr::Identifier(identifier) => {
+            validate_sql_identifier(&identifier.value, "column")?;
+            Ok(identifier.value.clone())
+        }
+        Expr::CompoundIdentifier(parts) => {
+            let column = parts.last().ok_or_else(|| {
+                AppError::new(StatusCode::BAD_REQUEST, "Expected a column identifier")
+            })?;
+            validate_sql_identifier(&column.value, "column")?;
+            Ok(column.value.clone())
+        }
         _ => Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "Expected a column identifier",
@@ -969,14 +1100,18 @@ fn parse_filter_key(key: &str) -> Result<(String, FilterOperator), AppError> {
     Ok((field_path.to_string(), operator))
 }
 
-fn filter_collection_data(data: Value, filters: &[FilterCondition]) -> Result<Value, AppError> {
+fn filter_collection_data(
+    data: Value,
+    filters: &[FilterCondition],
+    table: Option<&TableSchema>,
+) -> Result<Value, AppError> {
     let items = data
         .as_array()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
 
     let filtered = items
         .iter()
-        .filter(|item| item_matches_filters(item, filters))
+        .filter(|item| item_matches_filters(item, filters, table))
         .cloned()
         .collect::<Vec<_>>();
 
@@ -1032,35 +1167,46 @@ fn compare_json_values(left: &Value, right: &Value) -> Ordering {
     }
 }
 
-fn item_matches_filters(item: &Value, filters: &[FilterCondition]) -> bool {
+fn item_matches_filters(
+    item: &Value,
+    filters: &[FilterCondition],
+    table: Option<&TableSchema>,
+) -> bool {
     filters.iter().all(|condition| {
-        let Some(actual) = get_value_at_path(item, &condition.field_path) else {
-            return false;
-        };
-
-        matches_filter(actual, condition)
+        let actual = get_value_at_path(item, &condition.field_path).unwrap_or(&Value::Null);
+        let column = table.and_then(|t| t.columns.get(&condition.field_path));
+        matches_filter(actual, condition, column)
     })
 }
 
-fn matches_filter(actual: &Value, condition: &FilterCondition) -> bool {
+fn matches_filter(
+    actual: &Value,
+    condition: &FilterCondition,
+    column: Option<&ColumnSchema>,
+) -> bool {
     match condition.operator {
-        FilterOperator::Eq => value_to_filter_string(actual) == condition.value,
-        FilterOperator::Ne => value_to_filter_string(actual) != condition.value,
-        FilterOperator::Lt => {
-            compare_with_expected(actual, &condition.value).is_some_and(|cmp| cmp == Ordering::Less)
-        }
-        FilterOperator::Lte => compare_with_expected(actual, &condition.value)
+        FilterOperator::IsNull => actual.is_null(),
+        FilterOperator::IsNotNull => !actual.is_null(),
+        FilterOperator::Eq => compare_with_expected(actual, &condition.value, column)
+            .is_some_and(|cmp| cmp == Ordering::Equal),
+        FilterOperator::Ne => compare_with_expected(actual, &condition.value, column)
+            .is_some_and(|cmp| cmp != Ordering::Equal),
+        FilterOperator::Lt => compare_with_expected(actual, &condition.value, column)
+            .is_some_and(|cmp| cmp == Ordering::Less),
+        FilterOperator::Lte => compare_with_expected(actual, &condition.value, column)
             .is_some_and(|cmp| cmp == Ordering::Less || cmp == Ordering::Equal),
-        FilterOperator::Gt => compare_with_expected(actual, &condition.value)
+        FilterOperator::Gt => compare_with_expected(actual, &condition.value, column)
             .is_some_and(|cmp| cmp == Ordering::Greater),
-        FilterOperator::Gte => compare_with_expected(actual, &condition.value)
+        FilterOperator::Gte => compare_with_expected(actual, &condition.value, column)
             .is_some_and(|cmp| cmp == Ordering::Greater || cmp == Ordering::Equal),
         FilterOperator::In => condition
             .value
             .split(',')
             .map(str::trim)
             .filter(|v| !v.is_empty())
-            .any(|v| value_to_filter_string(actual) == v),
+            .any(|v| {
+                compare_with_expected(actual, v, column).is_some_and(|cmp| cmp == Ordering::Equal)
+            }),
         FilterOperator::Contains => actual.as_str().is_some_and(|text| {
             text.to_lowercase()
                 .contains(&condition.value.to_lowercase())
@@ -1076,18 +1222,106 @@ fn matches_filter(actual: &Value, condition: &FilterCondition) -> bool {
     }
 }
 
-fn compare_with_expected(actual: &Value, expected: &str) -> Option<Ordering> {
-    if let Some(actual_num) = actual.as_f64() {
-        let expected_num = expected.parse::<f64>().ok()?;
-        return actual_num.partial_cmp(&expected_num);
+fn compare_with_expected(
+    actual: &Value,
+    expected: &str,
+    column: Option<&ColumnSchema>,
+) -> Option<Ordering> {
+    let left = coerce_actual_value(actual, column)?;
+    let right = coerce_expected_value(expected, column)?;
+    compare_comparable_values(&left, &right)
+}
+
+fn coerce_actual_value(actual: &Value, column: Option<&ColumnSchema>) -> Option<ComparableValue> {
+    if actual.is_null() {
+        return Some(ComparableValue::Null);
     }
 
-    if let Some(actual_bool) = actual.as_bool() {
-        let expected_bool = expected.parse::<bool>().ok()?;
-        return Some(actual_bool.cmp(&expected_bool));
+    if let Some(column) = column {
+        return coerce_actual_for_column(actual, column);
     }
 
-    Some(value_to_filter_string(actual).as_str().cmp(expected))
+    if let Some(number) = actual.as_f64() {
+        return Some(ComparableValue::Number(number));
+    }
+    if let Some(boolean) = actual.as_bool() {
+        return Some(ComparableValue::Bool(boolean));
+    }
+    if let Some(text) = actual.as_str() {
+        if let Ok(number) = text.parse::<f64>() {
+            return Some(ComparableValue::Number(number));
+        }
+        if let Ok(boolean) = text.parse::<bool>() {
+            return Some(ComparableValue::Bool(boolean));
+        }
+        return Some(ComparableValue::String(text.to_string()));
+    }
+
+    Some(ComparableValue::String(value_to_filter_string(actual)))
+}
+
+fn coerce_actual_for_column(actual: &Value, column: &ColumnSchema) -> Option<ComparableValue> {
+    match column.column_type {
+        ColumnType::Integer | ColumnType::Float => {
+            if let Some(number) = actual.as_f64() {
+                Some(ComparableValue::Number(number))
+            } else {
+                actual
+                    .as_str()
+                    .and_then(|text| text.parse::<f64>().ok())
+                    .map(ComparableValue::Number)
+            }
+        }
+        ColumnType::Boolean => {
+            if let Some(boolean) = actual.as_bool() {
+                Some(ComparableValue::Bool(boolean))
+            } else {
+                actual
+                    .as_str()
+                    .and_then(|text| text.parse::<bool>().ok())
+                    .map(ComparableValue::Bool)
+            }
+        }
+        ColumnType::String => Some(ComparableValue::String(value_to_filter_string(actual))),
+        ColumnType::Json => Some(ComparableValue::String(value_to_filter_string(actual))),
+    }
+}
+
+fn coerce_expected_value(expected: &str, column: Option<&ColumnSchema>) -> Option<ComparableValue> {
+    if expected.eq_ignore_ascii_case("null") {
+        return Some(ComparableValue::Null);
+    }
+
+    if let Some(column) = column {
+        return match column.column_type {
+            ColumnType::Integer | ColumnType::Float => {
+                expected.parse::<f64>().ok().map(ComparableValue::Number)
+            }
+            ColumnType::Boolean => expected.parse::<bool>().ok().map(ComparableValue::Bool),
+            ColumnType::String | ColumnType::Json => {
+                Some(ComparableValue::String(expected.to_string()))
+            }
+        };
+    }
+
+    if let Ok(number) = expected.parse::<f64>() {
+        return Some(ComparableValue::Number(number));
+    }
+    if let Ok(boolean) = expected.parse::<bool>() {
+        return Some(ComparableValue::Bool(boolean));
+    }
+
+    Some(ComparableValue::String(expected.to_string()))
+}
+
+fn compare_comparable_values(left: &ComparableValue, right: &ComparableValue) -> Option<Ordering> {
+    match (left, right) {
+        (ComparableValue::Null, ComparableValue::Null) => Some(Ordering::Equal),
+        (ComparableValue::Number(left), ComparableValue::Number(right)) => left.partial_cmp(right),
+        (ComparableValue::Bool(left), ComparableValue::Bool(right)) => Some(left.cmp(right)),
+        (ComparableValue::String(left), ComparableValue::String(right)) => Some(left.cmp(right)),
+        _ => None,
+    }
 }
 
 fn get_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
@@ -1758,6 +1992,7 @@ mod tests {
                     value: "true".to_string(),
                 },
             ],
+            None,
         )
         .expect("filter collection");
 
@@ -1843,6 +2078,7 @@ mod tests {
                     value: "Typicode".to_string(),
                 },
             ],
+            None,
         )
         .expect("filter collection");
 
