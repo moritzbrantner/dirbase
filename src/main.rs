@@ -161,14 +161,14 @@ async fn main() {
     let app = if cli.readonly {
         Router::new()
             .route("/", get(list_resources))
-            .route("/graphql", get(graphql))
+            .route("/graphql", get(graphql).post(graphql))
             .route("/{resource}", get(get_collection))
             .route("/{resource}/{id}", get(get_item))
             .with_state(app_state)
     } else {
         Router::new()
             .route("/", get(list_resources))
-            .route("/graphql", get(graphql))
+            .route("/graphql", get(graphql).post(graphql))
             .route(
                 "/{resource}",
                 get(get_collection)
