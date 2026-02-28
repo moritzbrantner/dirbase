@@ -128,7 +128,6 @@ fn supports_all_object_resource_routes() {
     assert!(patch_profile.contains("\"theme\":\"solarized\""));
 }
 
-
 #[test]
 fn graphql_endpoint_is_available() {
     let temp = tempfile::tempdir().expect("create temp directory");
