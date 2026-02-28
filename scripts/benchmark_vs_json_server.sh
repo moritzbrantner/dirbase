@@ -43,6 +43,19 @@ folder_data.mkdir(parents=True, exist_ok=True)
 (work / "db.json").write_text(json.dumps({"posts": posts}), encoding="utf-8")
 PY
 
+# Sanity checks for benchmark input shape:
+# - folder-server must receive a folder containing one JSON file per resource.
+# - json-server must receive a single db.json object whose properties are resources.
+if [[ ! -d "${WORK_DIR}/folder_data" || ! -f "${WORK_DIR}/folder_data/posts.json" ]]; then
+  echo "Invalid folder-server benchmark input; expected ${WORK_DIR}/folder_data/posts.json" >&2
+  exit 1
+fi
+
+if [[ ! -f "${WORK_DIR}/db.json" ]]; then
+  echo "Invalid json-server benchmark input; expected ${WORK_DIR}/db.json" >&2
+  exit 1
+fi
+
 pushd "${ROOT_DIR}" >/dev/null
 cargo build --release >/dev/null
 popd >/dev/null
@@ -56,10 +69,20 @@ JSON_SERVER_PID=$!
 for _ in {1..50}; do
   if curl -fsS "http://127.0.0.1:${FOLDER_PORT}/posts/1" >/dev/null 2>&1 && \
      curl -fsS "http://127.0.0.1:${JSON_SERVER_PORT}/posts/1" >/dev/null 2>&1; then
+    READY=1
     break
   fi
   sleep 0.2
 done
+
+if [[ "${READY:-0}" -ne 1 ]]; then
+  echo "Servers did not become ready in time." >&2
+  echo "--- folder-server log ---" >&2
+  cat "${WORK_DIR}/folder-server.log" >&2 || true
+  echo "--- json-server log ---" >&2
+  cat "${WORK_DIR}/json-server.log" >&2 || true
+  exit 1
+fi
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
 SUMMARY_JSON="${RESULTS_DIR}/summary-${STAMP}.json"
