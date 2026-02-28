@@ -179,12 +179,21 @@ fn logging_writes_each_request_when_enabled() {
         "/posts",
         Some(r#"{"title":"logged"}"#),
     );
+    let _ = http_request("127.0.0.1:3012", "GET", "/graphql", None);
+    let _ = http_request(
+        "127.0.0.1:3012",
+        "POST",
+        "/graphql",
+        Some(r#"{"query":"{ __typename }"}"#),
+    );
 
     thread::sleep(Duration::from_millis(150));
 
     let log_contents = fs::read_to_string(log_path).expect("read request log");
     assert!(log_contents.contains("GET /posts 200"), "{log_contents}");
     assert!(log_contents.contains("POST /posts 201"), "{log_contents}");
+    assert!(log_contents.contains("GET /graphql 200"), "{log_contents}");
+    assert!(log_contents.contains("POST /graphql 200"), "{log_contents}");
 }
 
 fn wait_for_server(addr: &str, timeout: Duration) {
