@@ -81,7 +81,7 @@ struct AppState {
 
 #[derive(Clone)]
 struct CachedResource {
-    value: Value,
+    value: Arc<Value>,
     metadata: CachedMetadata,
 }
 
@@ -403,7 +403,8 @@ fn build_sql_export(state: &AppState, dialect: SqlExportDialect) -> Result<Strin
 
     for resource in resources {
         let data = load_resource(state, &resource)?;
-        append_table_export(&mut chunks, state, &resource, &data, dialect)?;
+        let data = data.as_ref();
+        append_table_export(&mut chunks, state, &resource, data, dialect)?;
     }
 
     Ok(chunks.concat())
@@ -657,6 +658,7 @@ async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, Ap
 
     let _guard = state.read_lock_for_resource(&parsed.resource).await;
     let data = load_resource(&state, &parsed.resource)?;
+    let data = data.as_ref().clone();
     validate_resource_data(&state, &parsed.resource, &data)?;
 
     let table = state.schema_table(&parsed.resource)?;
@@ -734,6 +736,7 @@ async fn get_collection(
     let lock_resources = state.embed_lock_resources(&resource, &parsed.embeds)?;
     let _guards = state.read_locks_for_resources(&lock_resources).await;
     let data = load_resource(&state, &resource)?;
+    let data = data.as_ref().clone();
     validate_resource_data(&state, &resource, &data)?;
 
     if parsed.filters.is_empty()
@@ -1776,6 +1779,8 @@ fn embed_collection_data(
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
     let mut embedded_items = items.to_vec();
 
+    let mut target_resources: HashMap<String, Arc<Value>> = HashMap::new();
+
     for embed in embeds {
         let fk = table.foreign_keys.get(embed).ok_or_else(|| {
             AppError::new(
@@ -1784,7 +1789,19 @@ fn embed_collection_data(
             )
         })?;
 
-        let target_resource = load_resource(state, &fk.target_table)?;
+        if !target_resources.contains_key(&fk.target_table) {
+            target_resources.insert(
+                fk.target_table.clone(),
+                load_resource(state, &fk.target_table)?,
+            );
+        }
+
+        let target_resource = target_resources.get(&fk.target_table).ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Embedded resource '{}' is unavailable", fk.target_table),
+            )
+        })?;
         let target_items = target_resource.as_array().ok_or_else(|| {
             AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -1795,13 +1812,13 @@ fn embed_collection_data(
             )
         })?;
 
-        let mut lookup = HashMap::new();
+        let mut lookup: HashMap<String, &Value> = HashMap::new();
         for item in target_items {
             if let Some((_, key)) = item
                 .as_object()
                 .and_then(|object| object.get(&fk.target_column).map(|key| (object, key)))
             {
-                lookup.insert(value_to_filter_string(key), item.clone());
+                lookup.insert(value_to_filter_string(key), item);
             }
         }
 
@@ -1819,7 +1836,10 @@ fn embed_collection_data(
             }
 
             let key = value_to_filter_string(&current_value);
-            let replacement = lookup.get(&key).cloned().unwrap_or(Value::Null);
+            let replacement = lookup
+                .get(&key)
+                .map(|row| (*row).clone())
+                .unwrap_or(Value::Null);
             object.insert(embed.clone(), replacement);
         }
     }
@@ -1875,7 +1895,7 @@ async fn create_item(
 ) -> Result<impl IntoResponse, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
 
-    let mut data = load_resource(&state, &resource)?;
+    let mut data = load_resource(&state, &resource)?.as_ref().clone();
     validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array_mut()
@@ -1901,6 +1921,7 @@ async fn get_item(
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.read_lock_for_resource(&resource).await;
     let data = load_resource(&state, &resource)?;
+    let data = data.as_ref().clone();
     validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array()
@@ -1918,7 +1939,7 @@ async fn replace_item(
     Json(mut payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource)?;
+    let mut data = load_resource(&state, &resource)?.as_ref().clone();
     let array = data
         .as_array_mut()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
@@ -1947,7 +1968,7 @@ async fn patch_item(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource)?;
+    let mut data = load_resource(&state, &resource)?.as_ref().clone();
     validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array_mut()
@@ -1980,7 +2001,7 @@ async fn delete_item(
     AxumPath((resource, id)): AxumPath<(String, String)>,
 ) -> Result<StatusCode, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource)?;
+    let mut data = load_resource(&state, &resource)?.as_ref().clone();
     validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array_mut()
@@ -2001,7 +2022,7 @@ async fn replace_resource_object(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource)?;
+    let mut data = load_resource(&state, &resource)?.as_ref().clone();
     if !data.is_object() {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
@@ -2027,7 +2048,7 @@ async fn patch_resource_object(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource)?;
+    let mut data = load_resource(&state, &resource)?.as_ref().clone();
     let current = data
         .as_object_mut()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON object"))?;
@@ -2239,7 +2260,7 @@ fn maybe_fill_missing_id(
     Ok(())
 }
 
-fn load_resource(state: &AppState, resource: &str) -> Result<Value, AppError> {
+fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value>, AppError> {
     let file = resource_file_path(&state.folder, resource)?;
     if !file.exists() {
         return Err(AppError::new(
@@ -2271,12 +2292,12 @@ fn load_resource(state: &AppState, resource: &str) -> Result<Value, AppError> {
 
     let raw = fs::read_to_string(&file)
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let value = serde_json::from_str::<Value>(&raw).map_err(|e| {
+    let value = Arc::new(serde_json::from_str::<Value>(&raw).map_err(|e| {
         AppError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Invalid JSON: {e}"),
         )
-    })?;
+    })?);
 
     if let Ok(mut cache) = state.resource_cache.write() {
         cache.insert(
@@ -2344,7 +2365,7 @@ fn write_resource(state: &AppState, resource: &str, value: &Value) -> Result<(),
         cache.insert(
             resource.to_string(),
             CachedResource {
-                value: value.clone(),
+                value: Arc::new(value.clone()),
                 metadata: CachedMetadata {
                     modified,
                     len: metadata.len(),
@@ -2496,7 +2517,7 @@ fn start_resource_watcher(
                                                     cache.insert(
                                                         stem.to_string(),
                                                         CachedResource {
-                                                            value,
+                                                            value: Arc::new(value),
                                                             metadata: CachedMetadata {
                                                                 modified,
                                                                 len: metadata.len(),
@@ -2572,7 +2593,7 @@ mod tests {
         write_resource(&state, "users", &value).expect("write resource");
         let loaded = load_resource(&state, "users").expect("load resource");
 
-        assert_eq!(value, loaded);
+        assert_eq!(value, *loaded);
     }
 
     #[test]
