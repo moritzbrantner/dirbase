@@ -6,7 +6,7 @@ use std::{
     io::Write,
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex as StdMutex, RwLock},
+    sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -27,7 +27,7 @@ use sqlparser::{
     dialect::GenericDialect,
     parser::Parser as SqlParser,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 
 mod schema;
 
@@ -72,8 +72,8 @@ struct Cli {
 #[derive(Clone)]
 struct AppState {
     folder: Arc<PathBuf>,
-    resources: Arc<RwLock<BTreeSet<String>>>,
-    io_lock: Arc<Mutex<()>>,
+    resources: Arc<StdRwLock<BTreeSet<String>>>,
+    resource_locks: Arc<RwLock<HashMap<String, Arc<RwLock<()>>>>>,
     schema: Arc<Option<Schema>>,
     request_log: Option<Arc<StdMutex<fs::File>>>,
 }
@@ -155,8 +155,8 @@ async fn main() {
 
     let state = AppState {
         folder: Arc::new(cli.folder),
-        resources: Arc::new(RwLock::new(initial_resources)),
-        io_lock: Arc::new(Mutex::new(())),
+        resources: Arc::new(StdRwLock::new(initial_resources)),
+        resource_locks: Arc::new(RwLock::new(HashMap::new())),
         schema: Arc::new(schema),
         request_log: if cli.log {
             match fs::OpenOptions::new()
@@ -354,7 +354,8 @@ async fn export_sql(
     Query(params): Query<SqlExportParams>,
 ) -> Result<impl IntoResponse, AppError> {
     let dialect = SqlExportDialect::parse(params.dialect.as_deref())?;
-    let _guard = state.io_lock.lock().await;
+    let resource_names = state.resource_names_sorted()?;
+    let _guards = state.read_locks_for_resources(&resource_names).await;
     let sql = build_sql_export(&state, dialect)?;
 
     Ok(([(CONTENT_TYPE, "text/sql; charset=utf-8")], sql))
@@ -633,7 +634,7 @@ fn append_chunk(chunks: &mut Vec<String>, segment: String) {
 async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, AppError> {
     let parsed = parse_sql_query(&query, &state)?;
 
-    let _guard = state.io_lock.lock().await;
+    let _guard = state.read_lock_for_resource(&parsed.resource).await;
     let data = load_resource(&state.folder, &parsed.resource)?;
     validate_resource_data(&state, &parsed.resource, &data)?;
 
@@ -708,10 +709,11 @@ async fn get_collection(
     AxumPath(resource): AxumPath<String>,
     Query(query_params): Query<Vec<(String, String)>>,
 ) -> Result<Json<Value>, AppError> {
-    let _guard = state.io_lock.lock().await;
+    let parsed = parse_collection_query_params(query_params)?;
+    let lock_resources = state.embed_lock_resources(&resource, &parsed.embeds)?;
+    let _guards = state.read_locks_for_resources(&lock_resources).await;
     let data = load_resource(&state.folder, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
-    let parsed = parse_collection_query_params(query_params)?;
 
     if parsed.filters.is_empty()
         && parsed.sort_columns.is_empty()
@@ -1850,7 +1852,7 @@ async fn create_item(
     AxumPath(resource): AxumPath<String>,
     Json(mut payload): Json<Value>,
 ) -> Result<impl IntoResponse, AppError> {
-    let _guard = state.io_lock.lock().await;
+    let _guard = state.write_lock_for_resource(&resource).await;
 
     let mut data = load_resource(&state.folder, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
@@ -1876,7 +1878,7 @@ async fn get_item(
     State(state): State<AppState>,
     AxumPath((resource, id)): AxumPath<(String, String)>,
 ) -> Result<Json<Value>, AppError> {
-    let _guard = state.io_lock.lock().await;
+    let _guard = state.read_lock_for_resource(&resource).await;
     let data = load_resource(&state.folder, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
     let array = data
@@ -1894,7 +1896,7 @@ async fn replace_item(
     AxumPath((resource, id)): AxumPath<(String, String)>,
     Json(mut payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let _guard = state.io_lock.lock().await;
+    let _guard = state.write_lock_for_resource(&resource).await;
     let mut data = load_resource(&state.folder, &resource)?;
     let array = data
         .as_array_mut()
@@ -1923,7 +1925,7 @@ async fn patch_item(
     AxumPath((resource, id)): AxumPath<(String, String)>,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let _guard = state.io_lock.lock().await;
+    let _guard = state.write_lock_for_resource(&resource).await;
     let mut data = load_resource(&state.folder, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
     let array = data
@@ -1956,7 +1958,7 @@ async fn delete_item(
     State(state): State<AppState>,
     AxumPath((resource, id)): AxumPath<(String, String)>,
 ) -> Result<StatusCode, AppError> {
-    let _guard = state.io_lock.lock().await;
+    let _guard = state.write_lock_for_resource(&resource).await;
     let mut data = load_resource(&state.folder, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
     let array = data
@@ -1977,7 +1979,7 @@ async fn replace_resource_object(
     AxumPath(resource): AxumPath<String>,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let _guard = state.io_lock.lock().await;
+    let _guard = state.write_lock_for_resource(&resource).await;
     let mut data = load_resource(&state.folder, &resource)?;
     if !data.is_object() {
         return Err(AppError::new(
@@ -2003,7 +2005,7 @@ async fn patch_resource_object(
     AxumPath(resource): AxumPath<String>,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let _guard = state.io_lock.lock().await;
+    let _guard = state.write_lock_for_resource(&resource).await;
     let mut data = load_resource(&state.folder, &resource)?;
     let current = data
         .as_object_mut()
@@ -2033,6 +2035,82 @@ impl AppState {
                 format!("Resource '{resource}' is not defined in schema"),
             )
         })
+    }
+
+    fn resource_names_sorted(&self) -> Result<Vec<String>, AppError> {
+        Ok(self
+            .resources
+            .read()
+            .map_err(|_| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Resource cache lock poisoned",
+                )
+            })?
+            .iter()
+            .cloned()
+            .collect())
+    }
+
+    fn embed_lock_resources(
+        &self,
+        resource: &str,
+        embeds: &[String],
+    ) -> Result<Vec<String>, AppError> {
+        let mut resources = BTreeSet::new();
+        resources.insert(resource.to_string());
+
+        if !embeds.is_empty() {
+            let table = self.schema_table(resource)?.ok_or_else(|| {
+                AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "Embedding requires an active schema with foreign key definitions",
+                )
+            })?;
+
+            for embed in embeds {
+                let fk = table.foreign_keys.get(embed).ok_or_else(|| {
+                    AppError::new(
+                        StatusCode::BAD_REQUEST,
+                        format!("Cannot embed '{embed}' for resource '{resource}'"),
+                    )
+                })?;
+                resources.insert(fk.target_table.clone());
+            }
+        }
+
+        Ok(resources.into_iter().collect())
+    }
+
+    async fn read_lock_for_resource(&self, resource: &str) -> OwnedRwLockReadGuard<()> {
+        self.resource_lock(resource).await.read_owned().await
+    }
+
+    async fn write_lock_for_resource(&self, resource: &str) -> OwnedRwLockWriteGuard<()> {
+        self.resource_lock(resource).await.write_owned().await
+    }
+
+    async fn read_locks_for_resources(
+        &self,
+        resources: &[String],
+    ) -> Vec<OwnedRwLockReadGuard<()>> {
+        let mut guards = Vec::with_capacity(resources.len());
+        for resource in resources {
+            guards.push(self.read_lock_for_resource(resource).await);
+        }
+        guards
+    }
+
+    async fn resource_lock(&self, resource: &str) -> Arc<RwLock<()>> {
+        if let Some(lock) = self.resource_locks.read().await.get(resource).cloned() {
+            return lock;
+        }
+
+        let mut locks = self.resource_locks.write().await;
+        locks
+            .entry(resource.to_string())
+            .or_insert_with(|| Arc::new(RwLock::new(())))
+            .clone()
     }
 }
 
@@ -2279,7 +2357,7 @@ fn scan_resources(folder: &Path) -> Result<BTreeSet<String>, std::io::Error> {
     Ok(resources)
 }
 
-fn start_resource_watcher(folder: Arc<PathBuf>, resources: Arc<RwLock<BTreeSet<String>>>) {
+fn start_resource_watcher(folder: Arc<PathBuf>, resources: Arc<StdRwLock<BTreeSet<String>>>) {
     std::thread::spawn(move || {
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -2387,8 +2465,8 @@ mod tests {
 
         let state = AppState {
             folder: Arc::new(PathBuf::from(".")),
-            resources: Arc::new(RwLock::new(BTreeSet::new())),
-            io_lock: Arc::new(Mutex::new(())),
+            resources: Arc::new(StdRwLock::new(BTreeSet::new())),
+            resource_locks: Arc::new(RwLock::new(HashMap::new())),
             schema: Arc::new(Some(schema)),
             request_log: None,
         };
@@ -2613,8 +2691,8 @@ mod tests {
 
         let state = AppState {
             folder: Arc::new(temp.path().to_path_buf()),
-            resources: Arc::new(RwLock::new(resources)),
-            io_lock: Arc::new(Mutex::new(())),
+            resources: Arc::new(StdRwLock::new(resources)),
+            resource_locks: Arc::new(RwLock::new(HashMap::new())),
             schema: Arc::new(Some(schema)),
             request_log: None,
         };
@@ -2648,8 +2726,8 @@ mod tests {
 
         let state = AppState {
             folder: Arc::new(PathBuf::from(".")),
-            resources: Arc::new(RwLock::new(BTreeSet::new())),
-            io_lock: Arc::new(Mutex::new(())),
+            resources: Arc::new(StdRwLock::new(BTreeSet::new())),
+            resource_locks: Arc::new(RwLock::new(HashMap::new())),
             schema: Arc::new(None),
             request_log: None,
         };
