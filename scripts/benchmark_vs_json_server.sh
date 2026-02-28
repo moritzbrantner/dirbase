@@ -9,6 +9,9 @@ JSON_SERVER_PORT="${JSON_SERVER_PORT:-3101}"
 DURATION="${DURATION:-10}"
 CONNECTIONS="${CONNECTIONS:-50}"
 AMOUNT="${AMOUNT:-10000}"
+RUNS="${RUNS:-3}"
+WARMUP_DURATION="${WARMUP_DURATION:-3}"
+WARMUP_CONNECTIONS="${WARMUP_CONNECTIONS:-1}"
 
 mkdir -p "${WORK_DIR}" "${RESULTS_DIR}"
 
@@ -59,40 +62,116 @@ for _ in {1..50}; do
 done
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
-FOLDER_ITEM_JSON="${RESULTS_DIR}/folder-item-${STAMP}.json"
-JSON_ITEM_JSON="${RESULTS_DIR}/json-server-item-${STAMP}.json"
-FOLDER_QUERY_JSON="${RESULTS_DIR}/folder-query-${STAMP}.json"
-JSON_QUERY_JSON="${RESULTS_DIR}/json-server-query-${STAMP}.json"
 SUMMARY_JSON="${RESULTS_DIR}/summary-${STAMP}.json"
 
-npx --yes autocannon@7.15.0 -c "${CONNECTIONS}" -d "${DURATION}" -j "http://127.0.0.1:${FOLDER_PORT}/posts/5000" >"${FOLDER_ITEM_JSON}"
-npx --yes autocannon@7.15.0 -c "${CONNECTIONS}" -d "${DURATION}" -j "http://127.0.0.1:${JSON_SERVER_PORT}/posts/5000" >"${JSON_ITEM_JSON}"
+run_autocannon() {
+  local mode="$1"
+  local run="$2"
+  local target="$3"
+  local url="$4"
+  local out="${RESULTS_DIR}/${target}-${mode}-run${run}-${STAMP}.json"
+  local -a cmd=(npx --yes autocannon@7.15.0 -n -c "${CONNECTIONS}" -d "${DURATION}" -j)
 
-npx --yes autocannon@7.15.0 -c "${CONNECTIONS}" -d "${DURATION}" -j "http://127.0.0.1:${FOLDER_PORT}/posts?author:eq=Author%2010" >"${FOLDER_QUERY_JSON}"
-npx --yes autocannon@7.15.0 -c "${CONNECTIONS}" -d "${DURATION}" -j "http://127.0.0.1:${JSON_SERVER_PORT}/posts?author=Author%2010" >"${JSON_QUERY_JSON}"
+  if [[ "${mode}" == "with-warmup" ]]; then
+    cmd+=(-W --warmup "[" -c "${WARMUP_CONNECTIONS}" -d "${WARMUP_DURATION}" "]")
+  fi
+
+  cmd+=("${url}")
+  "${cmd[@]}" >"${out}"
+}
+
+for mode in with-warmup without-warmup; do
+  for run in $(seq 1 "${RUNS}"); do
+    run_autocannon "${mode}" "${run}" "folder-item" "http://127.0.0.1:${FOLDER_PORT}/posts/5000"
+    run_autocannon "${mode}" "${run}" "json-server-item" "http://127.0.0.1:${JSON_SERVER_PORT}/posts/5000"
+    run_autocannon "${mode}" "${run}" "folder-query" "http://127.0.0.1:${FOLDER_PORT}/posts?author:eq=Author%2010"
+    run_autocannon "${mode}" "${run}" "json-server-query" "http://127.0.0.1:${JSON_SERVER_PORT}/posts?author=Author%2010"
+  done
+done
 
 python3 - <<PY
 import json
+import statistics
 from pathlib import Path
 
-results = {
-    "folder_item": Path("${FOLDER_ITEM_JSON}"),
-    "json_item": Path("${JSON_ITEM_JSON}"),
-    "folder_query": Path("${FOLDER_QUERY_JSON}"),
-    "json_query": Path("${JSON_QUERY_JSON}"),
+results_dir = Path("${RESULTS_DIR}")
+stamp = "${STAMP}"
+
+modes = ("with_warmup", "without_warmup")
+targets = {
+    "folder_item": "folder-item",
+    "json_item": "json-server-item",
+    "folder_query": "folder-query",
+    "json_query": "json-server-query",
 }
 
-summary = {}
-for key, path in results.items():
-    data = json.loads(path.read_text())
-    summary[key] = {
-        "requests_per_sec": data["requests"]["average"],
-        "latency_ms": data["latency"]["average"],
-        "throughput_bytes_per_sec": data["throughput"]["average"],
-        "non_2xx": data.get("non2xx", 0),
-        "errors": data.get("errors", 0),
-        "timeouts": data.get("timeouts", 0),
+
+def summarize(metric_runs):
+    return {
+        "mean": statistics.fmean(metric_runs),
+        "median": statistics.median(metric_runs),
+        "min": min(metric_runs),
+        "max": max(metric_runs),
     }
+
+
+def load_autocannon_result(path: Path):
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    for line in reversed(lines):
+        try:
+            parsed = json.loads(line)
+            if isinstance(parsed, dict) and "requests" in parsed and "latency" in parsed:
+                return parsed
+        except json.JSONDecodeError:
+            continue
+    raise RuntimeError(f"Failed to parse autocannon JSON result from {path}")
+
+
+summary = {
+    "config": {
+        "runs": int("${RUNS}"),
+        "duration": int("${DURATION}"),
+        "connections": int("${CONNECTIONS}"),
+        "warmup_duration": int("${WARMUP_DURATION}"),
+        "warmup_connections": int("${WARMUP_CONNECTIONS}"),
+        "amount": int("${AMOUNT}"),
+    },
+    "modes": {},
+}
+
+for mode in modes:
+    mode_key = mode.replace("_", "-")
+    mode_summary = {}
+    for summary_key, target_key in targets.items():
+        run_results = []
+        for run in range(1, int("${RUNS}") + 1):
+            path = results_dir / f"{target_key}-{mode_key}-run{run}-{stamp}.json"
+            data = load_autocannon_result(path)
+            run_results.append(
+                {
+                    "run": run,
+                    "requests_per_sec": data["requests"]["average"],
+                    "latency_ms": data["latency"]["average"],
+                    "throughput_bytes_per_sec": data["throughput"]["average"],
+                    "non_2xx": data.get("non2xx", 0),
+                    "errors": data.get("errors", 0),
+                    "timeouts": data.get("timeouts", 0),
+                }
+            )
+
+        mode_summary[summary_key] = {
+            "aggregate": {
+                "requests_per_sec": summarize([r["requests_per_sec"] for r in run_results]),
+                "latency_ms": summarize([r["latency_ms"] for r in run_results]),
+                "throughput_bytes_per_sec": summarize([r["throughput_bytes_per_sec"] for r in run_results]),
+                "non_2xx": int(sum(r["non_2xx"] for r in run_results)),
+                "errors": int(sum(r["errors"] for r in run_results)),
+                "timeouts": int(sum(r["timeouts"] for r in run_results)),
+            },
+            "runs": run_results,
+        }
+
+    summary["modes"][mode] = mode_summary
 
 summary_path = Path("${SUMMARY_JSON}")
 summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")

@@ -28,24 +28,25 @@ scripts/benchmark_vs_json_server.sh
 Optional knobs:
 
 ```bash
-DURATION=15 CONNECTIONS=100 AMOUNT=20000 scripts/benchmark_vs_json_server.sh
+DURATION=15 CONNECTIONS=100 AMOUNT=20000 RUNS=5 WARMUP_DURATION=3 WARMUP_CONNECTIONS=1 scripts/benchmark_vs_json_server.sh
 ```
 
 ## Output
 
 Raw `autocannon` JSON and aggregated summary are written to:
 
-- `benchmarks/results/folder-item-<timestamp>.json`
-- `benchmarks/results/json-server-item-<timestamp>.json`
-- `benchmarks/results/folder-query-<timestamp>.json`
-- `benchmarks/results/json-server-query-<timestamp>.json`
+- `benchmarks/results/<target>-with-warmup-run<run>-<timestamp>.json`
+- `benchmarks/results/<target>-without-warmup-run<run>-<timestamp>.json`
 - `benchmarks/results/summary-<timestamp>.json`
+
+`<target>` is one of `folder-item`, `json-server-item`, `folder-query`, `json-server-query`.
 
 ## Notes
 
 - `json-server` and `autocannon` are executed via `npx`.
 - The script starts both servers locally and cleans up processes automatically.
-- Use several runs and compare medians for stable conclusions.
+- The script runs each scenario repeatedly (`RUNS`, default `3`) in two modes: with warm-up and without warm-up.
+- Aggregated metrics include mean/median/min/max; prefer median values for stable comparisons.
 
 ## GitHub Actions workflow
 

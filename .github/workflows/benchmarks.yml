@@ -15,6 +15,18 @@ on:
         description: "number of synthetic posts"
         required: false
         default: "10000"
+      runs:
+        description: "repeated runs per scenario and mode"
+        required: false
+        default: "3"
+      warmup_duration:
+        description: "warm-up duration in seconds"
+        required: false
+        default: "3"
+      warmup_connections:
+        description: "warm-up concurrent connections"
+        required: false
+        default: "1"
 
 jobs:
   run-benchmarks:
@@ -39,6 +51,9 @@ jobs:
           DURATION: ${{ inputs.duration || '10' }}
           CONNECTIONS: ${{ inputs.connections || '50' }}
           AMOUNT: ${{ inputs.amount || '10000' }}
+          RUNS: ${{ inputs.runs || '3' }}
+          WARMUP_DURATION: ${{ inputs.warmup_duration || '3' }}
+          WARMUP_CONNECTIONS: ${{ inputs.warmup_connections || '1' }}
         run: scripts/benchmark_vs_json_server.sh
 
       - name: Find latest summary file
