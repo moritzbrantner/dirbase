@@ -36,6 +36,26 @@ pub enum ColumnType {
     Json,
 }
 
+pub fn is_valid_identifier(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn normalize_identifier(name: &str) -> String {
+    name.trim().trim_matches('"').to_string()
+}
+
+fn validate_identifier(name: &str, kind: &str, line_number: usize) -> Result<String, String> {
+    let normalized = normalize_identifier(name);
+    if !is_valid_identifier(&normalized) {
+        return Err(format!("line {line_number}: invalid {kind} '{normalized}'"));
+    }
+
+    Ok(normalized)
+}
+
 pub fn load_schema(folder: &Path, schema_path: Option<&Path>) -> Result<Option<Schema>, String> {
     let resolved_path = resolve_schema_path(folder, schema_path)?;
     let Some(path) = resolved_path else {
@@ -100,14 +120,8 @@ pub fn parse_dbml_schema(input: &str) -> Result<Schema, String> {
 
         if line.starts_with("Table ") {
             let remainder = line.trim_start_matches("Table ").trim();
-            let name = remainder
-                .trim_end_matches('{')
-                .trim()
-                .trim_matches('"')
-                .to_string();
-            if name.is_empty() {
-                return Err(format!("line {line_number}: table name is missing"));
-            }
+            let name = remainder.trim_end_matches('{').trim();
+            let name = validate_identifier(name, "table name", line_number)?;
 
             current_table = Some((
                 name,
@@ -133,6 +147,9 @@ fn parse_column_line(line: &str) -> Result<(String, ColumnSchema), String> {
     let name = parts
         .next()
         .ok_or_else(|| "column name is missing".to_string())?;
+    if !is_valid_identifier(name.trim_matches('"')) {
+        return Err(format!("invalid column name '{name}'"));
+    }
     let raw_type = parts
         .next()
         .ok_or_else(|| format!("column type is missing for '{name}'"))?;
@@ -154,7 +171,7 @@ fn parse_column_line(line: &str) -> Result<(String, ColumnSchema), String> {
     };
 
     Ok((
-        name.to_string(),
+        normalize_identifier(name),
         ColumnSchema {
             column_type,
             nullable,
@@ -169,9 +186,15 @@ fn parse_inline_reference(line: &str) -> Option<ForeignKey> {
     let target = after_ref[arrow_pos + 1..].trim().trim_matches(']').trim();
     let (target_table, target_column) = target.split_once('.')?;
 
+    let target_table = normalize_identifier(target_table);
+    let target_column = normalize_identifier(target_column);
+    if !is_valid_identifier(&target_table) || !is_valid_identifier(&target_column) {
+        return None;
+    }
+
     Some(ForeignKey {
-        target_table: target_table.trim().trim_matches('"').to_string(),
-        target_column: target_column.trim().trim_matches('"').to_string(),
+        target_table,
+        target_column,
     })
 }
 
@@ -225,10 +248,9 @@ fn parse_ref_side(side: &str, line_number: usize) -> Result<(String, String), St
     let (table, column) = cleaned
         .split_once('.')
         .ok_or_else(|| format!("line {line_number}: invalid Ref side '{side}'"))?;
-    Ok((
-        table.trim().trim_matches('"').to_string(),
-        column.trim().trim_matches('"').to_string(),
-    ))
+    let table = validate_identifier(table, "table name", line_number)?;
+    let column = validate_identifier(column, "column name", line_number)?;
+    Ok((table, column))
 }
 
 #[cfg(test)]
@@ -253,6 +275,19 @@ mod tests {
         assert_eq!(users.columns["name"].column_type, ColumnType::String);
         assert_eq!(users.columns["active"].column_type, ColumnType::Boolean);
         assert!(!users.columns["id"].nullable);
+    }
+
+    #[test]
+    fn rejects_invalid_identifiers() {
+        let err = parse_dbml_schema(
+            r#"
+            Table users {
+              bad$name int
+            }
+            "#,
+        )
+        .expect_err("invalid schema");
+        assert!(err.contains("invalid column name"));
     }
 
     #[test]

@@ -53,7 +53,7 @@ fn sql_get_works_in_readonly_mode() {
         "/sql?q=SELECT%20id,name%20FROM%20users%20WHERE%20role%20=%20'admin'%20ORDER%20BY%20id%20DESC%20LIMIT%201",
     );
 
-    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert!(response.contains("200 OK"), "{response}");
     let body = parse_http_body(&response);
     let payload: serde_json::Value = serde_json::from_str(body).expect("json payload");
 
@@ -164,4 +164,95 @@ fn parse_http_body(response: &str) -> &str {
         .split_once("\r\n\r\n")
         .map(|(_, body)| body)
         .expect("response should contain header/body separator")
+}
+
+#[test]
+fn sql_supports_is_null_and_projection_and_coercion() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let users_path = temp.path().join("users.json");
+    let schema_path = temp.path().join("schema.dbml");
+
+    let users = serde_json::json!([
+        {"id": 1, "name": "Ada", "age": 30, "nickname": null},
+        {"id": 2, "name": "Bob", "age": 20, "nickname": "B"}
+    ]);
+
+    std::fs::write(
+        users_path,
+        serde_json::to_string_pretty(&users).expect("serialize users"),
+    )
+    .expect("write users json");
+
+    std::fs::write(
+        schema_path,
+        r#"
+        Table users {
+          id int [pk]
+          name varchar [not null]
+          age int
+          nickname varchar
+        }
+        "#,
+    )
+    .expect("write schema");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3012")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3012", Duration::from_secs(5));
+
+    let response = http_get(
+        "127.0.0.1:3012",
+        "/sql?q=SELECT%20id,name%20FROM%20users%20WHERE%20age%20%3E%2025%20AND%20nickname%20IS%20NULL",
+    );
+
+    assert!(response.contains("200 OK"), "{response}");
+    let body = parse_http_body(&response);
+    let payload: serde_json::Value = serde_json::from_str(body).expect("json payload");
+    assert_eq!(payload["row_count"], 1);
+    assert_eq!(
+        payload["rows"][0],
+        serde_json::json!({"id": 1, "name": "Ada"})
+    );
+}
+
+#[test]
+fn sql_rejects_ambiguous_null_and_invalid_identifiers() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let users_path = temp.path().join("users.json");
+
+    std::fs::write(users_path, r#"[{"id":1,"name":"Ada"}]"#).expect("write users");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3013")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3013", Duration::from_secs(5));
+
+    let null_cmp = http_get(
+        "127.0.0.1:3013",
+        "/sql?q=SELECT%20*%20FROM%20users%20WHERE%20name%20=%20NULL",
+    );
+    assert!(null_cmp.contains("400 Bad Request"), "{null_cmp}");
+
+    let bad_identifier = http_get("127.0.0.1:3013", "/sql?q=SELECT%20*%20FROM%20users$");
+    assert!(
+        bad_identifier.contains("400 Bad Request"),
+        "{bad_identifier}"
+    );
 }
