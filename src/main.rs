@@ -472,8 +472,11 @@ fn resolve_export_columns(
     resource: &str,
     rows: &[BTreeMap<String, Value>],
 ) -> Result<Vec<(String, ColumnSchema)>, AppError> {
-    if let Some(schema) = state.schema.as_ref()
-        && let Some(table) = schema.tables.get(resource)
+    if let Some(table) = state
+        .schema
+        .as_ref()
+        .as_ref()
+        .and_then(|schema| schema.tables.get(resource))
     {
         return Ok(table
             .columns
@@ -2257,11 +2260,13 @@ fn load_resource(state: &AppState, resource: &str) -> Result<Value, AppError> {
         len: metadata.len(),
     };
 
-    if let Ok(cache) = state.resource_cache.read()
-        && let Some(cached) = cache.get(resource)
-        && cached.metadata == current_metadata
-    {
-        return Ok(cached.value.clone());
+    if let Some(value) = state.resource_cache.read().ok().and_then(|cache| {
+        cache
+            .get(resource)
+            .filter(|cached| cached.metadata == current_metadata)
+            .map(|cached| cached.value.clone())
+    }) {
+        return Ok(value);
     }
 
     let raw = fs::read_to_string(&file)
