@@ -46,3 +46,14 @@ Raw `autocannon` JSON and aggregated summary are written to:
 - `json-server` and `autocannon` are executed via `npx`.
 - The script starts both servers locally and cleans up processes automatically.
 - Use several runs and compare medians for stable conclusions.
+
+## GitHub Actions workflow
+
+You can also run benchmarks from GitHub Actions using the `Benchmarks` workflow (`.github/workflows/benchmarks.yml`).
+
+1. Open **Actions** → **Benchmarks** → **Run workflow**.
+2. Optionally set `duration`, `connections`, and `amount`.
+3. After the run completes:
+   - Read the generated markdown table in the workflow **Summary** tab.
+   - Download `benchmark-results-<run_id>` from **Artifacts** for full JSON + markdown reports.
+
