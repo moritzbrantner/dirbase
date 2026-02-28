@@ -134,3 +134,10 @@ cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 ```
+
+## Benchmarking against typicode/json-server
+
+A reproducible benchmark script is available at [`scripts/benchmark_vs_json_server.sh`](./scripts/benchmark_vs_json_server.sh).
+
+- Usage and methodology: [`benchmarks/README.md`](./benchmarks/README.md)
+- Latest recorded comparison: [`benchmarks/comparison.md`](./benchmarks/comparison.md)
