@@ -161,12 +161,14 @@ async fn main() {
     let app = if cli.readonly {
         Router::new()
             .route("/", get(list_resources))
+            .route("/graphql", get(graphql))
             .route("/{resource}", get(get_collection))
             .route("/{resource}/{id}", get(get_item))
             .with_state(app_state)
     } else {
         Router::new()
             .route("/", get(list_resources))
+            .route("/graphql", get(graphql))
             .route(
                 "/{resource}",
                 get(get_collection)
@@ -223,6 +225,13 @@ async fn log_requests_middleware(
     }
 
     response
+}
+
+async fn graphql() -> Json<Value> {
+    Json(serde_json::json!({
+        "name": "graphql",
+        "path": "/graphql"
+    }))
 }
 
 async fn list_resources(State(state): State<AppState>) -> Result<Json<Value>, AppError> {

@@ -128,6 +128,29 @@ fn supports_all_object_resource_routes() {
     assert!(patch_profile.contains("\"theme\":\"solarized\""));
 }
 
+
+#[test]
+fn graphql_endpoint_is_available() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3013")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3013", Duration::from_secs(5));
+
+    let graphql = http_request("127.0.0.1:3013", "GET", "/graphql", None);
+    assert!(graphql.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(graphql.contains("\"path\":\"/graphql\""));
+}
+
 #[test]
 fn logging_writes_each_request_when_enabled() {
     let temp = tempfile::tempdir().expect("create temp directory");
