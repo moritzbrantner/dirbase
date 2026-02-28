@@ -2,6 +2,7 @@ use std::{
     cmp::Ordering,
     collections::{BTreeSet, HashMap},
     fs,
+    hash::{Hash, Hasher},
     io::Write,
     net::SocketAddr,
     path::{Path, PathBuf},
@@ -31,6 +32,10 @@ use tokio::sync::Mutex;
 mod schema;
 
 use schema::{ColumnSchema, ColumnType, Schema, TableSchema, is_valid_identifier, load_schema};
+
+const MAX_SQL_QUERY_LENGTH: usize = 16_384;
+const MAX_SQL_SELECTED_ROWS: usize = 1_000;
+const MAX_SQL_SCANNED_ROWS: usize = 50_000;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -77,11 +82,14 @@ struct AppState {
 struct AppError {
     status: StatusCode,
     message: String,
+    code: Option<&'static str>,
 }
 
 #[derive(Serialize)]
 struct ErrorBody {
     error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
 }
 
 impl AppError {
@@ -89,7 +97,13 @@ impl AppError {
         Self {
             status,
             message: message.into(),
+            code: None,
         }
+    }
+
+    fn with_code(mut self, code: &'static str) -> Self {
+        self.code = Some(code);
+        self
     }
 }
 
@@ -99,6 +113,7 @@ impl IntoResponse for AppError {
             self.status,
             Json(ErrorBody {
                 error: self.message,
+                code: self.code,
             }),
         )
             .into_response()
@@ -168,6 +183,7 @@ async fn main() {
             .route("/", get(list_resources))
             .route("/graphql", get(graphql).post(graphql))
             .route("/sql", get(sql_query).post(sql_query_post))
+            .route("/export.sql", get(sql_query))
             .route("/{resource}", get(get_collection))
             .route("/{resource}/{id}", get(get_item))
             .with_state(app_state)
@@ -176,6 +192,7 @@ async fn main() {
             .route("/", get(list_resources))
             .route("/graphql", get(graphql).post(graphql))
             .route("/sql", get(sql_query).post(sql_query_post))
+            .route("/export.sql", get(sql_query))
             .route(
                 "/{resource}",
                 get(get_collection)
@@ -217,6 +234,7 @@ async fn log_requests_middleware(
 ) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_string();
+    let query_hash = request_query_hash(request.uri().path(), request.uri().query());
     let response = next.run(request).await;
     let status = response.status();
 
@@ -225,7 +243,10 @@ async fn log_requests_middleware(
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or_default();
-        let line = format!("{timestamp} {method} {path} {}\n", status.as_u16());
+        let suffix = query_hash
+            .map(|hash| format!(" query_hash={hash}"))
+            .unwrap_or_default();
+        let line = format!("{timestamp} {method} {path} {}{suffix}\n", status.as_u16());
         if let Ok(mut file) = log_file.lock() {
             let _ = file.write_all(line.as_bytes());
         }
@@ -299,6 +320,20 @@ async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, Ap
     validate_resource_data(&state, &parsed.resource, &data)?;
 
     let table = state.schema_table(&parsed.resource)?;
+    let scanned_rows = data
+        .as_array()
+        .map(|rows| rows.len())
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
+    if scanned_rows > MAX_SQL_SCANNED_ROWS {
+        return Err(AppError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "Query exceeds scan guard: {scanned_rows} rows scanned (max {MAX_SQL_SCANNED_ROWS})"
+            ),
+        )
+        .with_code("unsupported_feature"));
+    }
+
     let filtered = if parsed.filters.is_empty() {
         data
     } else {
@@ -332,6 +367,15 @@ async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, Ap
 
     let rows = apply_column_selection(paginated_rows, parsed.selected_columns)?;
     let row_count = rows.len();
+    if row_count > MAX_SQL_SELECTED_ROWS {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Query returned {row_count} rows; maximum allowed is {MAX_SQL_SELECTED_ROWS}. Use LIMIT to reduce the result set"
+            ),
+        )
+        .with_code("unsupported_feature"));
+    }
 
     Ok(Json(serde_json::json!({
         "dialect": "generic",
@@ -572,33 +616,44 @@ fn validate_sql_query_fields(
 }
 
 fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery, AppError> {
+    if query.len() > MAX_SQL_QUERY_LENGTH {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!("SQL query length exceeds {MAX_SQL_QUERY_LENGTH} characters"),
+        )
+        .with_code("invalid_sql"));
+    }
+
     let dialect = GenericDialect {};
     let statements = SqlParser::parse_sql(&dialect, query).map_err(|err| {
         AppError::new(StatusCode::BAD_REQUEST, format!("Invalid SQL query: {err}"))
+            .with_code("invalid_sql")
     })?;
 
     if statements.len() != 1 {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "Only a single SQL statement is supported",
-        ));
+        )
+        .with_code("unsupported_feature"));
     }
 
     let statement = statements.into_iter().next().expect("single statement");
     let select = match statement {
         Statement::Query(query_box) => {
             if !query_box.limit_by.is_empty() {
-                return Err(AppError::new(
-                    StatusCode::BAD_REQUEST,
-                    "LIMIT BY is not supported",
-                ));
+                return Err(
+                    AppError::new(StatusCode::BAD_REQUEST, "LIMIT BY is not supported")
+                        .with_code("unsupported_feature"),
+                );
             }
 
             if query_box.with.is_some() {
                 return Err(AppError::new(
                     StatusCode::BAD_REQUEST,
                     "WITH clauses are not supported",
-                ));
+                )
+                .with_code("unsupported_feature"));
             }
 
             let offset = parse_sql_offset(query_box.offset)?;
@@ -612,12 +667,22 @@ fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery, AppE
                 }),
                 (Some(per_page), None) => Some(Pagination { page: 1, per_page }),
                 (None, Some(_)) => {
-                    return Err(AppError::new(
-                        StatusCode::BAD_REQUEST,
-                        "OFFSET requires LIMIT",
-                    ));
+                    return Err(
+                        AppError::new(StatusCode::BAD_REQUEST, "OFFSET requires LIMIT")
+                            .with_code("invalid_sql"),
+                    );
                 }
             };
+
+            if let Some(pagination) = pagination.as_ref()
+                && pagination.per_page > MAX_SQL_SELECTED_ROWS
+            {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    format!("LIMIT exceeds max selected rows ({MAX_SQL_SELECTED_ROWS})"),
+                )
+                .with_code("unsupported_feature"));
+            }
 
             let sort_columns = parse_sql_order_by(query_box.order_by.as_ref())?;
 
@@ -629,7 +694,8 @@ fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery, AppE
                     return Err(AppError::new(
                         StatusCode::BAD_REQUEST,
                         "Only SELECT queries are supported",
-                    ));
+                    )
+                    .with_code("unsupported_feature"));
                 }
             }
         }
@@ -637,7 +703,8 @@ fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery, AppE
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
                 "Only SELECT statements are supported",
-            ));
+            )
+            .with_code("unsupported_feature"));
         }
     };
 
@@ -652,58 +719,69 @@ fn parse_sql_select(
 ) -> Result<ParsedSqlQuery, AppError> {
     if !matches!(select.group_by, sqlparser::ast::GroupByExpr::Expressions(ref exprs, _) if exprs.is_empty())
     {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "GROUP BY is not supported",
-        ));
+        return Err(
+            AppError::new(StatusCode::BAD_REQUEST, "GROUP BY is not supported")
+                .with_code("unsupported_feature"),
+        );
     }
 
     if select.having.is_some() {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "HAVING is not supported",
-        ));
+        return Err(
+            AppError::new(StatusCode::BAD_REQUEST, "HAVING is not supported")
+                .with_code("unsupported_feature"),
+        );
     }
 
     if select.distinct.is_some() {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "DISTINCT is not supported",
-        ));
+        return Err(
+            AppError::new(StatusCode::BAD_REQUEST, "DISTINCT is not supported")
+                .with_code("unsupported_feature"),
+        );
     }
 
     if select.from.len() != 1 {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "Exactly one table/resource in FROM is required",
-        ));
+        )
+        .with_code("invalid_sql"));
     }
 
     let from = &select.from[0];
     if !from.joins.is_empty() {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "JOIN is not supported",
-        ));
+        return Err(
+            AppError::new(StatusCode::BAD_REQUEST, "JOIN is not supported")
+                .with_code("unsupported_feature"),
+        );
     }
 
     let resource = match &from.relation {
         sqlparser::ast::TableFactor::Table { name, .. } => name,
         _ => {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                "Unsupported FROM clause",
-            ));
+            return Err(
+                AppError::new(StatusCode::BAD_REQUEST, "Unsupported FROM clause")
+                    .with_code("unsupported_feature"),
+            );
         }
     };
     let resource = resource
         .0
         .last()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Missing table/resource name"))?
+        .ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Missing table/resource name")
+                .with_code("invalid_sql")
+        })?
         .value
         .clone();
 
     validate_sql_identifier(&resource, "resource")?;
+    if !resource_exists(state, &resource)? {
+        return Err(AppError::new(
+            StatusCode::NOT_FOUND,
+            format!("Unknown table/resource '{resource}'"),
+        )
+        .with_code("unknown_table"));
+    }
     let selected_columns = parse_sql_projection(&select.projection)?;
     let filters = if let Some(selection) = select.selection {
         parse_sql_where(&selection)?
@@ -751,19 +829,22 @@ fn parse_sql_projection(projection: &[SelectItem]) -> Result<Option<Vec<String>>
                 return Err(AppError::new(
                     StatusCode::BAD_REQUEST,
                     "Column aliases are not supported",
-                ));
+                )
+                .with_code("unsupported_feature"));
             }
             SelectItem::UnnamedExpr(Expr::Function(_)) => {
                 return Err(AppError::new(
                     StatusCode::BAD_REQUEST,
                     "Aggregate/functions are not supported",
-                ));
+                )
+                .with_code("unsupported_feature"));
             }
             _ => {
                 return Err(AppError::new(
                     StatusCode::BAD_REQUEST,
                     "Unsupported SELECT projection",
-                ));
+                )
+                .with_code("unsupported_feature"));
             }
         }
     }
@@ -1757,6 +1838,39 @@ fn load_resource(folder: &Path, resource: &str) -> Result<Value, AppError> {
             format!("Invalid JSON: {e}"),
         )
     })
+}
+
+fn resource_exists(state: &AppState, resource: &str) -> Result<bool, AppError> {
+    state
+        .resources
+        .read()
+        .map(|resources| resources.contains(resource))
+        .map_err(|_| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Resource cache lock poisoned",
+            )
+        })
+}
+
+fn request_query_hash(path: &str, query: Option<&str>) -> Option<String> {
+    if path != "/sql" && path != "/export.sql" {
+        return None;
+    }
+
+    let query = query?;
+    let sql = query.split('&').find_map(|pair| {
+        pair.split_once('=')
+            .and_then(|(k, v)| (k == "q").then_some(v))
+    })?;
+
+    Some(stable_hash(sql))
+}
+
+fn stable_hash(value: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 fn write_resource(folder: &Path, resource: &str, value: &Value) -> Result<(), AppError> {

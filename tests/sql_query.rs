@@ -100,6 +100,9 @@ fn sql_post_rejects_non_select_and_unsupported_constructs() {
         delete_response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
         "{delete_response}"
     );
+    let delete_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&delete_response)).expect("delete error json");
+    assert_eq!(delete_payload["code"], "unsupported_feature");
 
     let join_response = http_post_json(
         "127.0.0.1:3011",
@@ -110,6 +113,9 @@ fn sql_post_rejects_non_select_and_unsupported_constructs() {
         join_response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
         "{join_response}"
     );
+    let join_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&join_response)).expect("join error json");
+    assert_eq!(join_payload["code"], "unsupported_feature");
 }
 
 fn wait_for_server(addr: &str, timeout: Duration) {
@@ -255,4 +261,81 @@ fn sql_rejects_ambiguous_null_and_invalid_identifiers() {
         bad_identifier.contains("400 Bad Request"),
         "{bad_identifier}"
     );
+}
+
+#[test]
+fn sql_returns_structured_codes_for_invalid_and_unknown_table() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
+        .expect("write users");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3014")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3014", Duration::from_secs(5));
+
+    let invalid_sql = http_get("127.0.0.1:3014", "/sql?q=SELECT%20FROM");
+    assert!(invalid_sql.contains("400 Bad Request"), "{invalid_sql}");
+    let invalid_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&invalid_sql)).expect("invalid sql payload");
+    assert_eq!(invalid_payload["code"], "invalid_sql");
+
+    let unknown_table = http_get("127.0.0.1:3014", "/sql?q=SELECT%20*%20FROM%20missing");
+    assert!(unknown_table.contains("404 Not Found"), "{unknown_table}");
+    let unknown_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&unknown_table)).expect("unknown table payload");
+    assert_eq!(unknown_payload["code"], "unknown_table");
+}
+
+#[test]
+fn sql_enforces_limit_guards() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let users_path = temp.path().join("users.json");
+
+    let users = serde_json::json!(
+        (1..=1005)
+            .map(|id| serde_json::json!({"id": id, "name": format!("user-{id}")}))
+            .collect::<Vec<_>>()
+    );
+    std::fs::write(
+        users_path,
+        serde_json::to_string_pretty(&users).expect("serialize users"),
+    )
+    .expect("write users json");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3015")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3015", Duration::from_secs(5));
+
+    let over_limit = http_get(
+        "127.0.0.1:3015",
+        "/sql?q=SELECT%20*%20FROM%20users%20LIMIT%201001",
+    );
+    assert!(over_limit.contains("400 Bad Request"), "{over_limit}");
+    let over_limit_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&over_limit)).expect("over limit payload");
+    assert_eq!(over_limit_payload["code"], "unsupported_feature");
+
+    let no_limit = http_get("127.0.0.1:3015", "/sql?q=SELECT%20*%20FROM%20users");
+    assert!(no_limit.contains("400 Bad Request"), "{no_limit}");
+    let no_limit_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&no_limit)).expect("row count guard payload");
+    assert_eq!(no_limit_payload["code"], "unsupported_feature");
 }
