@@ -674,9 +674,10 @@ fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery, AppE
                 }
             };
 
-            if let Some(pagination) = pagination.as_ref()
-                && pagination.per_page > MAX_SQL_SELECTED_ROWS
-            {
+            if matches!(
+                pagination.as_ref(),
+                Some(pagination) if pagination.per_page > MAX_SQL_SELECTED_ROWS
+            ) {
                 return Err(AppError::new(
                     StatusCode::BAD_REQUEST,
                     format!("LIMIT exceeds max selected rows ({MAX_SQL_SELECTED_ROWS})"),
