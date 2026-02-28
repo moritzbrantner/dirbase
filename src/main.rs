@@ -402,7 +402,7 @@ fn build_sql_export(state: &AppState, dialect: SqlExportDialect) -> Result<Strin
     )];
 
     for resource in resources {
-        let data = load_resource(&state, &resource)?;
+        let data = load_resource(state, &resource)?;
         append_table_export(&mut chunks, state, &resource, &data, dialect)?;
     }
 
@@ -472,14 +472,14 @@ fn resolve_export_columns(
     resource: &str,
     rows: &[BTreeMap<String, Value>],
 ) -> Result<Vec<(String, ColumnSchema)>, AppError> {
-    if let Some(schema) = state.schema.as_ref() {
-        if let Some(table) = schema.tables.get(resource) {
-            return Ok(table
-                .columns
-                .iter()
-                .map(|(name, schema)| (name.clone(), schema.clone()))
-                .collect());
-        }
+    if let Some(schema) = state.schema.as_ref()
+        && let Some(table) = schema.tables.get(resource)
+    {
+        return Ok(table
+            .columns
+            .iter()
+            .map(|(name, schema)| (name.clone(), schema.clone()))
+            .collect());
     }
 
     let mut inferred = BTreeMap::<String, ColumnSchema>::new();
@@ -1781,7 +1781,7 @@ fn embed_collection_data(
             )
         })?;
 
-        let target_resource = load_resource(&state, &fk.target_table)?;
+        let target_resource = load_resource(state, &fk.target_table)?;
         let target_items = target_resource.as_array().ok_or_else(|| {
             AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -2257,12 +2257,11 @@ fn load_resource(state: &AppState, resource: &str) -> Result<Value, AppError> {
         len: metadata.len(),
     };
 
-    if let Ok(cache) = state.resource_cache.read() {
-        if let Some(cached) = cache.get(resource) {
-            if cached.metadata == current_metadata {
-                return Ok(cached.value.clone());
-            }
-        }
+    if let Ok(cache) = state.resource_cache.read()
+        && let Some(cached) = cache.get(resource)
+        && cached.metadata == current_metadata
+    {
+        return Ok(cached.value.clone());
     }
 
     let raw = fs::read_to_string(&file)
