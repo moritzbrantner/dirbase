@@ -1,0 +1,69 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "autocannon duration in seconds"
+        required: false
+        default: "10"
+      connections:
+        description: "autocannon concurrent connections"
+        required: false
+        default: "50"
+      amount:
+        description: "number of synthetic posts"
+        required: false
+        default: "10000"
+
+jobs:
+  run-benchmarks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run benchmark script
+        env:
+          DURATION: ${{ inputs.duration || '10' }}
+          CONNECTIONS: ${{ inputs.connections || '50' }}
+          AMOUNT: ${{ inputs.amount || '10000' }}
+        run: scripts/benchmark_vs_json_server.sh
+
+      - name: Find latest summary file
+        id: latest-summary
+        run: |
+          latest_summary="$(ls -1t benchmarks/results/summary-*.json | head -n 1)"
+          latest_stamp="${latest_summary##*summary-}"
+          latest_stamp="${latest_stamp%.json}"
+          report_file="benchmarks/results/report-${latest_stamp}.md"
+          echo "summary=${latest_summary}" >> "$GITHUB_OUTPUT"
+          echo "report=${report_file}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate markdown report
+        run: |
+          python3 scripts/render_benchmark_report.py \
+            --summary "${{ steps.latest-summary.outputs.summary }}" \
+            --output "${{ steps.latest-summary.outputs.report }}"
+
+      - name: Publish report to job summary
+        run: cat "${{ steps.latest-summary.outputs.report }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ github.run_id }}
+          path: |
+            benchmarks/results/*.json
+            benchmarks/results/*.md
