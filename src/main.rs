@@ -73,9 +73,22 @@ struct Cli {
 struct AppState {
     folder: Arc<PathBuf>,
     resources: Arc<StdRwLock<BTreeSet<String>>>,
+    resource_cache: Arc<StdRwLock<HashMap<String, CachedResource>>>,
     resource_locks: Arc<RwLock<HashMap<String, Arc<RwLock<()>>>>>,
     schema: Arc<Option<Schema>>,
     request_log: Option<Arc<StdMutex<fs::File>>>,
+}
+
+#[derive(Clone)]
+struct CachedResource {
+    value: Value,
+    metadata: CachedMetadata,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CachedMetadata {
+    modified: SystemTime,
+    len: u64,
 }
 
 #[derive(Debug)]
@@ -156,6 +169,7 @@ async fn main() {
     let state = AppState {
         folder: Arc::new(cli.folder),
         resources: Arc::new(StdRwLock::new(initial_resources)),
+        resource_cache: Arc::new(StdRwLock::new(HashMap::new())),
         resource_locks: Arc::new(RwLock::new(HashMap::new())),
         schema: Arc::new(schema),
         request_log: if cli.log {
@@ -175,7 +189,11 @@ async fn main() {
         },
     };
 
-    start_resource_watcher(state.folder.clone(), state.resources.clone());
+    start_resource_watcher(
+        state.folder.clone(),
+        state.resources.clone(),
+        state.resource_cache.clone(),
+    );
 
     let app_state = state.clone();
     let app = if cli.readonly {
@@ -384,7 +402,7 @@ fn build_sql_export(state: &AppState, dialect: SqlExportDialect) -> Result<Strin
     )];
 
     for resource in resources {
-        let data = load_resource(&state.folder, &resource)?;
+        let data = load_resource(&state, &resource)?;
         append_table_export(&mut chunks, state, &resource, &data, dialect)?;
     }
 
@@ -635,7 +653,7 @@ async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, Ap
     let parsed = parse_sql_query(&query, &state)?;
 
     let _guard = state.read_lock_for_resource(&parsed.resource).await;
-    let data = load_resource(&state.folder, &parsed.resource)?;
+    let data = load_resource(&state, &parsed.resource)?;
     validate_resource_data(&state, &parsed.resource, &data)?;
 
     let table = state.schema_table(&parsed.resource)?;
@@ -712,7 +730,7 @@ async fn get_collection(
     let parsed = parse_collection_query_params(query_params)?;
     let lock_resources = state.embed_lock_resources(&resource, &parsed.embeds)?;
     let _guards = state.read_locks_for_resources(&lock_resources).await;
-    let data = load_resource(&state.folder, &resource)?;
+    let data = load_resource(&state, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
 
     if parsed.filters.is_empty()
@@ -1763,7 +1781,7 @@ fn embed_collection_data(
             )
         })?;
 
-        let target_resource = load_resource(&state.folder, &fk.target_table)?;
+        let target_resource = load_resource(&state, &fk.target_table)?;
         let target_items = target_resource.as_array().ok_or_else(|| {
             AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -1854,7 +1872,7 @@ async fn create_item(
 ) -> Result<impl IntoResponse, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
 
-    let mut data = load_resource(&state.folder, &resource)?;
+    let mut data = load_resource(&state, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array_mut()
@@ -1869,7 +1887,7 @@ async fn create_item(
     let created = Value::Object(item.clone());
     array.push(created.clone());
     validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state.folder, &resource, &data)?;
+    write_resource(&state, &resource, &data)?;
 
     Ok((StatusCode::CREATED, Json(created)))
 }
@@ -1879,7 +1897,7 @@ async fn get_item(
     AxumPath((resource, id)): AxumPath<(String, String)>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.read_lock_for_resource(&resource).await;
-    let data = load_resource(&state.folder, &resource)?;
+    let data = load_resource(&state, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array()
@@ -1897,7 +1915,7 @@ async fn replace_item(
     Json(mut payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state.folder, &resource)?;
+    let mut data = load_resource(&state, &resource)?;
     let array = data
         .as_array_mut()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
@@ -1916,7 +1934,7 @@ async fn replace_item(
     array[position] = replacement.clone();
 
     validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state.folder, &resource, &data)?;
+    write_resource(&state, &resource, &data)?;
     Ok(Json(replacement))
 }
 
@@ -1926,7 +1944,7 @@ async fn patch_item(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state.folder, &resource)?;
+    let mut data = load_resource(&state, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array_mut()
@@ -1950,7 +1968,7 @@ async fn patch_item(
 
     let updated = Value::Object(current.clone());
     validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state.folder, &resource, &data)?;
+    write_resource(&state, &resource, &data)?;
     Ok(Json(updated))
 }
 
@@ -1959,7 +1977,7 @@ async fn delete_item(
     AxumPath((resource, id)): AxumPath<(String, String)>,
 ) -> Result<StatusCode, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state.folder, &resource)?;
+    let mut data = load_resource(&state, &resource)?;
     validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array_mut()
@@ -1970,7 +1988,7 @@ async fn delete_item(
     array.remove(index);
 
     validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state.folder, &resource, &data)?;
+    write_resource(&state, &resource, &data)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1980,7 +1998,7 @@ async fn replace_resource_object(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state.folder, &resource)?;
+    let mut data = load_resource(&state, &resource)?;
     if !data.is_object() {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
@@ -1996,7 +2014,7 @@ async fn replace_resource_object(
     }
 
     data = payload;
-    write_resource(&state.folder, &resource, &data)?;
+    write_resource(&state, &resource, &data)?;
     Ok(Json(data))
 }
 
@@ -2006,7 +2024,7 @@ async fn patch_resource_object(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state.folder, &resource)?;
+    let mut data = load_resource(&state, &resource)?;
     let current = data
         .as_object_mut()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON object"))?;
@@ -2019,7 +2037,7 @@ async fn patch_resource_object(
     }
 
     let updated = Value::Object(current.clone());
-    write_resource(&state.folder, &resource, &data)?;
+    write_resource(&state, &resource, &data)?;
     Ok(Json(updated))
 }
 
@@ -2218,8 +2236,8 @@ fn maybe_fill_missing_id(
     Ok(())
 }
 
-fn load_resource(folder: &Path, resource: &str) -> Result<Value, AppError> {
-    let file = resource_file_path(folder, resource)?;
+fn load_resource(state: &AppState, resource: &str) -> Result<Value, AppError> {
+    let file = resource_file_path(&state.folder, resource)?;
     if !file.exists() {
         return Err(AppError::new(
             StatusCode::NOT_FOUND,
@@ -2227,14 +2245,46 @@ fn load_resource(folder: &Path, resource: &str) -> Result<Value, AppError> {
         ));
     }
 
+    let metadata = fs::metadata(&file)
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let current_metadata = CachedMetadata {
+        modified: metadata.modified().map_err(|e| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read file metadata: {e}"),
+            )
+        })?,
+        len: metadata.len(),
+    };
+
+    if let Ok(cache) = state.resource_cache.read() {
+        if let Some(cached) = cache.get(resource) {
+            if cached.metadata == current_metadata {
+                return Ok(cached.value.clone());
+            }
+        }
+    }
+
     let raw = fs::read_to_string(&file)
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    serde_json::from_str::<Value>(&raw).map_err(|e| {
+    let value = serde_json::from_str::<Value>(&raw).map_err(|e| {
         AppError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Invalid JSON: {e}"),
         )
-    })
+    })?;
+
+    if let Ok(mut cache) = state.resource_cache.write() {
+        cache.insert(
+            resource.to_string(),
+            CachedResource {
+                value: value.clone(),
+                metadata: current_metadata,
+            },
+        );
+    }
+
+    Ok(value)
 }
 
 fn resource_exists(state: &AppState, resource: &str) -> Result<bool, AppError> {
@@ -2270,12 +2320,36 @@ fn stable_hash(value: &str) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-fn write_resource(folder: &Path, resource: &str, value: &Value) -> Result<(), AppError> {
-    let file = resource_file_path(folder, resource)?;
+fn write_resource(state: &AppState, resource: &str, value: &Value) -> Result<(), AppError> {
+    let file = resource_file_path(&state.folder, resource)?;
     let content = serde_json::to_string_pretty(value)
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    fs::write(file, format!("{content}\n"))
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    fs::write(&file, format!("{content}\n"))
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let metadata = fs::metadata(&file)
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let modified = metadata.modified().map_err(|e| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to read file metadata: {e}"),
+        )
+    })?;
+
+    if let Ok(mut cache) = state.resource_cache.write() {
+        cache.insert(
+            resource.to_string(),
+            CachedResource {
+                value: value.clone(),
+                metadata: CachedMetadata {
+                    modified,
+                    len: metadata.len(),
+                },
+            },
+        );
+    }
+
+    Ok(())
 }
 
 fn resource_file_path(folder: &Path, resource: &str) -> Result<PathBuf, AppError> {
@@ -2357,7 +2431,11 @@ fn scan_resources(folder: &Path) -> Result<BTreeSet<String>, std::io::Error> {
     Ok(resources)
 }
 
-fn start_resource_watcher(folder: Arc<PathBuf>, resources: Arc<StdRwLock<BTreeSet<String>>>) {
+fn start_resource_watcher(
+    folder: Arc<PathBuf>,
+    resources: Arc<StdRwLock<BTreeSet<String>>>,
+    resource_cache: Arc<StdRwLock<HashMap<String, CachedResource>>>,
+) {
     std::thread::spawn(move || {
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -2381,10 +2459,61 @@ fn start_resource_watcher(folder: Arc<PathBuf>, resources: Arc<StdRwLock<BTreeSe
 
         for event in rx {
             match event {
-                Ok(_) => match scan_resources(&folder) {
+                Ok(event) => match scan_resources(&folder) {
                     Ok(new_resources) => {
                         if let Ok(mut cache) = resources.write() {
                             *cache = new_resources;
+                        }
+
+                        if let Ok(mut cache) = resource_cache.write() {
+                            for path in &event.paths {
+                                let is_json =
+                                    path.extension().and_then(|ext| ext.to_str()) == Some("json");
+                                if !is_json {
+                                    continue;
+                                }
+
+                                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                                    continue;
+                                };
+
+                                if !is_valid_resource_name(stem) {
+                                    continue;
+                                }
+
+                                if path.exists() {
+                                    match fs::read_to_string(path)
+                                        .ok()
+                                        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                                    {
+                                        Some(value) => {
+                                            if let Ok(metadata) = fs::metadata(path) {
+                                                if let Ok(modified) = metadata.modified() {
+                                                    cache.insert(
+                                                        stem.to_string(),
+                                                        CachedResource {
+                                                            value,
+                                                            metadata: CachedMetadata {
+                                                                modified,
+                                                                len: metadata.len(),
+                                                            },
+                                                        },
+                                                    );
+                                                } else {
+                                                    cache.remove(stem);
+                                                }
+                                            } else {
+                                                cache.remove(stem);
+                                            }
+                                        }
+                                        None => {
+                                            cache.remove(stem);
+                                        }
+                                    }
+                                } else {
+                                    cache.remove(stem);
+                                }
+                            }
                         }
                     }
                     Err(err) => tracing::error!(
@@ -2427,9 +2556,17 @@ mod tests {
     fn writes_and_reads_resource_file() {
         let temp = tempfile::tempdir().expect("tempdir");
         let value = serde_json::json!([{"id": 1, "name": "example"}]);
+        let state = AppState {
+            folder: Arc::new(temp.path().to_path_buf()),
+            resources: Arc::new(StdRwLock::new(BTreeSet::new())),
+            resource_cache: Arc::new(StdRwLock::new(HashMap::new())),
+            resource_locks: Arc::new(RwLock::new(HashMap::new())),
+            schema: Arc::new(None),
+            request_log: None,
+        };
 
-        write_resource(temp.path(), "users", &value).expect("write resource");
-        let loaded = load_resource(temp.path(), "users").expect("load resource");
+        write_resource(&state, "users", &value).expect("write resource");
+        let loaded = load_resource(&state, "users").expect("load resource");
 
         assert_eq!(value, loaded);
     }
@@ -2466,6 +2603,7 @@ mod tests {
         let state = AppState {
             folder: Arc::new(PathBuf::from(".")),
             resources: Arc::new(StdRwLock::new(BTreeSet::new())),
+            resource_cache: Arc::new(StdRwLock::new(HashMap::new())),
             resource_locks: Arc::new(RwLock::new(HashMap::new())),
             schema: Arc::new(Some(schema)),
             request_log: None,
@@ -2692,6 +2830,7 @@ mod tests {
         let state = AppState {
             folder: Arc::new(temp.path().to_path_buf()),
             resources: Arc::new(StdRwLock::new(resources)),
+            resource_cache: Arc::new(StdRwLock::new(HashMap::new())),
             resource_locks: Arc::new(RwLock::new(HashMap::new())),
             schema: Arc::new(Some(schema)),
             request_log: None,
@@ -2727,6 +2866,7 @@ mod tests {
         let state = AppState {
             folder: Arc::new(PathBuf::from(".")),
             resources: Arc::new(StdRwLock::new(BTreeSet::new())),
+            resource_cache: Arc::new(StdRwLock::new(HashMap::new())),
             resource_locks: Arc::new(RwLock::new(HashMap::new())),
             schema: Arc::new(None),
             request_log: None,
