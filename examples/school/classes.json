@@ -4,20 +4,35 @@
     "title": "Intro to Programming",
     "code": "CS101",
     "professor_id": 1,
-    "student_ids": [1, 2]
+    "student_ids": [1, 2],
+    "credits": 3,
+    "semester": "Fall"
   },
   {
     "id": 205,
     "title": "Discrete Mathematics",
     "code": "MATH205",
     "professor_id": 2,
-    "student_ids": [1, 2, 3]
+    "student_ids": [1, 2, 3],
+    "credits": 4,
+    "semester": "Spring"
   },
   {
     "id": 310,
     "title": "Computational Physics",
     "code": "PHYS310",
     "professor_id": 1,
-    "student_ids": [3]
+    "student_ids": [3],
+    "credits": 3,
+    "semester": "Fall"
+  },
+  {
+    "id": 150,
+    "title": "Genetics I",
+    "code": "BIO150",
+    "professor_id": 3,
+    "student_ids": [4],
+    "credits": 3,
+    "semester": "Spring"
   }
 ]

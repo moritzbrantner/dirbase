@@ -4,20 +4,31 @@
     "name": "Alice Johnson",
     "email": "alice.johnson@example.edu",
     "year": 2,
-    "major": "Computer Science"
+    "major": "Computer Science",
+    "gpa": 3.8
   },
   {
     "id": 2,
     "name": "Ben Carter",
     "email": "ben.carter@example.edu",
     "year": 1,
-    "major": "Mathematics"
+    "major": "Mathematics",
+    "gpa": 3.5
   },
   {
     "id": 3,
     "name": "Carla Nguyen",
     "email": "carla.nguyen@example.edu",
     "year": 3,
-    "major": "Physics"
+    "major": "Physics",
+    "gpa": 3.9
+  },
+  {
+    "id": 4,
+    "name": "Diego Morales",
+    "email": "diego.morales@example.edu",
+    "year": 4,
+    "major": "Biology",
+    "gpa": 3.6
   }
 ]
