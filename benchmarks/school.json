@@ -1,0 +1,130 @@
+{
+  "student": [
+    {
+      "student_id": 1,
+      "name": "Alice Johnson",
+      "email": "alice.johnson@example.edu",
+      "year": 2,
+      "major": "Computer Science",
+      "gpa": 3.8
+    },
+    {
+      "student_id": 2,
+      "name": "Ben Carter",
+      "email": "ben.carter@example.edu",
+      "year": 1,
+      "major": "Mathematics",
+      "gpa": 3.5
+    },
+    {
+      "student_id": 3,
+      "name": "Carla Nguyen",
+      "email": "carla.nguyen@example.edu",
+      "year": 3,
+      "major": "Physics",
+      "gpa": 3.9
+    },
+    {
+      "student_id": 4,
+      "name": "Diego Morales",
+      "email": "diego.morales@example.edu",
+      "year": 4,
+      "major": "Biology",
+      "gpa": 3.6
+    }
+  ],
+  "professor": [
+    {
+      "professor_id": 1,
+      "name": "Dr. Elena Rivera",
+      "department": "Computer Science",
+      "email": "elena.rivera@example.edu",
+      "tenured": true
+    },
+    {
+      "professor_id": 2,
+      "name": "Dr. Marcus Lee",
+      "department": "Mathematics",
+      "email": "marcus.lee@example.edu",
+      "tenured": true
+    },
+    {
+      "professor_id": 3,
+      "name": "Dr. Priya Shah",
+      "department": "Biology",
+      "email": "priya.shah@example.edu",
+      "tenured": false
+    }
+  ],
+  "class": [
+    {
+      "class_id": 101,
+      "title": "Intro to Programming",
+      "code": "CS101",
+      "professor_id": 1,
+      "credits": 3,
+      "semester": "Fall"
+    },
+    {
+      "class_id": 205,
+      "title": "Discrete Mathematics",
+      "code": "MATH205",
+      "professor_id": 2,
+      "credits": 4,
+      "semester": "Spring"
+    },
+    {
+      "class_id": 310,
+      "title": "Computational Physics",
+      "code": "PHYS310",
+      "professor_id": 1,
+      "credits": 3,
+      "semester": "Fall"
+    },
+    {
+      "class_id": 150,
+      "title": "Genetics I",
+      "code": "BIO150",
+      "professor_id": 3,
+      "credits": 3,
+      "semester": "Spring"
+    }
+  ],
+  "student_class": [
+    {
+      "student_class_id": 1,
+      "student_id": 1,
+      "class_id": 101
+    },
+    {
+      "student_class_id": 2,
+      "student_id": 2,
+      "class_id": 101
+    },
+    {
+      "student_class_id": 3,
+      "student_id": 1,
+      "class_id": 205
+    },
+    {
+      "student_class_id": 4,
+      "student_id": 2,
+      "class_id": 205
+    },
+    {
+      "student_class_id": 5,
+      "student_id": 3,
+      "class_id": 205
+    },
+    {
+      "student_class_id": 6,
+      "student_id": 3,
+      "class_id": 310
+    },
+    {
+      "student_class_id": 7,
+      "student_id": 4,
+      "class_id": 150
+    }
+  ]
+}
