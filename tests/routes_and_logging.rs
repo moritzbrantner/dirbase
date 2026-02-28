@@ -154,6 +154,7 @@ fn graphql_endpoint_is_available() {
 fn logging_writes_each_request_when_enabled() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(temp.path().join("posts.json"), "[]\n").expect("write posts");
+    fs::write(temp.path().join("users.json"), "[]\n").expect("write users");
     let log_path = temp.path().join("requests.log");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
@@ -186,6 +187,18 @@ fn logging_writes_each_request_when_enabled() {
         "/graphql",
         Some(r#"{"query":"{ __typename }"}"#),
     );
+    let _ = http_request(
+        "127.0.0.1:3012",
+        "GET",
+        "/sql?q=SELECT%20*%20FROM%20users%20LIMIT%201",
+        None,
+    );
+    let _ = http_request(
+        "127.0.0.1:3012",
+        "GET",
+        "/export.sql?q=SELECT%20*%20FROM%20users%20LIMIT%201",
+        None,
+    );
 
     thread::sleep(Duration::from_millis(150));
 
@@ -194,6 +207,14 @@ fn logging_writes_each_request_when_enabled() {
     assert!(log_contents.contains("POST /posts 201"), "{log_contents}");
     assert!(log_contents.contains("GET /graphql 200"), "{log_contents}");
     assert!(log_contents.contains("POST /graphql 200"), "{log_contents}");
+    assert!(
+        log_contents.contains("GET /sql 200 query_hash="),
+        "{log_contents}"
+    );
+    assert!(
+        log_contents.contains("GET /export.sql 200 query_hash="),
+        "{log_contents}"
+    );
 }
 
 fn wait_for_server(addr: &str, timeout: Duration) {
