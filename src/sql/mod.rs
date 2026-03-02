@@ -344,10 +344,11 @@ fn parse_sql_projection(projection: &[SelectItem]) -> Result<Option<Vec<String>>
                 columns.push(column.value.clone());
             }
             _ => {
-                return Err(
-                    AppError::new(StatusCode::BAD_REQUEST, "Unsupported SELECT projection")
-                        .with_code("unsupported_feature"),
-                );
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "Unsupported SELECT projection",
+                )
+                .with_code("unsupported_feature"));
             }
         }
     }
