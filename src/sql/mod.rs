@@ -618,15 +618,15 @@ fn resolve_export_columns(
                 column_type: inferred_type.clone().unwrap_or(ColumnType::String),
                 nullable: false,
             });
-            if let Some(it) = inferred_type {
-                if entry.column_type != it {
-                    entry.column_type = ColumnType::String;
-                    if matches!(entry.column_type, ColumnType::String)
-                        && (matches!(it, ColumnType::Json)
-                            || matches!(entry.column_type, ColumnType::Json))
-                    {
-                        entry.column_type = ColumnType::Json;
-                    }
+            if let Some(it) = inferred_type
+                && entry.column_type != it
+            {
+                entry.column_type = ColumnType::String;
+                if matches!(entry.column_type, ColumnType::String)
+                    && (matches!(it, ColumnType::Json)
+                        || matches!(entry.column_type, ColumnType::Json))
+                {
+                    entry.column_type = ColumnType::Json;
                 }
             }
             if value.is_null() {
