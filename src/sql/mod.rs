@@ -98,16 +98,16 @@ pub async fn export_sql(
     Query(params): Query<SqlExportParams>,
 ) -> Result<impl IntoResponse, AppError> {
     let dialect = SqlExportDialect::parse(params.dialect.as_deref())?;
-    let resource_names = state.resource_names_sorted()?;
+    let resource_names = state.resource_names_sorted().await;
     let _guards = state.read_locks_for_resources(&resource_names).await;
-    let sql = build_sql_export(&state, dialect)?;
+    let sql = build_sql_export(&state, dialect).await?;
     Ok(([(CONTENT_TYPE, "text/sql; charset=utf-8")], sql))
 }
 
 async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, AppError> {
-    let parsed = parse_sql_query(&query, &state)?;
+    let parsed = parse_sql_query(&query, &state).await?;
     let _guard = state.read_lock_for_resource(&parsed.resource).await;
-    let data = load_resource(&state, &parsed.resource)?;
+    let data = load_resource(&state, &parsed.resource).await?;
     let data = data.as_ref().clone();
     validate_resource_data(&state, &parsed.resource, &data)?;
 
@@ -165,7 +165,7 @@ async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, Ap
     ))
 }
 
-fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery, AppError> {
+async fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery, AppError> {
     if query.len() > MAX_SQL_QUERY_LENGTH {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
@@ -220,7 +220,7 @@ fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery, AppE
             let sort_columns = parse_sql_order_by(query_box.order_by.as_ref())?;
             match *query_box.body {
                 SetExpr::Select(select) => {
-                    parse_sql_select(*select, sort_columns, pagination, state)
+                    parse_sql_select(*select, sort_columns, pagination, state).await
                 }
                 _ => Err(AppError::new(
                     StatusCode::BAD_REQUEST,
@@ -237,7 +237,7 @@ fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery, AppE
     }
 }
 
-fn parse_sql_select(
+async fn parse_sql_select(
     select: Select,
     sort_columns: Vec<SortColumn>,
     pagination: Option<Pagination>,
@@ -295,7 +295,7 @@ fn parse_sql_select(
     };
 
     validate_sql_identifier(&resource, "resource")?;
-    if !resource_exists(state, &resource)? {
+    if !resource_exists(state, &resource).await {
         return Err(AppError::new(
             StatusCode::NOT_FOUND,
             format!("Unknown table/resource '{resource}'"),
@@ -519,16 +519,11 @@ fn apply_column_selection(
         .collect()
 }
 
-fn build_sql_export(state: &AppState, dialect: SqlExportDialect) -> Result<String, AppError> {
+async fn build_sql_export(state: &AppState, dialect: SqlExportDialect) -> Result<String, AppError> {
     let resources = state
         .resources
         .read()
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Resource cache lock poisoned",
-            )
-        })?
+        .await
         .iter()
         .cloned()
         .collect::<Vec<_>>();
@@ -540,7 +535,7 @@ fn build_sql_export(state: &AppState, dialect: SqlExportDialect) -> Result<Strin
         }
     )];
     for resource in resources {
-        let data = load_resource(state, &resource)?;
+        let data = load_resource(state, &resource).await?;
         append_table_export(&mut chunks, state, &resource, data.as_ref(), dialect)?;
     }
     Ok(chunks.concat())
@@ -801,7 +796,7 @@ mod tests {
     use std::{
         collections::{BTreeSet, HashMap},
         path::PathBuf,
-        sync::{Arc, RwLock as StdRwLock},
+        sync::Arc,
     };
     use tokio::sync::RwLock;
 
@@ -809,13 +804,15 @@ mod tests {
     fn parses_select_projection() {
         let state = AppState {
             folder: Arc::new(PathBuf::from(".")),
-            resources: Arc::new(StdRwLock::new(BTreeSet::from(["users".to_string()]))),
-            resource_cache: Arc::new(StdRwLock::new(HashMap::new())),
+            resources: Arc::new(RwLock::new(BTreeSet::from(["users".to_string()]))),
+            resource_cache: Arc::new(RwLock::new(HashMap::new())),
             resource_locks: Arc::new(RwLock::new(HashMap::new())),
             schema: Arc::new(None),
-            request_log: None,
         };
-        let parsed = parse_sql_query("SELECT id FROM users", &state).expect("parse");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let parsed = runtime
+            .block_on(parse_sql_query("SELECT id FROM users", &state))
+            .expect("parse");
         assert_eq!(parsed.resource, "users");
         assert_eq!(parsed.selected_columns.expect("columns"), vec!["id"]);
     }

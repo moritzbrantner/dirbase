@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeSet, HashMap},
     hash::{Hash, Hasher},
-    io::Write,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -76,7 +75,7 @@ pub fn build_router(state: AppState, readonly: bool, enable_log: bool) -> Router
 }
 
 pub async fn log_requests_middleware(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     request: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
@@ -86,19 +85,14 @@ pub async fn log_requests_middleware(
     let response = next.run(request).await;
     let status = response.status();
 
-    if let Some(log_file) = &state.request_log {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or_default();
-        let suffix = query_hash
-            .map(|hash| format!(" query_hash={hash}"))
-            .unwrap_or_default();
-        let line = format!("{timestamp} {method} {path} {}{suffix}\n", status.as_u16());
-        if let Ok(mut file) = log_file.lock() {
-            let _ = file.write_all(line.as_bytes());
-        }
-    }
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let suffix = query_hash
+        .map(|hash| format!(" query_hash={hash}"))
+        .unwrap_or_default();
+    tracing::info!("{timestamp} {method} {path} {}{suffix}", status.as_u16());
     response
 }
 
@@ -110,12 +104,7 @@ pub async fn list_resources(State(state): State<AppState>) -> Result<Json<Value>
     let resources = state
         .resources
         .read()
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Resource cache lock poisoned",
-            )
-        })?
+        .await
         .iter()
         .cloned()
         .collect::<Vec<_>>();
@@ -131,7 +120,7 @@ pub async fn get_collection(
     let lock_resources = embed_lock_resources(&state, &resource, &parsed.embeds)?;
     let _guards = state.read_locks_for_resources(&lock_resources).await;
 
-    let data = load_resource(&state, &resource)?;
+    let data = load_resource(&state, &resource).await?;
     let data = data.as_ref().clone();
     validate_resource_data(&state, &resource, &data)?;
 
@@ -148,7 +137,7 @@ pub async fn get_collection(
     let embedded = if parsed.embeds.is_empty() {
         sorted
     } else {
-        embed_collection_data(&state, &resource, sorted, &parsed.embeds)?
+        embed_collection_data(&state, &resource, sorted, &parsed.embeds).await?
     };
 
     if let Some(pagination) = parsed.pagination {
@@ -163,7 +152,7 @@ pub async fn create_item(
     Json(mut payload): Json<Value>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource)?.as_ref().clone();
+    let mut data = load_resource(&state, &resource).await?.as_ref().clone();
     validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array_mut()
@@ -175,7 +164,7 @@ pub async fn create_item(
     let created = Value::Object(item.clone());
     array.push(created.clone());
     validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state, &resource, &data)?;
+    write_resource(&state, &resource, &data).await?;
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -184,7 +173,7 @@ pub async fn get_item(
     AxumPath((resource, id)): AxumPath<(String, String)>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.read_lock_for_resource(&resource).await;
-    let data = load_resource(&state, &resource)?;
+    let data = load_resource(&state, &resource).await?;
     let data = data.as_ref().clone();
     validate_resource_data(&state, &resource, &data)?;
     let array = data
@@ -203,7 +192,7 @@ pub async fn replace_item(
     Json(mut payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource)?.as_ref().clone();
+    let mut data = load_resource(&state, &resource).await?.as_ref().clone();
     let array = data
         .as_array_mut()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
@@ -219,7 +208,7 @@ pub async fn replace_item(
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
     array[position] = replacement.clone();
     validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state, &resource, &data)?;
+    write_resource(&state, &resource, &data).await?;
     Ok(Json(replacement))
 }
 
@@ -229,7 +218,7 @@ pub async fn patch_item(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource)?.as_ref().clone();
+    let mut data = load_resource(&state, &resource).await?.as_ref().clone();
     validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array_mut()
@@ -249,7 +238,7 @@ pub async fn patch_item(
     }
     let updated = Value::Object(current.clone());
     validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state, &resource, &data)?;
+    write_resource(&state, &resource, &data).await?;
     Ok(Json(updated))
 }
 
@@ -258,7 +247,7 @@ pub async fn delete_item(
     AxumPath((resource, id)): AxumPath<(String, String)>,
 ) -> Result<StatusCode, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource)?.as_ref().clone();
+    let mut data = load_resource(&state, &resource).await?.as_ref().clone();
     validate_resource_data(&state, &resource, &data)?;
     let array = data
         .as_array_mut()
@@ -267,7 +256,7 @@ pub async fn delete_item(
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
     array.remove(index);
     validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state, &resource, &data)?;
+    write_resource(&state, &resource, &data).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -277,7 +266,7 @@ pub async fn replace_resource_object(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource)?.as_ref().clone();
+    let mut data = load_resource(&state, &resource).await?.as_ref().clone();
     if !data.is_object() || !payload.is_object() {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
@@ -285,7 +274,7 @@ pub async fn replace_resource_object(
         ));
     }
     data = payload;
-    write_resource(&state, &resource, &data)?;
+    write_resource(&state, &resource, &data).await?;
     Ok(Json(data))
 }
 
@@ -295,7 +284,7 @@ pub async fn patch_resource_object(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource)?.as_ref().clone();
+    let mut data = load_resource(&state, &resource).await?.as_ref().clone();
     let current = data
         .as_object_mut()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON object"))?;
@@ -306,7 +295,7 @@ pub async fn patch_resource_object(
         current.insert(key.clone(), value.clone());
     }
     let updated = Value::Object(current.clone());
-    write_resource(&state, &resource, &data)?;
+    write_resource(&state, &resource, &data).await?;
     Ok(Json(updated))
 }
 
@@ -355,7 +344,7 @@ fn embed_lock_resources(
     Ok(resources.into_iter().collect())
 }
 
-fn embed_collection_data(
+async fn embed_collection_data(
     state: &AppState,
     resource: &str,
     data: Value,
@@ -383,7 +372,7 @@ fn embed_collection_data(
         if !target_resources.contains_key(&fk.target_table) {
             target_resources.insert(
                 fk.target_table.clone(),
-                load_resource(state, &fk.target_table)?,
+                load_resource(state, &fk.target_table).await?,
             );
         }
         let target_items = target_resources
