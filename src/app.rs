@@ -1,8 +1,7 @@
 use std::{
     collections::{BTreeSet, HashMap},
-    fs,
     path::PathBuf,
-    sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock},
+    sync::Arc,
     time::SystemTime,
 };
 
@@ -18,11 +17,10 @@ use serde_json::Value;
 #[derive(Clone)]
 pub struct AppState {
     pub folder: Arc<PathBuf>,
-    pub resources: Arc<StdRwLock<BTreeSet<String>>>,
-    pub resource_cache: Arc<StdRwLock<HashMap<String, CachedResource>>>,
+    pub resources: Arc<RwLock<BTreeSet<String>>>,
+    pub resource_cache: Arc<RwLock<HashMap<String, CachedResource>>>,
     pub resource_locks: Arc<RwLock<HashMap<String, Arc<RwLock<()>>>>>,
     pub schema: Arc<Option<Schema>>,
-    pub request_log: Option<Arc<StdMutex<fs::File>>>,
 }
 
 #[derive(Clone)]
@@ -51,16 +49,8 @@ impl AppState {
         })
     }
 
-    pub fn resource_names_sorted(&self) -> Result<Vec<String>, AppError> {
-        Ok(self
-            .resources
-            .read()
-            .map_err(|_| {
-                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "Resource cache lock poisoned")
-            })?
-            .iter()
-            .cloned()
-            .collect())
+    pub async fn resource_names_sorted(&self) -> Vec<String> {
+        self.resources.read().await.iter().cloned().collect()
     }
 
     pub async fn read_lock_for_resource(&self, resource: &str) -> OwnedRwLockReadGuard<()> {

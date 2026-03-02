@@ -2,11 +2,12 @@ use std::{
     collections::{BTreeSet, HashMap},
     fs,
     path::PathBuf,
-    sync::{Arc, RwLock as StdRwLock},
+    sync::Arc,
 };
 
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::Value;
+use tokio::sync::RwLock;
 
 use crate::{
     app::{CachedMetadata, CachedResource},
@@ -15,8 +16,8 @@ use crate::{
 
 pub fn start_resource_watcher(
     folder: Arc<PathBuf>,
-    resources: Arc<StdRwLock<BTreeSet<String>>>,
-    resource_cache: Arc<StdRwLock<HashMap<String, CachedResource>>>,
+    resources: Arc<RwLock<BTreeSet<String>>>,
+    resource_cache: Arc<RwLock<HashMap<String, CachedResource>>>,
 ) {
     std::thread::spawn(move || {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -42,10 +43,12 @@ pub fn start_resource_watcher(
             match event {
                 Ok(event) => match scan_resources(&folder) {
                     Ok(new_resources) => {
-                        if let Ok(mut cache) = resources.write() {
+                        {
+                            let mut cache = resources.blocking_write();
                             *cache = new_resources;
                         }
-                        if let Ok(mut cache) = resource_cache.write() {
+                        {
+                            let mut cache = resource_cache.blocking_write();
                             for path in &event.paths {
                                 let is_json =
                                     path.extension().and_then(|ext| ext.to_str()) == Some("json");
