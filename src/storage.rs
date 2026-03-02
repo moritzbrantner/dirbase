@@ -1,12 +1,12 @@
 use std::{
     collections::BTreeSet,
-    fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use axum::http::StatusCode;
 use serde_json::Value;
+use tokio::fs;
 
 use crate::{
     app::{AppState, CachedMetadata, CachedResource},
@@ -14,9 +14,12 @@ use crate::{
     schema::{ColumnType, TableSchema, is_valid_identifier},
 };
 
-pub fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value>, AppError> {
+pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value>, AppError> {
     let file = resource_file_path(&state.folder, resource)?;
-    if !file.exists() {
+    if !fs::try_exists(&file)
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
         return Err(AppError::new(
             StatusCode::NOT_FOUND,
             format!("Resource '{resource}' not found"),
@@ -24,6 +27,7 @@ pub fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value>, App
     }
 
     let metadata = fs::metadata(&file)
+        .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let current_metadata = CachedMetadata {
         modified: metadata.modified().map_err(|e| {
@@ -35,38 +39,44 @@ pub fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value>, App
         len: metadata.len(),
     };
 
-    if let Some(value) = state.resource_cache.read().ok().and_then(|cache| {
-        cache
-            .get(resource)
-            .filter(|cached| cached.metadata == current_metadata)
-            .map(|cached| cached.value.clone())
-    }) {
+    if let Some(value) = state
+        .resource_cache
+        .read()
+        .await
+        .get(resource)
+        .and_then(|cached| (cached.metadata == current_metadata).then(|| cached.value.clone()))
+    {
         return Ok(value);
     }
 
     let raw = fs::read_to_string(&file)
+        .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let value = Arc::new(serde_json::from_str::<Value>(&raw).map_err(|e| {
         AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
     })?);
 
-    if let Ok(mut cache) = state.resource_cache.write() {
-        cache.insert(
-            resource.to_string(),
-            CachedResource { value: value.clone(), metadata: current_metadata },
-        );
-    }
+    state.resource_cache.write().await.insert(
+        resource.to_string(),
+        CachedResource { value: value.clone(), metadata: current_metadata },
+    );
     Ok(value)
 }
 
-pub fn write_resource(state: &AppState, resource: &str, value: &Value) -> Result<(), AppError> {
+pub async fn write_resource(
+    state: &AppState,
+    resource: &str,
+    value: &Value,
+) -> Result<(), AppError> {
     let file = resource_file_path(&state.folder, resource)?;
     let content = serde_json::to_string_pretty(value)
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     fs::write(&file, format!("{content}\n"))
+        .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let metadata = fs::metadata(&file)
+        .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let modified = metadata.modified().map_err(|e| {
         AppError::new(
@@ -75,21 +85,19 @@ pub fn write_resource(state: &AppState, resource: &str, value: &Value) -> Result
         )
     })?;
 
-    if let Ok(mut cache) = state.resource_cache.write() {
-        cache.insert(
-            resource.to_string(),
-            CachedResource {
-                value: Arc::new(value.clone()),
-                metadata: CachedMetadata { modified, len: metadata.len() },
-            },
-        );
-    }
+    state.resource_cache.write().await.insert(
+        resource.to_string(),
+        CachedResource {
+            value: Arc::new(value.clone()),
+            metadata: CachedMetadata { modified, len: metadata.len() },
+        },
+    );
     Ok(())
 }
 
 pub fn scan_resources(folder: &Path) -> Result<BTreeSet<String>, std::io::Error> {
     let mut resources = BTreeSet::new();
-    let entries = fs::read_dir(folder)?;
+    let entries = std::fs::read_dir(folder)?;
     for entry in entries {
         let path = entry?.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
@@ -105,10 +113,8 @@ pub fn scan_resources(folder: &Path) -> Result<BTreeSet<String>, std::io::Error>
     Ok(resources)
 }
 
-pub fn resource_exists(state: &AppState, resource: &str) -> Result<bool, AppError> {
-    state.resources.read().map(|resources| resources.contains(resource)).map_err(|_| {
-        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "Resource cache lock poisoned")
-    })
+pub async fn resource_exists(state: &AppState, resource: &str) -> Result<bool, AppError> {
+    Ok(state.resources.read().await.contains(resource))
 }
 
 pub fn validate_resource_data(
