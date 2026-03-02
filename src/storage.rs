@@ -1,7 +1,11 @@
 use std::{
     collections::BTreeSet,
+    fs::OpenOptions,
+    io::Write,
     path::{Path, PathBuf},
     sync::Arc,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::http::StatusCode;
@@ -71,9 +75,14 @@ pub async fn write_resource(
     let file = resource_file_path(&state.folder, resource)?;
     let content = serde_json::to_string_pretty(value)
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    fs::write(&file, format!("{content}\n"))
+    let payload = format!("{content}\n");
+
+    let file_for_write = file.clone();
+    tokio::task::spawn_blocking(move || write_json_atomically(&file_for_write, payload))
         .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Atomic write task failed: {e}"))
+    })??;
 
     let metadata = fs::metadata(&file)
         .await
@@ -92,6 +101,53 @@ pub async fn write_resource(
             metadata: CachedMetadata { modified, len: metadata.len() },
         },
     );
+    Ok(())
+}
+
+fn write_json_atomically(file: &Path, payload: String) -> Result<(), AppError> {
+    let temp_file = temp_file_path(file);
+    let mut handle = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp_file)
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    handle
+        .write_all(payload.as_bytes())
+        .and_then(|_| handle.flush())
+        .and_then(|_| handle.sync_all())
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    std::fs::rename(&temp_file, file)
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if let Some(parent) = file.parent() {
+        sync_parent_dir(parent)
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
+    Ok(())
+}
+
+fn temp_file_path(file: &Path) -> PathBuf {
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    let file_name = file.file_name().and_then(|name| name.to_str()).unwrap_or("resource.json");
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let unique_id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+    file.with_file_name(format!("{file_name}.tmp.{now}-{unique_id}"))
+}
+
+#[cfg(unix)]
+fn sync_parent_dir(parent: &Path) -> std::io::Result<()> {
+    std::fs::File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_parent: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -244,4 +300,60 @@ pub fn validate_sql_identifier(identifier: &str, kind: &str) -> Result<(), AppEr
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeSet, HashMap};
+
+    use tokio::sync::RwLock;
+
+    use super::*;
+    use crate::app::AppState;
+
+    fn test_state(folder: PathBuf) -> AppState {
+        AppState {
+            folder: Arc::new(folder),
+            resources: Arc::new(RwLock::new(BTreeSet::new())),
+            resource_cache: Arc::new(RwLock::new(HashMap::new())),
+            resource_locks: Arc::new(RwLock::new(HashMap::new())),
+            schema: Arc::new(None),
+        }
+    }
+
+    #[tokio::test]
+    async fn write_resource_survives_interrupted_temp_file_and_keeps_output_intact() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(temp.path().to_path_buf());
+        let resource = "users";
+
+        let target_file = temp.path().join("users.json");
+        std::fs::write(&target_file, "[{\"id\":1}]\n").expect("write initial resource");
+
+        let stale_temp = temp.path().join("users.json.tmp.crash-simulation");
+        std::fs::write(&stale_temp, "[{\"id\":").expect("write stale temp file");
+
+        let updated_value = serde_json::json!([
+            {"id": 2, "name": "Ada"},
+            {"id": 3, "name": "Lin"}
+        ]);
+        write_resource(&state, resource, &updated_value).await.expect("atomic write succeeds");
+
+        let final_text = std::fs::read_to_string(&target_file).expect("read final resource file");
+        let parsed: Value =
+            serde_json::from_str(&final_text).expect("final file should be valid json");
+        assert_eq!(parsed, updated_value);
+
+        let tmp_entries = std::fs::read_dir(temp.path())
+            .expect("list directory")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("users.json.tmp."))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(tmp_entries, vec![stale_temp]);
+    }
 }
