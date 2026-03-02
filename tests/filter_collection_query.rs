@@ -43,11 +43,8 @@ fn collection_supports_filtering_with_multiple_query_parameters() {
         "active": true
     }));
 
-    std::fs::write(
-        users_path,
-        serde_json::to_string_pretty(&users).expect("serialize fake users"),
-    )
-    .expect("write users json");
+    std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize fake users"))
+        .expect("write users json");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
         .arg("--folder")
@@ -87,11 +84,8 @@ fn collection_supports_sorting_by_multiple_columns() {
         {"id": 2, "name": "Bob", "role": "admin"}
     ]);
 
-    std::fs::write(
-        users_path,
-        serde_json::to_string_pretty(&users).expect("serialize users"),
-    )
-    .expect("write users json");
+    std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
+        .expect("write users json");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
         .arg("--folder")
@@ -137,11 +131,8 @@ fn collection_supports_operator_filters_nested_fields_desc_sort_and_pagination_k
         {"id": 4, "title": "hello api", "views": 200, "author": {"name": "Typicode"}}
     ]);
 
-    std::fs::write(
-        posts_path,
-        serde_json::to_string_pretty(&posts).expect("serialize posts"),
-    )
-    .expect("write posts json");
+    std::fs::write(posts_path, serde_json::to_string_pretty(&posts).expect("serialize posts"))
+        .expect("write posts json");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
         .arg("--folder")
@@ -194,11 +185,8 @@ fn collection_rejects_invalid_filter_operator_and_invalid_pagination_values() {
         {"id": 2, "name": "Bob", "role": "member"}
     ]);
 
-    std::fs::write(
-        users_path,
-        serde_json::to_string_pretty(&users).expect("serialize users"),
-    )
-    .expect("write users json");
+    std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
+        .expect("write users json");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
         .arg("--folder")
@@ -237,11 +225,8 @@ fn collection_clamps_pagination_page_to_last_page() {
         {"id": 3, "name": "Cara"}
     ]);
 
-    std::fs::write(
-        users_path,
-        serde_json::to_string_pretty(&users).expect("serialize users"),
-    )
-    .expect("write users json");
+    std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
+        .expect("write users json");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
         .arg("--folder")

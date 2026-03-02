@@ -38,10 +38,7 @@ fn school_examples_support_students_crud_end_to_end() {
     wait_for_server("127.0.0.1:3020", Duration::from_secs(5));
 
     let get_existing = http_request("GET", "127.0.0.1:3020", "/students/1", None);
-    assert!(
-        get_existing.starts_with("HTTP/1.1 200 OK\r\n"),
-        "{get_existing}"
-    );
+    assert!(get_existing.starts_with("HTTP/1.1 200 OK\r\n"), "{get_existing}");
     let existing_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&get_existing)).expect("valid json body");
     assert_eq!(existing_payload["name"], "Alice Johnson");
@@ -54,10 +51,7 @@ fn school_examples_support_students_crud_end_to_end() {
             r#"{"name":"Dina Patel","email":"dina.patel@example.edu","year":4,"major":"Biology"}"#,
         ),
     );
-    assert!(
-        post_response.starts_with("HTTP/1.1 201 Created\r\n"),
-        "{post_response}"
-    );
+    assert!(post_response.starts_with("HTTP/1.1 201 Created\r\n"), "{post_response}");
     let created_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&post_response)).expect("valid json body");
     let created_id = created_payload["id"].as_i64().expect("created id");
@@ -70,10 +64,7 @@ fn school_examples_support_students_crud_end_to_end() {
             r#"{{"id":{created_id},"name":"Dina Patel","email":"dina.patel@example.edu","year":4,"major":"Data Science"}}"#
         )),
     );
-    assert!(
-        put_response.starts_with("HTTP/1.1 200 OK\r\n"),
-        "{put_response}"
-    );
+    assert!(put_response.starts_with("HTTP/1.1 200 OK\r\n"), "{put_response}");
     let put_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&put_response)).expect("valid json body");
     assert_eq!(put_payload["major"], "Data Science");
@@ -84,35 +75,18 @@ fn school_examples_support_students_crud_end_to_end() {
         &format!("/students/{created_id}"),
         Some(r#"{"year":5}"#),
     );
-    assert!(
-        patch_response.starts_with("HTTP/1.1 200 OK\r\n"),
-        "{patch_response}"
-    );
+    assert!(patch_response.starts_with("HTTP/1.1 200 OK\r\n"), "{patch_response}");
     let patch_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&patch_response)).expect("valid json body");
     assert_eq!(patch_payload["year"], 5);
 
-    let delete_response = http_request(
-        "DELETE",
-        "127.0.0.1:3020",
-        &format!("/students/{created_id}"),
-        None,
-    );
-    assert!(
-        delete_response.starts_with("HTTP/1.1 204 No Content\r\n"),
-        "{delete_response}"
-    );
+    let delete_response =
+        http_request("DELETE", "127.0.0.1:3020", &format!("/students/{created_id}"), None);
+    assert!(delete_response.starts_with("HTTP/1.1 204 No Content\r\n"), "{delete_response}");
 
-    let get_deleted = http_request(
-        "GET",
-        "127.0.0.1:3020",
-        &format!("/students/{created_id}"),
-        None,
-    );
-    assert!(
-        get_deleted.starts_with("HTTP/1.1 404 Not Found\r\n"),
-        "{get_deleted}"
-    );
+    let get_deleted =
+        http_request("GET", "127.0.0.1:3020", &format!("/students/{created_id}"), None);
+    assert!(get_deleted.starts_with("HTTP/1.1 404 Not Found\r\n"), "{get_deleted}");
 
     let students_file =
         fs::read_to_string(temp.path().join("students.json")).expect("read students file");
@@ -121,9 +95,7 @@ fn school_examples_support_students_crud_end_to_end() {
 }
 
 fn copy_example_folder(example_name: &str, destination: &Path) {
-    let source_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("examples")
-        .join(example_name);
+    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples").join(example_name);
 
     for entry in fs::read_dir(source_root).expect("read example dir") {
         let entry = entry.expect("example entry");

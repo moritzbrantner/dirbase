@@ -47,19 +47,13 @@ pub fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value>, App
     let raw = fs::read_to_string(&file)
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let value = Arc::new(serde_json::from_str::<Value>(&raw).map_err(|e| {
-        AppError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Invalid JSON: {e}"),
-        )
+        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
     })?);
 
     if let Ok(mut cache) = state.resource_cache.write() {
         cache.insert(
             resource.to_string(),
-            CachedResource {
-                value: value.clone(),
-                metadata: current_metadata,
-            },
+            CachedResource { value: value.clone(), metadata: current_metadata },
         );
     }
     Ok(value)
@@ -86,10 +80,7 @@ pub fn write_resource(state: &AppState, resource: &str, value: &Value) -> Result
             resource.to_string(),
             CachedResource {
                 value: Arc::new(value.clone()),
-                metadata: CachedMetadata {
-                    modified,
-                    len: metadata.len(),
-                },
+                metadata: CachedMetadata { modified, len: metadata.len() },
             },
         );
     }
@@ -115,16 +106,9 @@ pub fn scan_resources(folder: &Path) -> Result<BTreeSet<String>, std::io::Error>
 }
 
 pub fn resource_exists(state: &AppState, resource: &str) -> Result<bool, AppError> {
-    state
-        .resources
-        .read()
-        .map(|resources| resources.contains(resource))
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Resource cache lock poisoned",
-            )
-        })
+    state.resources.read().map(|resources| resources.contains(resource)).map_err(|_| {
+        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "Resource cache lock poisoned")
+    })
 }
 
 pub fn validate_resource_data(
@@ -211,10 +195,7 @@ pub fn resource_file_path(folder: &Path, resource: &str) -> Result<PathBuf, AppE
 }
 
 pub fn is_valid_resource_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 pub fn find_item<'a>(items: &'a [Value], id: &str) -> Option<&'a Value> {
@@ -224,13 +205,11 @@ pub fn find_item_index(items: &[Value], id: &str) -> Option<usize> {
     items.iter().position(|item| id_matches(item, id))
 }
 fn id_matches(item: &Value, expected: &str) -> bool {
-    item.as_object()
-        .and_then(|obj| obj.get("id"))
-        .is_some_and(|id| match id {
-            Value::Number(n) => n.to_string() == expected,
-            Value::String(s) => s == expected,
-            _ => false,
-        })
+    item.as_object().and_then(|obj| obj.get("id")).is_some_and(|id| match id {
+        Value::Number(n) => n.to_string() == expected,
+        Value::String(s) => s == expected,
+        _ => false,
+    })
 }
 
 pub fn next_numeric_id(items: &[Value]) -> i64 {
@@ -247,9 +226,7 @@ pub fn coerce_id_value(id: &str, table: Option<&TableSchema>) -> Value {
         Some(column) if matches!(column.column_type, ColumnType::String) => {
             Value::String(id.to_string())
         }
-        _ => id
-            .parse::<i64>()
-            .map_or_else(|_| Value::String(id.to_string()), Value::from),
+        _ => id.parse::<i64>().map_or_else(|_| Value::String(id.to_string()), Value::from),
     }
 }
 

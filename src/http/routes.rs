@@ -57,19 +57,13 @@ pub fn build_router(state: AppState, readonly: bool, enable_log: bool) -> Router
             )
             .route(
                 "/{resource}/{id}",
-                get(get_item)
-                    .put(replace_item)
-                    .patch(patch_item)
-                    .delete(delete_item),
+                get(get_item).put(replace_item).patch(patch_item).delete(delete_item),
             )
             .with_state(state.clone())
     };
 
     if enable_log {
-        app.layer(middleware::from_fn_with_state(
-            state,
-            log_requests_middleware,
-        ))
+        app.layer(middleware::from_fn_with_state(state, log_requests_middleware))
     } else {
         app
     }
@@ -87,13 +81,9 @@ pub async fn log_requests_middleware(
     let status = response.status();
 
     if let Some(log_file) = &state.request_log {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or_default();
-        let suffix = query_hash
-            .map(|hash| format!(" query_hash={hash}"))
-            .unwrap_or_default();
+        let timestamp =
+            SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default();
+        let suffix = query_hash.map(|hash| format!(" query_hash={hash}")).unwrap_or_default();
         let line = format!("{timestamp} {method} {path} {}{suffix}\n", status.as_u16());
         if let Ok(mut file) = log_file.lock() {
             let _ = file.write_all(line.as_bytes());
@@ -111,10 +101,7 @@ pub async fn list_resources(State(state): State<AppState>) -> Result<Json<Value>
         .resources
         .read()
         .map_err(|_| {
-            AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Resource cache lock poisoned",
-            )
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "Resource cache lock poisoned")
         })?
         .iter()
         .cloned()
@@ -210,10 +197,7 @@ pub async fn replace_item(
     let object = payload
         .as_object_mut()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object"))?;
-    object.insert(
-        "id".to_string(),
-        coerce_id_value(&id, state.schema_table(&resource)?),
-    );
+    object.insert("id".to_string(), coerce_id_value(&id, state.schema_table(&resource)?));
     let replacement = Value::Object(object.clone());
     let position = find_item_index(array, &id)
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
@@ -381,10 +365,8 @@ fn embed_collection_data(
             )
         })?;
         if !target_resources.contains_key(&fk.target_table) {
-            target_resources.insert(
-                fk.target_table.clone(),
-                load_resource(state, &fk.target_table)?,
-            );
+            target_resources
+                .insert(fk.target_table.clone(), load_resource(state, &fk.target_table)?);
         }
         let target_items = target_resources
             .get(&fk.target_table)
@@ -398,10 +380,7 @@ fn embed_collection_data(
             .ok_or_else(|| {
                 AppError::new(
                     StatusCode::BAD_REQUEST,
-                    format!(
-                        "Embedded resource '{}' is not a JSON array",
-                        fk.target_table
-                    ),
+                    format!("Embedded resource '{}' is not a JSON array", fk.target_table),
                 )
             })?;
 
@@ -426,10 +405,7 @@ fn embed_collection_data(
                 continue;
             }
             let key = value_to_filter_string(&current_value);
-            let replacement = lookup
-                .get(&key)
-                .map(|row| (*row).clone())
-                .unwrap_or(Value::Null);
+            let replacement = lookup.get(&key).map(|row| (*row).clone()).unwrap_or(Value::Null);
             object.insert(embed.clone(), replacement);
         }
     }
@@ -441,10 +417,9 @@ fn request_query_hash(path: &str, query: Option<&str>) -> Option<String> {
         return None;
     }
     let query = query?;
-    let sql = query.split('&').find_map(|pair| {
-        pair.split_once('=')
-            .and_then(|(k, v)| (k == "q").then_some(v))
-    })?;
+    let sql = query
+        .split('&')
+        .find_map(|pair| pair.split_once('=').and_then(|(k, v)| (k == "q").then_some(v)))?;
     Some(stable_hash(sql))
 }
 
