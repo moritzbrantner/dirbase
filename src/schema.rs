@@ -37,10 +37,7 @@ pub enum ColumnType {
 }
 
 pub fn is_valid_identifier(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 fn normalize_identifier(name: &str) -> String {
@@ -75,11 +72,7 @@ fn resolve_schema_path(
     }
 
     let default = folder.join("schema.dbml");
-    if default.exists() {
-        Ok(Some(default))
-    } else {
-        Ok(None)
-    }
+    if default.exists() { Ok(Some(default)) } else { Ok(None) }
 }
 
 pub fn parse_dbml_schema(input: &str) -> Result<Schema, String> {
@@ -125,10 +118,7 @@ pub fn parse_dbml_schema(input: &str) -> Result<Schema, String> {
 
             current_table = Some((
                 name,
-                TableSchema {
-                    columns: BTreeMap::new(),
-                    foreign_keys: BTreeMap::new(),
-                },
+                TableSchema { columns: BTreeMap::new(), foreign_keys: BTreeMap::new() },
             ));
         }
     }
@@ -141,27 +131,17 @@ pub fn parse_dbml_schema(input: &str) -> Result<Schema, String> {
 }
 
 fn parse_column_line(line: &str) -> Result<(String, ColumnSchema), String> {
-    let mut parts = line
-        .splitn(3, char::is_whitespace)
-        .filter(|s| !s.is_empty());
-    let name = parts
-        .next()
-        .ok_or_else(|| "column name is missing".to_string())?;
+    let mut parts = line.splitn(3, char::is_whitespace).filter(|s| !s.is_empty());
+    let name = parts.next().ok_or_else(|| "column name is missing".to_string())?;
     if !is_valid_identifier(name.trim_matches('"')) {
         return Err(format!("invalid column name '{name}'"));
     }
-    let raw_type = parts
-        .next()
-        .ok_or_else(|| format!("column type is missing for '{name}'"))?;
+    let raw_type = parts.next().ok_or_else(|| format!("column type is missing for '{name}'"))?;
 
     let attrs = parts.next().unwrap_or_default().to_ascii_lowercase();
     let nullable = !attrs.contains("not null") && !attrs.contains("pk");
 
-    let normalized_type = raw_type
-        .split('(')
-        .next()
-        .unwrap_or(raw_type)
-        .to_ascii_lowercase();
+    let normalized_type = raw_type.split('(').next().unwrap_or(raw_type).to_ascii_lowercase();
     let column_type = match normalized_type.as_str() {
         "int" | "integer" | "smallint" | "bigint" | "serial" | "bigserial" => ColumnType::Integer,
         "float" | "double" | "decimal" | "real" | "numeric" => ColumnType::Float,
@@ -170,13 +150,7 @@ fn parse_column_line(line: &str) -> Result<(String, ColumnSchema), String> {
         _ => ColumnType::String,
     };
 
-    Ok((
-        normalize_identifier(name),
-        ColumnSchema {
-            column_type,
-            nullable,
-        },
-    ))
+    Ok((normalize_identifier(name), ColumnSchema { column_type, nullable }))
 }
 
 fn parse_inline_reference(line: &str) -> Option<ForeignKey> {
@@ -192,10 +166,7 @@ fn parse_inline_reference(line: &str) -> Option<ForeignKey> {
         return None;
     }
 
-    Some(ForeignKey {
-        target_table,
-        target_column,
-    })
+    Some(ForeignKey { target_table, target_column })
 }
 
 fn parse_ref_line(
@@ -214,31 +185,17 @@ fn parse_ref_line(
 
     match current_table {
         Some((name, table)) if *name == source_table => {
-            table.foreign_keys.insert(
-                source_column,
-                ForeignKey {
-                    target_table,
-                    target_column,
-                },
-            );
+            table.foreign_keys.insert(source_column, ForeignKey { target_table, target_column });
             return Ok(());
         }
         _ => {}
     }
 
     let Some(table) = tables.get_mut(&source_table) else {
-        return Err(format!(
-            "line {line_number}: Ref source table '{source_table}' not found"
-        ));
+        return Err(format!("line {line_number}: Ref source table '{source_table}' not found"));
     };
 
-    table.foreign_keys.insert(
-        source_column,
-        ForeignKey {
-            target_table,
-            target_column,
-        },
-    );
+    table.foreign_keys.insert(source_column, ForeignKey { target_table, target_column });
 
     Ok(())
 }
@@ -310,10 +267,7 @@ mod tests {
         .expect("parse schema");
 
         let posts = schema.tables.get("posts").expect("posts table");
-        let fk = posts
-            .foreign_keys
-            .get("user_id")
-            .expect("user_id foreign key");
+        let fk = posts.foreign_keys.get("user_id").expect("user_id foreign key");
         assert_eq!(fk.target_table, "users");
         assert_eq!(fk.target_column, "id");
     }

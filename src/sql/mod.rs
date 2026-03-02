@@ -142,10 +142,7 @@ async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, Ap
             .and_then(Value::as_array)
             .cloned()
             .ok_or_else(|| {
-                AppError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Invalid pagination payload",
-                )
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "Invalid pagination payload")
             })?
     } else {
         sorted
@@ -192,22 +189,17 @@ fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery, AppE
                 .offset
                 .map(|o| parse_sql_usize_literal(&o.value, "OFFSET"))
                 .transpose()?;
-            let limit = query_box
-                .limit
-                .map(|e| parse_sql_usize_literal(&e, "LIMIT"))
-                .transpose()?;
+            let limit =
+                query_box.limit.map(|e| parse_sql_usize_literal(&e, "LIMIT")).transpose()?;
             let pagination = match (limit, offset) {
                 (None, None) => None,
-                (Some(per_page), Some(offset)) => Some(Pagination {
-                    page: (offset / per_page) + 1,
-                    per_page,
-                }),
+                (Some(per_page), Some(offset)) => {
+                    Some(Pagination { page: (offset / per_page) + 1, per_page })
+                }
                 (Some(per_page), None) => Some(Pagination { page: 1, per_page }),
                 (None, Some(_)) => {
-                    return Err(
-                        AppError::new(StatusCode::BAD_REQUEST, "OFFSET requires LIMIT")
-                            .with_code("invalid_sql"),
-                    );
+                    return Err(AppError::new(StatusCode::BAD_REQUEST, "OFFSET requires LIMIT")
+                        .with_code("invalid_sql"));
                 }
             };
             if matches!(pagination.as_ref(), Some(p) if p.per_page > MAX_SQL_SELECTED_ROWS) {
@@ -222,18 +214,14 @@ fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery, AppE
                 SetExpr::Select(select) => {
                     parse_sql_select(*select, sort_columns, pagination, state)
                 }
-                _ => Err(AppError::new(
-                    StatusCode::BAD_REQUEST,
-                    "Only SELECT queries are supported",
-                )
-                .with_code("unsupported_feature")),
+                _ => {
+                    Err(AppError::new(StatusCode::BAD_REQUEST, "Only SELECT queries are supported")
+                        .with_code("unsupported_feature"))
+                }
             }
         }
-        _ => Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "Only SELECT statements are supported",
-        )
-        .with_code("unsupported_feature")),
+        _ => Err(AppError::new(StatusCode::BAD_REQUEST, "Only SELECT statements are supported")
+            .with_code("unsupported_feature")),
     }
 }
 
@@ -245,22 +233,16 @@ fn parse_sql_select(
 ) -> Result<ParsedSqlQuery, AppError> {
     if !matches!(select.group_by, sqlparser::ast::GroupByExpr::Expressions(ref exprs, _) if exprs.is_empty())
     {
-        return Err(
-            AppError::new(StatusCode::BAD_REQUEST, "GROUP BY is not supported")
-                .with_code("unsupported_feature"),
-        );
+        return Err(AppError::new(StatusCode::BAD_REQUEST, "GROUP BY is not supported")
+            .with_code("unsupported_feature"));
     }
     if select.having.is_some() {
-        return Err(
-            AppError::new(StatusCode::BAD_REQUEST, "HAVING is not supported")
-                .with_code("unsupported_feature"),
-        );
+        return Err(AppError::new(StatusCode::BAD_REQUEST, "HAVING is not supported")
+            .with_code("unsupported_feature"));
     }
     if select.distinct.is_some() {
-        return Err(
-            AppError::new(StatusCode::BAD_REQUEST, "DISTINCT is not supported")
-                .with_code("unsupported_feature"),
-        );
+        return Err(AppError::new(StatusCode::BAD_REQUEST, "DISTINCT is not supported")
+            .with_code("unsupported_feature"));
     }
     if select.from.len() != 1 {
         return Err(AppError::new(
@@ -271,10 +253,8 @@ fn parse_sql_select(
     }
     let from = &select.from[0];
     if !from.joins.is_empty() {
-        return Err(
-            AppError::new(StatusCode::BAD_REQUEST, "JOIN is not supported")
-                .with_code("unsupported_feature"),
-        );
+        return Err(AppError::new(StatusCode::BAD_REQUEST, "JOIN is not supported")
+            .with_code("unsupported_feature"));
     }
     let resource = match &from.relation {
         sqlparser::ast::TableFactor::Table { name, .. } => name
@@ -287,10 +267,8 @@ fn parse_sql_select(
             .value
             .clone(),
         _ => {
-            return Err(
-                AppError::new(StatusCode::BAD_REQUEST, "Unsupported FROM clause")
-                    .with_code("unsupported_feature"),
-            );
+            return Err(AppError::new(StatusCode::BAD_REQUEST, "Unsupported FROM clause")
+                .with_code("unsupported_feature"));
         }
     };
 
@@ -316,13 +294,7 @@ fn parse_sql_select(
         &filters,
         &sort_columns,
     )?;
-    Ok(ParsedSqlQuery {
-        resource,
-        selected_columns,
-        filters,
-        sort_columns,
-        pagination,
-    })
+    Ok(ParsedSqlQuery { resource, selected_columns, filters, sort_columns, pagination })
 }
 
 fn parse_sql_projection(projection: &[SelectItem]) -> Result<Option<Vec<String>>, AppError> {
@@ -392,11 +364,7 @@ fn parse_sql_where(expr: &Expr) -> Result<Vec<FilterCondition>, AppError> {
                     },
                 ));
             }
-            Ok(vec![FilterCondition {
-                field_path,
-                operator,
-                value,
-            }])
+            Ok(vec![FilterCondition { field_path, operator, value }])
         }
         Expr::IsNull(expr) => Ok(vec![FilterCondition {
             field_path: parse_sql_column_expr(expr)?,
@@ -428,10 +396,7 @@ fn parse_sql_column_expr(expr: &Expr) -> Result<String, AppError> {
             validate_sql_identifier(&column.value, "column")?;
             Ok(column.value.clone())
         }
-        _ => Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "Expected a column identifier",
-        )),
+        _ => Err(AppError::new(StatusCode::BAD_REQUEST, "Expected a column identifier")),
     }
 }
 
@@ -441,10 +406,7 @@ fn parse_sql_literal(expr: &Expr) -> Result<String, AppError> {
         Expr::UnaryOp { op, expr } if op.to_string() == "-" => {
             Ok(format!("-{}", parse_sql_literal(expr)?))
         }
-        _ => Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "Expected a literal value",
-        )),
+        _ => Err(AppError::new(StatusCode::BAD_REQUEST, "Expected a literal value")),
     }
 }
 fn parse_sql_value(value: &SqlValue) -> Result<String, AppError> {
@@ -453,10 +415,7 @@ fn parse_sql_value(value: &SqlValue) -> Result<String, AppError> {
         SqlValue::Number(v, _) => Ok(v.clone()),
         SqlValue::Boolean(v) => Ok(v.to_string()),
         SqlValue::Null => Ok("null".to_string()),
-        _ => Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "Unsupported literal value",
-        )),
+        _ => Err(AppError::new(StatusCode::BAD_REQUEST, "Unsupported literal value")),
     }
 }
 fn parse_sql_order_by(
@@ -479,16 +438,10 @@ fn parse_sql_order_by(
 fn parse_sql_usize_literal(expr: &Expr, clause: &str) -> Result<usize, AppError> {
     let value = parse_sql_literal(expr)?;
     let parsed = value.parse::<usize>().map_err(|_| {
-        AppError::new(
-            StatusCode::BAD_REQUEST,
-            format!("{clause} must be a non-negative integer"),
-        )
+        AppError::new(StatusCode::BAD_REQUEST, format!("{clause} must be a non-negative integer"))
     })?;
     if parsed == 0 && clause == "LIMIT" {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "LIMIT must be greater than 0",
-        ));
+        return Err(AppError::new(StatusCode::BAD_REQUEST, "LIMIT must be greater than 0"));
     }
     Ok(parsed)
 }
@@ -524,10 +477,7 @@ fn build_sql_export(state: &AppState, dialect: SqlExportDialect) -> Result<Strin
         .resources
         .read()
         .map_err(|_| {
-            AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Resource cache lock poisoned",
-            )
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "Resource cache lock poisoned")
         })?
         .iter()
         .cloned()
@@ -577,9 +527,7 @@ fn normalize_resource_rows(data: &Value) -> Result<Vec<BTreeMap<String, Value>>,
                         )
                     })
                     .map(|o| {
-                        o.iter()
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect::<BTreeMap<_, _>>()
+                        o.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<BTreeMap<_, _>>()
                     })
             })
             .collect(),
@@ -603,11 +551,8 @@ fn resolve_export_columns(
     resource: &str,
     rows: &[BTreeMap<String, Value>],
 ) -> Result<Vec<(String, ColumnSchema)>, AppError> {
-    if let Some(table) = state
-        .schema
-        .as_ref()
-        .as_ref()
-        .and_then(|schema| schema.tables.get(resource))
+    if let Some(table) =
+        state.schema.as_ref().as_ref().and_then(|schema| schema.tables.get(resource))
     {
         return Ok(table
             .columns
@@ -623,16 +568,15 @@ fn resolve_export_columns(
                 column_type: inferred_type.clone().unwrap_or(ColumnType::String),
                 nullable: false,
             });
-            if let Some(it) = inferred_type {
-                if entry.column_type != it {
-                    entry.column_type = ColumnType::String;
-                    if matches!(entry.column_type, ColumnType::String)
-                        && (matches!(it, ColumnType::Json)
-                            || matches!(entry.column_type, ColumnType::Json))
-                    {
-                        entry.column_type = ColumnType::Json;
-                    }
-                }
+            if let Some(it) = inferred_type
+                && entry.column_type != it
+            {
+                let entry_is_json = matches!(entry.column_type, ColumnType::Json);
+                entry.column_type = if matches!(it, ColumnType::Json) || entry_is_json {
+                    ColumnType::Json
+                } else {
+                    ColumnType::String
+                };
             }
             if value.is_null() {
                 entry.nullable = true;
@@ -694,20 +638,14 @@ fn build_insert_statement(
     row: BTreeMap<String, Value>,
     dialect: SqlExportDialect,
 ) -> String {
-    let col_sql = columns
-        .iter()
-        .map(|(name, _)| format!("\"{}\"", name))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let col_sql =
+        columns.iter().map(|(name, _)| format!("\"{}\"", name)).collect::<Vec<_>>().join(", ");
     let val_sql = columns
         .iter()
         .map(|(name, schema)| serialize_sql_value(row.get(name), &schema.column_type, dialect))
         .collect::<Vec<_>>()
         .join(", ");
-    format!(
-        "INSERT INTO \"{}\" ({}) VALUES ({});\n",
-        resource, col_sql, val_sql
-    )
+    format!("INSERT INTO \"{}\" ({}) VALUES ({});\n", resource, col_sql, val_sql)
 }
 
 fn serialize_sql_value(

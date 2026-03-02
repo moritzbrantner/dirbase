@@ -25,11 +25,7 @@ use storage::scan_resources;
 use watcher::start_resource_watcher;
 
 #[derive(Parser, Debug)]
-#[command(
-    author,
-    version,
-    about = "Serve all JSON files in a folder as a REST API"
-)]
+#[command(author, version, about = "Serve all JSON files in a folder as a REST API")]
 struct Cli {
     #[arg(short, long, default_value = "./data")]
     folder: PathBuf,
@@ -58,10 +54,7 @@ async fn main() {
     let cli = Cli::parse();
 
     if let Err(err) = fs::create_dir_all(&cli.folder) {
-        eprintln!(
-            "Failed to create data folder {}: {err}",
-            cli.folder.display()
-        );
+        eprintln!("Failed to create data folder {}: {err}", cli.folder.display());
         std::process::exit(1);
     }
 
@@ -81,11 +74,7 @@ async fn main() {
         resource_locks: Arc::new(RwLock::new(HashMap::new())),
         schema: Arc::new(schema),
         request_log: if cli.log {
-            match fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&cli.logname)
-            {
+            match fs::OpenOptions::new().create(true).append(true).open(&cli.logname) {
                 Ok(file) => Some(Arc::new(StdMutex::new(file))),
                 Err(err) => {
                     eprintln!("Failed to open log file {}: {err}", cli.logname.display());
@@ -106,8 +95,6 @@ async fn main() {
     let app = build_router(state.clone(), cli.readonly, cli.log);
     tracing::info!(readonly = cli.readonly, "Readonly mode");
     tracing::info!("Listening on http://{}", cli.bind);
-    let listener = tokio::net::TcpListener::bind(cli.bind)
-        .await
-        .expect("binding server listener");
+    let listener = tokio::net::TcpListener::bind(cli.bind).await.expect("binding server listener");
     axum::serve(listener, app).await.expect("running server");
 }

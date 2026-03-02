@@ -51,30 +51,18 @@ fn supports_all_array_resource_routes() {
     assert!(get_item.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(get_item.contains("\"id\":1"));
 
-    let post_item = http_request(
-        "127.0.0.1:3010",
-        "POST",
-        "/posts",
-        Some(r#"{"title":"new post"}"#),
-    );
+    let post_item =
+        http_request("127.0.0.1:3010", "POST", "/posts", Some(r#"{"title":"new post"}"#));
     assert!(post_item.starts_with("HTTP/1.1 201 Created\r\n"));
     assert!(post_item.contains("\"id\":2"));
 
-    let put_item = http_request(
-        "127.0.0.1:3010",
-        "PUT",
-        "/posts/2",
-        Some(r#"{"title":"updated"}"#),
-    );
+    let put_item =
+        http_request("127.0.0.1:3010", "PUT", "/posts/2", Some(r#"{"title":"updated"}"#));
     assert!(put_item.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(put_item.contains("\"title\":\"updated\""));
 
-    let patch_item = http_request(
-        "127.0.0.1:3010",
-        "PATCH",
-        "/posts/2",
-        Some(r#"{"status":"draft"}"#),
-    );
+    let patch_item =
+        http_request("127.0.0.1:3010", "PATCH", "/posts/2", Some(r#"{"status":"draft"}"#));
     assert!(patch_item.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(patch_item.contains("\"status\":\"draft\""));
 
@@ -118,12 +106,8 @@ fn supports_all_object_resource_routes() {
     assert!(put_profile.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(put_profile.contains("\"name\":\"Grace\""));
 
-    let patch_profile = http_request(
-        "127.0.0.1:3011",
-        "PATCH",
-        "/profile",
-        Some(r#"{"theme":"solarized"}"#),
-    );
+    let patch_profile =
+        http_request("127.0.0.1:3011", "PATCH", "/profile", Some(r#"{"theme":"solarized"}"#));
     assert!(patch_profile.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(patch_profile.contains("\"theme\":\"solarized\""));
 }
@@ -174,25 +158,12 @@ fn logging_writes_each_request_when_enabled() {
     wait_for_server("127.0.0.1:3012", Duration::from_secs(5));
 
     let _ = http_request("127.0.0.1:3012", "GET", "/posts", None);
-    let _ = http_request(
-        "127.0.0.1:3012",
-        "POST",
-        "/posts",
-        Some(r#"{"title":"logged"}"#),
-    );
+    let _ = http_request("127.0.0.1:3012", "POST", "/posts", Some(r#"{"title":"logged"}"#));
     let _ = http_request("127.0.0.1:3012", "GET", "/graphql", None);
-    let _ = http_request(
-        "127.0.0.1:3012",
-        "POST",
-        "/graphql",
-        Some(r#"{"query":"{ __typename }"}"#),
-    );
-    let _ = http_request(
-        "127.0.0.1:3012",
-        "GET",
-        "/sql?q=SELECT%20*%20FROM%20users%20LIMIT%201",
-        None,
-    );
+    let _ =
+        http_request("127.0.0.1:3012", "POST", "/graphql", Some(r#"{"query":"{ __typename }"}"#));
+    let _ =
+        http_request("127.0.0.1:3012", "GET", "/sql?q=SELECT%20*%20FROM%20users%20LIMIT%201", None);
     let _ = http_request(
         "127.0.0.1:3012",
         "GET",
@@ -207,14 +178,8 @@ fn logging_writes_each_request_when_enabled() {
     assert!(log_contents.contains("POST /posts 201"), "{log_contents}");
     assert!(log_contents.contains("GET /graphql 200"), "{log_contents}");
     assert!(log_contents.contains("POST /graphql 200"), "{log_contents}");
-    assert!(
-        log_contents.contains("GET /sql 200 query_hash="),
-        "{log_contents}"
-    );
-    assert!(
-        log_contents.contains("GET /export.sql 200 query_hash="),
-        "{log_contents}"
-    );
+    assert!(log_contents.contains("GET /sql 200 query_hash="), "{log_contents}");
+    assert!(log_contents.contains("GET /export.sql 200 query_hash="), "{log_contents}");
 }
 
 fn wait_for_server(addr: &str, timeout: Duration) {

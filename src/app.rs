@@ -56,10 +56,7 @@ impl AppState {
             .resources
             .read()
             .map_err(|_| {
-                AppError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Resource cache lock poisoned",
-                )
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "Resource cache lock poisoned")
             })?
             .iter()
             .cloned()
@@ -91,9 +88,6 @@ impl AppState {
         }
 
         let mut locks = self.resource_locks.write().await;
-        locks
-            .entry(resource.to_string())
-            .or_insert_with(|| Arc::new(RwLock::new(())))
-            .clone()
+        locks.entry(resource.to_string()).or_insert_with(|| Arc::new(RwLock::new(()))).clone()
     }
 }

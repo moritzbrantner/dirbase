@@ -28,11 +28,8 @@ fn sql_get_works_in_readonly_mode() {
         {"id": 3, "name": "Cara", "role": "admin", "age": 25}
     ]);
 
-    std::fs::write(
-        users_path,
-        serde_json::to_string_pretty(&users).expect("serialize users"),
-    )
-    .expect("write users json");
+    std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
+        .expect("write users json");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
         .arg("--folder")
@@ -72,11 +69,8 @@ fn sql_post_rejects_non_select_and_unsupported_constructs() {
         {"id": 1, "name": "Ada", "role": "admin"}
     ]);
 
-    std::fs::write(
-        users_path,
-        serde_json::to_string_pretty(&users).expect("serialize users"),
-    )
-    .expect("write users json");
+    std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
+        .expect("write users json");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
         .arg("--folder")
@@ -91,15 +85,9 @@ fn sql_post_rejects_non_select_and_unsupported_constructs() {
 
     wait_for_server("127.0.0.1:3011", Duration::from_secs(5));
 
-    let delete_response = http_post_json(
-        "127.0.0.1:3011",
-        "/sql",
-        serde_json::json!({"query": "DELETE FROM users"}),
-    );
-    assert!(
-        delete_response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
-        "{delete_response}"
-    );
+    let delete_response =
+        http_post_json("127.0.0.1:3011", "/sql", serde_json::json!({"query": "DELETE FROM users"}));
+    assert!(delete_response.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{delete_response}");
     let delete_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&delete_response)).expect("delete error json");
     assert_eq!(delete_payload["code"], "unsupported_feature");
@@ -109,10 +97,7 @@ fn sql_post_rejects_non_select_and_unsupported_constructs() {
         "/sql",
         serde_json::json!({"query": "SELECT * FROM users u JOIN teams t ON u.id=t.user_id"}),
     );
-    assert!(
-        join_response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
-        "{join_response}"
-    );
+    assert!(join_response.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{join_response}");
     let join_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&join_response)).expect("join error json");
     assert_eq!(join_payload["code"], "unsupported_feature");
@@ -136,14 +121,10 @@ fn wait_for_server(addr: &str, timeout: Duration) {
 fn http_get(addr: &str, path: &str) -> String {
     let mut stream = TcpStream::connect(addr).expect("connect to test server");
     let request = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
-    stream
-        .write_all(request.as_bytes())
-        .expect("write GET request");
+    stream.write_all(request.as_bytes()).expect("write GET request");
 
     let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .expect("read GET response");
+    stream.read_to_string(&mut response).expect("read GET response");
     response
 }
 
@@ -154,14 +135,10 @@ fn http_post_json(addr: &str, path: &str, payload: serde_json::Value) -> String 
         "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
-    stream
-        .write_all(request.as_bytes())
-        .expect("write POST request");
+    stream.write_all(request.as_bytes()).expect("write POST request");
 
     let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .expect("read POST response");
+    stream.read_to_string(&mut response).expect("read POST response");
     response
 }
 
@@ -183,11 +160,8 @@ fn sql_supports_is_null_and_projection_and_coercion() {
         {"id": 2, "name": "Bob", "age": 20, "nickname": "B"}
     ]);
 
-    std::fs::write(
-        users_path,
-        serde_json::to_string_pretty(&users).expect("serialize users"),
-    )
-    .expect("write users json");
+    std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
+        .expect("write users json");
 
     std::fs::write(
         schema_path,
@@ -224,10 +198,7 @@ fn sql_supports_is_null_and_projection_and_coercion() {
     let body = parse_http_body(&response);
     let payload: serde_json::Value = serde_json::from_str(body).expect("json payload");
     assert_eq!(payload["row_count"], 1);
-    assert_eq!(
-        payload["rows"][0],
-        serde_json::json!({"id": 1, "name": "Ada"})
-    );
+    assert_eq!(payload["rows"][0], serde_json::json!({"id": 1, "name": "Ada"}));
 }
 
 #[test]
@@ -250,17 +221,12 @@ fn sql_rejects_ambiguous_null_and_invalid_identifiers() {
 
     wait_for_server("127.0.0.1:3013", Duration::from_secs(5));
 
-    let null_cmp = http_get(
-        "127.0.0.1:3013",
-        "/sql?q=SELECT%20*%20FROM%20users%20WHERE%20name%20=%20NULL",
-    );
+    let null_cmp =
+        http_get("127.0.0.1:3013", "/sql?q=SELECT%20*%20FROM%20users%20WHERE%20name%20=%20NULL");
     assert!(null_cmp.contains("400 Bad Request"), "{null_cmp}");
 
     let bad_identifier = http_get("127.0.0.1:3013", "/sql?q=SELECT%20*%20FROM%20users$");
-    assert!(
-        bad_identifier.contains("400 Bad Request"),
-        "{bad_identifier}"
-    );
+    assert!(bad_identifier.contains("400 Bad Request"), "{bad_identifier}");
 }
 
 #[test]
@@ -305,11 +271,8 @@ fn sql_enforces_limit_guards() {
             .map(|id| serde_json::json!({"id": id, "name": format!("user-{id}")}))
             .collect::<Vec<_>>()
     );
-    std::fs::write(
-        users_path,
-        serde_json::to_string_pretty(&users).expect("serialize users"),
-    )
-    .expect("write users json");
+    std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
+        .expect("write users json");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
         .arg("--folder")
@@ -324,10 +287,7 @@ fn sql_enforces_limit_guards() {
 
     wait_for_server("127.0.0.1:3015", Duration::from_secs(5));
 
-    let over_limit = http_get(
-        "127.0.0.1:3015",
-        "/sql?q=SELECT%20*%20FROM%20users%20LIMIT%201001",
-    );
+    let over_limit = http_get("127.0.0.1:3015", "/sql?q=SELECT%20*%20FROM%20users%20LIMIT%201001");
     assert!(over_limit.contains("400 Bad Request"), "{over_limit}");
     let over_limit_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&over_limit)).expect("over limit payload");

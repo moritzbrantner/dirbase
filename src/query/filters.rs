@@ -80,10 +80,8 @@ pub fn parse_collection_query_params(
                         (false, column)
                     };
                     if !field_path.is_empty() {
-                        sort_columns.push(SortColumn {
-                            field_path: field_path.to_string(),
-                            descending,
-                        });
+                        sort_columns
+                            .push(SortColumn { field_path: field_path.to_string(), descending });
                     }
                 }
             }
@@ -109,11 +107,7 @@ pub fn parse_collection_query_params(
         }
 
         let (field_path, operator) = parse_filter_key(&key)?;
-        filters.push(FilterCondition {
-            field_path,
-            operator,
-            value,
-        });
+        filters.push(FilterCondition { field_path, operator, value });
     }
 
     let pagination = match (page, per_page) {
@@ -123,20 +117,12 @@ pub fn parse_collection_query_params(
         (None, Some(per_page)) => Some(Pagination { page: 1, per_page }),
     };
 
-    Ok(ParsedCollectionQuery {
-        filters,
-        sort_columns,
-        pagination,
-        embeds,
-    })
+    Ok(ParsedCollectionQuery { filters, sort_columns, pagination, embeds })
 }
 
 fn parse_positive_usize(key: &str, value: &str) -> Result<usize, AppError> {
     let parsed = value.parse::<usize>().map_err(|_| {
-        AppError::new(
-            StatusCode::BAD_REQUEST,
-            format!("Invalid value for '{key}': '{value}'"),
-        )
+        AppError::new(StatusCode::BAD_REQUEST, format!("Invalid value for '{key}': '{value}'"))
     })?;
     if parsed == 0 {
         return Err(AppError::new(
@@ -170,10 +156,7 @@ fn parse_filter_key(key: &str) -> Result<(String, FilterOperator), AppError> {
         }
     };
     if field_path.is_empty() {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            format!("Invalid filter key '{key}'"),
-        ));
+        return Err(AppError::new(StatusCode::BAD_REQUEST, format!("Invalid filter key '{key}'")));
     }
     Ok((field_path.to_string(), operator))
 }
@@ -187,11 +170,7 @@ pub fn filter_collection_data(
         .as_array()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
     Ok(Value::Array(
-        items
-            .iter()
-            .filter(|item| item_matches_filters(item, filters, table))
-            .cloned()
-            .collect(),
+        items.iter().filter(|item| item_matches_filters(item, filters, table)).cloned().collect(),
     ))
 }
 
@@ -209,19 +188,11 @@ pub fn paginate_collection_data(data: Value, pagination: Pagination) -> Result<V
         .as_array()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
     let total_items = items.len();
-    let pages = if total_items == 0 {
-        1
-    } else {
-        total_items.div_ceil(pagination.per_page)
-    };
+    let pages = if total_items == 0 { 1 } else { total_items.div_ceil(pagination.per_page) };
     let page = pagination.page.min(pages.max(1));
     let start = (page - 1) * pagination.per_page;
     let end = (start + pagination.per_page).min(total_items);
-    let data = if start < total_items {
-        items[start..end].to_vec()
-    } else {
-        Vec::new()
-    };
+    let data = if start < total_items { items[start..end].to_vec() } else { Vec::new() };
 
     Ok(serde_json::json!({
         "first": 1,
@@ -312,26 +283,20 @@ fn matches_filter(
             .is_some_and(|cmp| cmp == Ordering::Greater),
         FilterOperator::Gte => compare_with_expected(actual, &condition.value, column)
             .is_some_and(|cmp| cmp == Ordering::Greater || cmp == Ordering::Equal),
-        FilterOperator::In => condition
-            .value
-            .split(',')
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .any(|v| {
+        FilterOperator::In => {
+            condition.value.split(',').map(str::trim).filter(|v| !v.is_empty()).any(|v| {
                 compare_with_expected(actual, v, column).is_some_and(|cmp| cmp == Ordering::Equal)
-            }),
-        FilterOperator::Contains => actual.as_str().is_some_and(|text| {
-            text.to_lowercase()
-                .contains(&condition.value.to_lowercase())
-        }),
-        FilterOperator::StartsWith => actual.as_str().is_some_and(|text| {
-            text.to_lowercase()
-                .starts_with(&condition.value.to_lowercase())
-        }),
-        FilterOperator::EndsWith => actual.as_str().is_some_and(|text| {
-            text.to_lowercase()
-                .ends_with(&condition.value.to_lowercase())
-        }),
+            })
+        }
+        FilterOperator::Contains => actual
+            .as_str()
+            .is_some_and(|text| text.to_lowercase().contains(&condition.value.to_lowercase())),
+        FilterOperator::StartsWith => actual
+            .as_str()
+            .is_some_and(|text| text.to_lowercase().starts_with(&condition.value.to_lowercase())),
+        FilterOperator::EndsWith => actual
+            .as_str()
+            .is_some_and(|text| text.to_lowercase().ends_with(&condition.value.to_lowercase())),
     }
 }
 fn compare_with_expected(

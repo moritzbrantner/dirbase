@@ -21,11 +21,7 @@ struct ErrorBody {
 
 impl AppError {
     pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        Self {
-            status,
-            message: message.into(),
-            code: None,
-        }
+        Self { status, message: message.into(), code: None }
     }
 
     pub fn with_code(mut self, code: &'static str) -> Self {
@@ -36,13 +32,6 @@ impl AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(ErrorBody {
-                error: self.message,
-                code: self.code,
-            }),
-        )
-            .into_response()
+        (self.status, Json(ErrorBody { error: self.message, code: self.code })).into_response()
     }
 }

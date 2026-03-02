@@ -125,6 +125,24 @@ npx folder-server --folder ./data --bind 127.0.0.1:3000
 - Object resources support `GET /{resource}`, `PUT /{resource}`, and `PATCH /{resource}`.
 - Invalid JSON in a file returns a 500 with an error payload.
 
+## Rust toolchain and formatting
+
+This repo pins the Rust toolchain in `rust-toolchain.toml` and includes `rustfmt` + `clippy` as required components.
+
+### One-time local setup
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This enables the repository's `pre-commit` hook, which runs `cargo fmt --all` automatically before every commit (and stages formatting changes).
+
+### Editor / Codex format-on-save
+
+Workspace settings are provided in `.vscode/settings.json` to enable format-on-save for Rust via rust-analyzer + rustfmt.
+
+If your editor uses different settings, configure it to run `cargo fmt --all` on save.
+
 ## Development checks
 
 Before committing or opening a PR, always run linting and tests:
