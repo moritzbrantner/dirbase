@@ -135,6 +135,34 @@ fn graphql_endpoint_is_available() {
 }
 
 #[test]
+fn readonly_mode_rejects_post_for_graphql_and_sql() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(temp.path().join("users.json"), "[]\n").expect("write users");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3014")
+        .arg("--readonly")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3014", Duration::from_secs(5));
+
+    let post_graphql =
+        http_request("127.0.0.1:3014", "POST", "/graphql", Some(r#"{"query":"{ __typename }"}"#));
+    assert!(post_graphql.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"), "{post_graphql}");
+
+    let post_sql =
+        http_request("127.0.0.1:3014", "POST", "/sql", Some(r#"{"query":"SELECT * FROM users"}"#));
+    assert!(post_sql.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"), "{post_sql}");
+}
+
+#[test]
 fn logging_writes_each_request_when_enabled() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(temp.path().join("posts.json"), "[]\n").expect("write posts");
