@@ -193,7 +193,7 @@ fn export_sql_respects_schema_when_present() {
 }
 
 #[test]
-fn readonly_mode_allows_sql_and_export_and_blocks_mutation_sql() {
+fn readonly_mode_allows_sql_and_export_and_rejects_post_sql() {
     let temp = tempfile::tempdir().expect("create temp directory");
     std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
         .expect("write users");
@@ -207,15 +207,12 @@ fn readonly_mode_allows_sql_and_export_and_blocks_mutation_sql() {
     assert!(export.starts_with("HTTP/1.1 200 OK\r\n"), "{export}");
     assert!(parse_http_body(&export).contains("INSERT INTO \"users\""), "{export}");
 
-    let mutation_sql = http_post_json(
+    let post_sql = http_post_json(
         "127.0.0.1:3024",
         "/sql",
-        serde_json::json!({"query": "INSERT INTO users (id, name) VALUES (2, 'Bob')"}),
+        serde_json::json!({"query": "SELECT * FROM users LIMIT 1"}),
     );
-    assert!(mutation_sql.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{mutation_sql}");
-    let mutation_payload: serde_json::Value =
-        serde_json::from_str(parse_http_body(&mutation_sql)).expect("mutation payload");
-    assert_eq!(mutation_payload["code"], "unsupported_feature");
+    assert!(post_sql.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"), "{post_sql}");
 }
 
 fn start_server(folder: &std::path::Path, port: u16, readonly: bool) -> ChildGuard {

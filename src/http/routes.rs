@@ -33,8 +33,8 @@ pub fn build_router(state: AppState, readonly: bool, enable_log: bool) -> Router
     let app = if readonly {
         Router::new()
             .route("/", get(list_resources))
-            .route("/graphql", get(graphql).post(graphql))
-            .route("/sql", get(sql_query).post(sql_query_post))
+            .route("/graphql", get(graphql))
+            .route("/sql", get(sql_query))
             .route("/export.sql", get(export_sql))
             .route("/sql/export", get(export_sql))
             .route("/{resource}", get(get_collection))
