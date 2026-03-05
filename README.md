@@ -10,6 +10,8 @@
 - the file name becomes the route name,
 - writes are persisted back to the same file.
 
+You can also point `folder-server` directly at a single JSON database file (for example `db.json`) with `--file`. In that mode, each top-level key in the file is served as a resource, like `json-server`.
+
 So if the folder contains:
 
 - `users.json`
@@ -72,6 +74,9 @@ cargo run -- --folder ./data --bind 127.0.0.1:3000 --readonly
 
 # Explicit schema file (if not using ./data/schema.dbml)
 cargo run -- --folder ./data --schema ./schema.dbml
+
+# Serve a single json-server-style database file
+cargo run -- --file ./db.json --bind 127.0.0.1:3000
 ```
 
 ### 3) Try the API

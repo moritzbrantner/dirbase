@@ -21,8 +21,10 @@ use watcher::start_resource_watcher;
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Serve all JSON files in a folder as a REST API")]
 struct Cli {
-    #[arg(short, long, default_value = "./data")]
-    folder: PathBuf,
+    #[arg(short, long, conflicts_with = "file")]
+    folder: Option<PathBuf>,
+    #[arg(long, conflicts_with = "folder")]
+    file: Option<PathBuf>,
     #[arg(short, long, default_value = "127.0.0.1:3000")]
     bind: SocketAddr,
     #[arg(long)]
@@ -59,12 +61,29 @@ async fn main() {
         None
     };
 
-    if let Err(err) = tokio::fs::create_dir_all(&cli.folder).await {
-        eprintln!("Failed to create data folder {}: {err}", cli.folder.display());
-        std::process::exit(1);
-    }
+    let data_source = if let Some(file) = cli.file.clone() {
+        if let Err(err) = tokio::fs::try_exists(&file).await {
+            eprintln!("Failed to inspect data file {}: {err}", file.display());
+            std::process::exit(1);
+        }
+        app::DataSource::File(file)
+    } else {
+        let folder = cli.folder.clone().unwrap_or_else(|| PathBuf::from("./data"));
+        if let Err(err) = tokio::fs::create_dir_all(&folder).await {
+            eprintln!("Failed to create data folder {}: {err}", folder.display());
+            std::process::exit(1);
+        }
+        app::DataSource::Folder(folder)
+    };
 
-    let schema = match load_schema(&cli.folder, cli.schema.as_deref()) {
+    let schema_root = match &data_source {
+        app::DataSource::Folder(folder) => folder.clone(),
+        app::DataSource::File(file) => {
+            file.parent().map(|parent| parent.to_path_buf()).unwrap_or_else(|| PathBuf::from("."))
+        }
+    };
+
+    let schema = match load_schema(&schema_root, cli.schema.as_deref()) {
         Ok(schema) => schema,
         Err(err) => {
             eprintln!("Failed to load schema: {err}");
@@ -72,9 +91,9 @@ async fn main() {
         }
     };
 
-    let initial_resources = scan_resources(&cli.folder).unwrap_or_default();
+    let initial_resources = scan_resources(&data_source).unwrap_or_default();
     let state = AppState {
-        folder: Arc::new(cli.folder),
+        data_source: Arc::new(data_source),
         resources: Arc::new(RwLock::new(initial_resources)),
         resource_cache: Arc::new(RwLock::new(HashMap::new())),
         resource_locks: Arc::new(RwLock::new(HashMap::new())),
@@ -82,7 +101,7 @@ async fn main() {
     };
 
     start_resource_watcher(
-        state.folder.clone(),
+        state.data_source.clone(),
         state.resources.clone(),
         state.resource_cache.clone(),
     );
