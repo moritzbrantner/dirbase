@@ -467,6 +467,45 @@ mod tests {
             ("title_eq".to_string(), "a".to_string()),
         ])
         .expect("parse");
+    }
+  
+    fn parses_where_like_json_server_cases() {
+        let parsed = parse_collection_query_params(vec![
+            ("views:gt".to_string(), "100".to_string()),
+            ("title:eq".to_string(), "a".to_string()),
+            ("views_lt".to_string(), "300".to_string()),
+            ("first_name_eq".to_string(), "Alice".to_string()),
+            ("author.first_name_ne".to_string(), "Bob".to_string()),
+            ("title".to_string(), "hello".to_string()),
+            ("id:in".to_string(), "1,3".to_string()),
+            ("title:contains".to_string(), "ell".to_string()),
+            ("title:startsWith".to_string(), "he".to_string()),
+            ("title:endsWith".to_string(), "lo".to_string()),
+        ])
+        .expect("parse");
+
+        let by_field = |name: &str| parsed.filters.iter().find(|f| f.field_path == name).unwrap();
+        let view_operators = parsed
+            .filters
+            .iter()
+            .filter(|f| f.field_path == "views")
+            .map(|f| f.operator)
+            .collect::<Vec<_>>();
+        assert!(view_operators.contains(&FilterOperator::Gt));
+        assert!(view_operators.contains(&FilterOperator::Lt));
+        assert_eq!(by_field("title").operator, FilterOperator::Eq);
+        assert_eq!(by_field("first_name").operator, FilterOperator::Eq);
+        assert_eq!(by_field("author.first_name").operator, FilterOperator::Ne);
+        assert_eq!(by_field("id").operator, FilterOperator::In);
+    }
+
+    #[test]
+    fn ignores_unknown_underscore_suffix_as_plain_field() {
+        let parsed = parse_collection_query_params(vec![
+            ("views_foo".to_string(), "100".to_string()),
+            ("title_eq".to_string(), "a".to_string()),
+        ])
+        .expect("parse");
 
         assert_eq!(parsed.filters[0].field_path, "views_foo");
         assert_eq!(parsed.filters[0].operator, FilterOperator::Eq);
@@ -630,6 +669,7 @@ mod tests {
             })
             .collect()
     }
+  
     #[test]
     fn paginates_like_json_server_boundaries() {
         let p1 =
