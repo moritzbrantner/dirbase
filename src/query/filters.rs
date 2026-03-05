@@ -134,31 +134,51 @@ fn parse_positive_usize(key: &str, value: &str) -> Result<usize, AppError> {
 }
 
 fn parse_filter_key(key: &str) -> Result<(String, FilterOperator), AppError> {
-    let Some((field_path, operator)) = key.split_once(':') else {
-        return Ok((key.to_string(), FilterOperator::Eq));
-    };
-    let operator = match operator {
-        "eq" => FilterOperator::Eq,
-        "ne" => FilterOperator::Ne,
-        "lt" => FilterOperator::Lt,
-        "lte" => FilterOperator::Lte,
-        "gt" => FilterOperator::Gt,
-        "gte" => FilterOperator::Gte,
-        "in" => FilterOperator::In,
-        "contains" => FilterOperator::Contains,
-        "startsWith" => FilterOperator::StartsWith,
-        "endsWith" => FilterOperator::EndsWith,
-        _ => {
-            return Err(AppError::new(
+    if let Some((field_path, operator)) = key.split_once(':') {
+        let operator = parse_operator(operator).ok_or_else(|| {
+            AppError::new(
                 StatusCode::BAD_REQUEST,
                 format!("Unsupported filter operator '{operator}' in '{key}'"),
+            )
+        })?;
+
+        if field_path.is_empty() {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                format!("Invalid filter key '{key}'"),
             ));
         }
-    };
-    if field_path.is_empty() {
+        return Ok((field_path.to_string(), operator));
+    }
+
+    if let Some((field_path, operator)) = key.rsplit_once('_')
+        && !field_path.is_empty()
+        && let Some(operator) = parse_operator(operator)
+    {
+        return Ok((field_path.to_string(), operator));
+    }
+
+    if key.is_empty() {
         return Err(AppError::new(StatusCode::BAD_REQUEST, format!("Invalid filter key '{key}'")));
     }
-    Ok((field_path.to_string(), operator))
+
+    Ok((key.to_string(), FilterOperator::Eq))
+}
+
+fn parse_operator(operator: &str) -> Option<FilterOperator> {
+    match operator {
+        "eq" => Some(FilterOperator::Eq),
+        "ne" => Some(FilterOperator::Ne),
+        "lt" => Some(FilterOperator::Lt),
+        "lte" => Some(FilterOperator::Lte),
+        "gt" => Some(FilterOperator::Gt),
+        "gte" => Some(FilterOperator::Gte),
+        "in" => Some(FilterOperator::In),
+        "contains" => Some(FilterOperator::Contains),
+        "startsWith" => Some(FilterOperator::StartsWith),
+        "endsWith" => Some(FilterOperator::EndsWith),
+        _ => None,
+    }
 }
 
 pub fn filter_collection_data(
@@ -189,7 +209,7 @@ pub fn paginate_collection_data(data: Value, pagination: Pagination) -> Result<V
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
     let total_items = items.len();
     let pages = if total_items == 0 { 1 } else { total_items.div_ceil(pagination.per_page) };
-    let page = pagination.page.min(pages.max(1));
+    let page = pagination.page.max(1).min(pages.max(1));
     let start = (page - 1) * pagination.per_page;
     let end = (start + pagination.per_page).min(total_items);
     let data = if start < total_items { items[start..end].to_vec() } else { Vec::new() };
@@ -402,20 +422,126 @@ pub fn value_to_filter_string(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
-    fn splits_query_params_into_filters_and_sort_columns() {
+    fn parses_where_like_json_server_cases() {
         let parsed = parse_collection_query_params(vec![
-            ("role".to_string(), "admin".to_string()),
-            ("_sort".to_string(), "-role,name".to_string()),
-            ("_page".to_string(), "2".to_string()),
-            ("_per_page".to_string(), "25".to_string()),
+            ("views:gt".to_string(), "100".to_string()),
+            ("title:eq".to_string(), "a".to_string()),
+            ("views_lt".to_string(), "300".to_string()),
+            ("first_name_eq".to_string(), "Alice".to_string()),
+            ("author.first_name_ne".to_string(), "Bob".to_string()),
+            ("title".to_string(), "hello".to_string()),
+            ("id:in".to_string(), "1,3".to_string()),
+            ("title:contains".to_string(), "ell".to_string()),
+            ("title:startsWith".to_string(), "he".to_string()),
+            ("title:endsWith".to_string(), "lo".to_string()),
         ])
         .expect("parse");
 
-        assert_eq!(parsed.filters.len(), 1);
-        assert_eq!(parsed.sort_columns.len(), 2);
-        assert_eq!(parsed.pagination.expect("pagination").page, 2);
+        let by_field = |name: &str| parsed.filters.iter().find(|f| f.field_path == name).unwrap();
+        let view_operators = parsed
+            .filters
+            .iter()
+            .filter(|f| f.field_path == "views")
+            .map(|f| f.operator)
+            .collect::<Vec<_>>();
+        assert!(view_operators.contains(&FilterOperator::Gt));
+        assert!(view_operators.contains(&FilterOperator::Lt));
+        assert_eq!(by_field("title").operator, FilterOperator::Eq);
+        assert_eq!(by_field("first_name").operator, FilterOperator::Eq);
+        assert_eq!(by_field("author.first_name").operator, FilterOperator::Ne);
+        assert_eq!(by_field("id").operator, FilterOperator::In);
+    }
+
+    #[test]
+    fn ignores_unknown_underscore_suffix_as_plain_field() {
+        let parsed = parse_collection_query_params(vec![
+            ("views_foo".to_string(), "100".to_string()),
+            ("title_eq".to_string(), "a".to_string()),
+        ])
+        .expect("parse");
+
+        assert_eq!(parsed.filters[0].field_path, "views_foo");
+        assert_eq!(parsed.filters[0].operator, FilterOperator::Eq);
+        assert_eq!(parsed.filters[1].field_path, "title");
+        assert_eq!(parsed.filters[1].operator, FilterOperator::Eq);
+    }
+
+    #[test]
+    fn matches_where_like_operators() {
+        let obj = json!({"a": 10, "b": 20, "c": "x", "nested": {"a": 10, "b": 20}});
+
+        let cases = [
+            (vec![("a:eq", "10")], true),
+            (vec![("a:eq", "11")], false),
+            (vec![("c:ne", "y")], true),
+            (vec![("c:ne", "x")], false),
+            (vec![("a:lt", "11")], true),
+            (vec![("a:lt", "10")], false),
+            (vec![("a:lte", "10")], true),
+            (vec![("a:lte", "9")], false),
+            (vec![("b:gt", "19")], true),
+            (vec![("b:gt", "20")], false),
+            (vec![("b:gte", "20")], true),
+            (vec![("b:gte", "21")], false),
+            (vec![("nested.a:eq", "10")], true),
+            (vec![("nested.b:lt", "20")], false),
+            (vec![("a:in", "10,11")], true),
+            (vec![("a:in", "1,2")], false),
+            (vec![("c:contains", "X")], true),
+            (vec![("c:startsWith", "X")], true),
+            (vec![("c:endsWith", "X")], true),
+        ];
+
+        for (filters, expected) in cases {
+            let parsed = parse_collection_query_params(
+                filters.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>(),
+            )
+            .expect("parse");
+            let matches = filter_collection_data(json!([obj.clone()]), &parsed.filters, None)
+                .expect("filter")
+                .as_array()
+                .expect("array")
+                .len()
+                == 1;
+            assert_eq!(matches, expected, "filters: {filters:?}");
+        }
+    }
+
+    #[test]
+    fn paginates_like_json_server_boundaries() {
+        let p1 =
+            paginate_collection_data(json!([1, 2, 3, 4, 5]), Pagination { page: 1, per_page: 2 })
+                .expect("paginate");
+        assert_eq!(p1["first"], 1);
+        assert_eq!(p1["prev"], Value::Null);
+        assert_eq!(p1["next"], 2);
+        assert_eq!(p1["last"], 3);
+        assert_eq!(p1["pages"], 3);
+        assert_eq!(p1["items"], 5);
+        assert_eq!(p1["data"], json!([1, 2]));
+
+        let p2 =
+            paginate_collection_data(json!([1, 2, 3, 4, 5]), Pagination { page: 2, per_page: 2 })
+                .expect("paginate");
+        assert_eq!(p2["prev"], 1);
+        assert_eq!(p2["next"], 3);
+        assert_eq!(p2["data"], json!([3, 4]));
+
+        let plast =
+            paginate_collection_data(json!([1, 2, 3, 4, 5]), Pagination { page: 9, per_page: 2 })
+                .expect("paginate");
+        assert_eq!(plast["prev"], 2);
+        assert_eq!(plast["next"], Value::Null);
+        assert_eq!(plast["data"], json!([5]));
+
+        let p0 = paginate_collection_data(json!([1, 2, 3]), Pagination { page: 0, per_page: 2 })
+            .expect("paginate");
+        assert_eq!(p0["page"], 1);
+        assert_eq!(p0["data"], json!([1, 2]));
     }
 }
