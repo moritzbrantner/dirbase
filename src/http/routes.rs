@@ -33,7 +33,6 @@ pub fn build_router(state: AppState, readonly: bool, enable_log: bool) -> Router
     let app = if readonly {
         Router::new()
             .route("/", get(list_resources))
-            .route("/graphql", get(graphql))
             .route("/sql", get(sql_query))
             .route("/export.sql", get(export_sql))
             .route("/sql/export", get(export_sql))
@@ -43,7 +42,6 @@ pub fn build_router(state: AppState, readonly: bool, enable_log: bool) -> Router
     } else {
         Router::new()
             .route("/", get(list_resources))
-            .route("/graphql", get(graphql).post(graphql))
             .route("/sql", get(sql_query).post(sql_query_post))
             .route("/export.sql", get(export_sql))
             .route("/sql/export", get(export_sql))
@@ -85,10 +83,6 @@ pub async fn log_requests_middleware(
     let line = format!("{timestamp} {method} {path} {}{suffix}", status.as_u16());
     tracing::info!(target: "folder_server::request", "{line}");
     response
-}
-
-pub async fn graphql() -> Json<Value> {
-    Json(serde_json::json!({"name":"graphql","path":"/graphql"}))
 }
 
 pub async fn list_resources(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
