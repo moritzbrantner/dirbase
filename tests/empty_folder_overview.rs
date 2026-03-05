@@ -1,6 +1,6 @@
 use std::{
     io::{Read, Write},
-    net::TcpStream,
+    net::{TcpListener, TcpStream},
     process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -20,21 +20,22 @@ impl Drop for ChildGuard {
 #[test]
 fn empty_folder_returns_empty_overview_on_root() {
     let temp = tempfile::tempdir().expect("create temp directory");
+    let bind_addr = reserve_bind_addr();
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
         .arg("--folder")
         .arg(temp.path())
         .arg("--bind")
-        .arg("127.0.0.1:3000")
+        .arg(&bind_addr)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("start folder-server");
     let _child = ChildGuard { child };
 
-    wait_for_server("127.0.0.1:3000", Duration::from_secs(5));
+    wait_for_server(&bind_addr, Duration::from_secs(5));
 
-    let response = http_get("127.0.0.1:3000", "/");
+    let response = http_get(&bind_addr, "/");
 
     assert!(
         response.starts_with("HTTP/1.1 200 OK\r\n"),
@@ -44,6 +45,14 @@ fn empty_folder_returns_empty_overview_on_root() {
         response.contains("{\"resources\":[]}"),
         "expected empty overview body, got: {response}"
     );
+}
+
+fn reserve_bind_addr() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind to an ephemeral local port");
+    let addr = listener
+        .local_addr()
+        .expect("read ephemeral bind address");
+    format!("127.0.0.1:{}", addr.port())
 }
 
 fn wait_for_server(addr: &str, timeout: Duration) {
