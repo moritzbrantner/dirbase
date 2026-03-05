@@ -426,6 +426,9 @@ mod tests {
 
     use super::*;
 
+    type ParseExpectation<'a> = (&'a str, FilterOperator, &'a str);
+    type ParseCase<'a> = (&'a str, Vec<ParseExpectation<'a>>);
+
     #[test]
     fn parses_where_like_json_server_cases() {
         let parsed = parse_collection_query_params(vec![
@@ -514,7 +517,7 @@ mod tests {
 
     #[test]
     fn parses_filter_queries_in_json_server_style() {
-        let cases: Vec<(&str, Vec<(&str, FilterOperator, &str)>)> = vec![
+        let cases: Vec<ParseCase<'_>> = vec![
             (
                 "views:gt=100&title:eq=a",
                 vec![("views", FilterOperator::Gt, "100"), ("title", FilterOperator::Eq, "a")],
