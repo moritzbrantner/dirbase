@@ -15,8 +15,14 @@ use axum::http::StatusCode;
 use serde_json::Value;
 
 #[derive(Clone)]
+pub enum DataSource {
+    Folder(PathBuf),
+    File(PathBuf),
+}
+
+#[derive(Clone)]
 pub struct AppState {
-    pub folder: Arc<PathBuf>,
+    pub data_source: Arc<DataSource>,
     pub resources: Arc<RwLock<BTreeSet<String>>>,
     pub resource_cache: Arc<RwLock<HashMap<String, CachedResource>>>,
     pub resource_locks: Arc<RwLock<HashMap<String, Arc<RwLock<()>>>>>,

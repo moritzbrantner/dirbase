@@ -13,13 +13,13 @@ use serde_json::Value;
 use tokio::fs;
 
 use crate::{
-    app::{AppState, CachedMetadata, CachedResource},
+    app::{AppState, CachedMetadata, CachedResource, DataSource},
     error::AppError,
     schema::{ColumnType, TableSchema, is_valid_identifier},
 };
 
 pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value>, AppError> {
-    let file = resource_file_path(&state.folder, resource)?;
+    let file = resource_file_path(&state.data_source, resource)?;
     if !fs::try_exists(&file)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -53,12 +53,27 @@ pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value
         return Ok(value);
     }
 
-    let raw = fs::read_to_string(&file)
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let value = Arc::new(serde_json::from_str::<Value>(&raw).map_err(|e| {
-        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
-    })?);
+    let value = Arc::new(match &*state.data_source {
+        DataSource::Folder(_) => {
+            let raw = fs::read_to_string(&file)
+                .await
+                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            serde_json::from_str::<Value>(&raw).map_err(|e| {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
+            })?
+        }
+        DataSource::File(_) => {
+            let raw = fs::read_to_string(&file)
+                .await
+                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            let root: Value = serde_json::from_str(&raw).map_err(|e| {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
+            })?;
+            root.as_object().and_then(|obj| obj.get(resource).cloned()).ok_or_else(|| {
+                AppError::new(StatusCode::NOT_FOUND, format!("Resource '{resource}' not found"))
+            })?
+        }
+    });
 
     state.resource_cache.write().await.insert(
         resource.to_string(),
@@ -72,10 +87,31 @@ pub async fn write_resource(
     resource: &str,
     value: &Value,
 ) -> Result<(), AppError> {
-    let file = resource_file_path(&state.folder, resource)?;
-    let content = serde_json::to_string_pretty(value)
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let payload = format!("{content}\n");
+    let file = resource_file_path(&state.data_source, resource)?;
+
+    let payload = match &*state.data_source {
+        DataSource::Folder(_) => {
+            let content = serde_json::to_string_pretty(value)
+                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            format!("{content}\n")
+        }
+        DataSource::File(_) => {
+            let _guard = state.write_lock_for_resource("__db_file__").await;
+            let raw = fs::read_to_string(&file)
+                .await
+                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            let mut root: Value = serde_json::from_str(&raw).map_err(|e| {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
+            })?;
+            let root_obj = root.as_object_mut().ok_or_else(|| {
+                AppError::new(StatusCode::BAD_REQUEST, "Database file must contain a JSON object")
+            })?;
+            root_obj.insert(resource.to_string(), value.clone());
+            let content = serde_json::to_string_pretty(&root)
+                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            format!("{content}\n")
+        }
+    };
 
     let file_for_write = file.clone();
     tokio::task::spawn_blocking(move || write_json_atomically(&file_for_write, payload))
@@ -151,7 +187,14 @@ fn sync_parent_dir(_parent: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn scan_resources(folder: &Path) -> Result<BTreeSet<String>, std::io::Error> {
+pub fn scan_resources(data_source: &DataSource) -> Result<BTreeSet<String>, std::io::Error> {
+    match data_source {
+        DataSource::Folder(folder) => scan_resources_folder(folder),
+        DataSource::File(file) => scan_resources_file(file),
+    }
+}
+
+fn scan_resources_folder(folder: &Path) -> Result<BTreeSet<String>, std::io::Error> {
     let mut resources = BTreeSet::new();
     let entries = std::fs::read_dir(folder)?;
     for entry in entries {
@@ -164,6 +207,23 @@ pub fn scan_resources(folder: &Path) -> Result<BTreeSet<String>, std::io::Error>
         };
         if is_valid_resource_name(stem) {
             resources.insert(stem.to_owned());
+        }
+    }
+    Ok(resources)
+}
+
+fn scan_resources_file(file: &Path) -> Result<BTreeSet<String>, std::io::Error> {
+    let mut resources = BTreeSet::new();
+    if !file.exists() {
+        return Ok(resources);
+    }
+    let raw = std::fs::read_to_string(file)?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(std::io::Error::other)?;
+    if let Some(root) = parsed.as_object() {
+        for key in root.keys() {
+            if is_valid_resource_name(key) {
+                resources.insert(key.to_string());
+            }
         }
     }
     Ok(resources)
@@ -246,14 +306,17 @@ fn value_matches_type(value: &Value, column_type: &ColumnType) -> bool {
     }
 }
 
-pub fn resource_file_path(folder: &Path, resource: &str) -> Result<PathBuf, AppError> {
+pub fn resource_file_path(data_source: &DataSource, resource: &str) -> Result<PathBuf, AppError> {
     if !is_valid_resource_name(resource) {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "Resource name must only contain letters, numbers, underscore, and dash",
         ));
     }
-    Ok(folder.join(format!("{resource}.json")))
+    Ok(match data_source {
+        DataSource::Folder(folder) => folder.join(format!("{resource}.json")),
+        DataSource::File(file) => file.clone(),
+    })
 }
 
 pub fn is_valid_resource_name(name: &str) -> bool {
@@ -313,7 +376,7 @@ mod tests {
 
     fn test_state(folder: PathBuf) -> AppState {
         AppState {
-            folder: Arc::new(folder),
+            data_source: Arc::new(DataSource::Folder(folder)),
             resources: Arc::new(RwLock::new(BTreeSet::new())),
             resource_cache: Arc::new(RwLock::new(HashMap::new())),
             resource_locks: Arc::new(RwLock::new(HashMap::new())),

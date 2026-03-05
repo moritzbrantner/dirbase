@@ -738,7 +738,7 @@ mod tests {
     #[test]
     fn parses_select_projection() {
         let state = AppState {
-            folder: Arc::new(PathBuf::from(".")),
+            data_source: Arc::new(crate::app::DataSource::Folder(PathBuf::from("."))),
             resources: Arc::new(RwLock::new(BTreeSet::from(["users".to_string()]))),
             resource_cache: Arc::new(RwLock::new(HashMap::new())),
             resource_locks: Arc::new(RwLock::new(HashMap::new())),
