@@ -113,7 +113,7 @@ fn supports_all_object_resource_routes() {
 }
 
 #[test]
-fn graphql_endpoint_is_available() {
+fn graphql_endpoint_is_not_available() {
     let temp = tempfile::tempdir().expect("create temp directory");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
@@ -130,12 +130,11 @@ fn graphql_endpoint_is_available() {
     wait_for_server("127.0.0.1:3013", Duration::from_secs(5));
 
     let graphql = http_request("127.0.0.1:3013", "GET", "/graphql", None);
-    assert!(graphql.starts_with("HTTP/1.1 200 OK\r\n"));
-    assert!(graphql.contains("\"path\":\"/graphql\""));
+    assert!(graphql.starts_with("HTTP/1.1 404 Not Found\r\n"));
 }
 
 #[test]
-fn readonly_mode_rejects_post_for_graphql_and_sql() {
+fn readonly_mode_rejects_post_for_sql() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(temp.path().join("users.json"), "[]\n").expect("write users");
 
@@ -152,10 +151,6 @@ fn readonly_mode_rejects_post_for_graphql_and_sql() {
     let _child = ChildGuard { child };
 
     wait_for_server("127.0.0.1:3014", Duration::from_secs(5));
-
-    let post_graphql =
-        http_request("127.0.0.1:3014", "POST", "/graphql", Some(r#"{"query":"{ __typename }"}"#));
-    assert!(post_graphql.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"), "{post_graphql}");
 
     let post_sql =
         http_request("127.0.0.1:3014", "POST", "/sql", Some(r#"{"query":"SELECT * FROM users"}"#));
@@ -187,9 +182,6 @@ fn logging_writes_each_request_when_enabled() {
 
     let _ = http_request("127.0.0.1:3012", "GET", "/posts", None);
     let _ = http_request("127.0.0.1:3012", "POST", "/posts", Some(r#"{"title":"logged"}"#));
-    let _ = http_request("127.0.0.1:3012", "GET", "/graphql", None);
-    let _ =
-        http_request("127.0.0.1:3012", "POST", "/graphql", Some(r#"{"query":"{ __typename }"}"#));
     let _ =
         http_request("127.0.0.1:3012", "GET", "/sql?q=SELECT%20*%20FROM%20users%20LIMIT%201", None);
     let _ = http_request(
@@ -204,8 +196,6 @@ fn logging_writes_each_request_when_enabled() {
     let log_contents = fs::read_to_string(log_path).expect("read request log");
     assert!(log_contents.contains("GET /posts 200"), "{log_contents}");
     assert!(log_contents.contains("POST /posts 201"), "{log_contents}");
-    assert!(log_contents.contains("GET /graphql 200"), "{log_contents}");
-    assert!(log_contents.contains("POST /graphql 200"), "{log_contents}");
     assert!(log_contents.contains("GET /sql 200 query_hash="), "{log_contents}");
     assert!(log_contents.contains("GET /export.sql 200 query_hash="), "{log_contents}");
 }

@@ -37,6 +37,7 @@ you get:
 - For object resources, `PUT /{resource}` replaces the full object and `PATCH /{resource}` merges fields.
 - `--log` enables request logging and `--logname <path>` selects the log output file (default `requests.log`).
 - `--readonly` disables mutation routes and only serves `GET` endpoints.
+- GraphQL is not supported; use REST endpoints (`/{resource}`, `/{resource}/{id}`) and `/sql` for query-style access.
 - Schema validation is enabled automatically when `{folder}/schema.dbml` exists.
 - Use `--schema <path>` to load a DBML schema from a custom location.
 - When a schema is active, resources must map to DBML tables and row values must match declared column types.
