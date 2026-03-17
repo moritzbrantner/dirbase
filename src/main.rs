@@ -25,7 +25,7 @@ struct Cli {
     folder: Option<PathBuf>,
     #[arg(long, conflicts_with = "folder")]
     file: Option<PathBuf>,
-    #[arg(short, long, default_value = "127.0.0.1:3000")]
+    #[arg(short, long, default_value = "127.0.0.1:4444")]
     bind: SocketAddr,
     #[arg(long)]
     readonly: bool,

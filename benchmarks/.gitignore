@@ -1,3 +1,4 @@
 .work/
 results/*.json
+results/*.md
 !results/.gitkeep

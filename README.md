@@ -25,7 +25,7 @@ you get:
 
 ## Behavior
 
-- `GET /` lists all available resources discovered from `*.json` files.
+- `GET /` lists all available resources as JSON for API clients, and renders a visual HTML overview for browsers.
 - While the server is running, file additions, edits, and deletions in the selected folder are watched and the available endpoints update automatically.
 - `GET /{resource}` returns the whole JSON document from `{resource}.json` (array or object).
 - `GET /{resource}?field=value&other=...` filters array resources (default operator is `eq`).
@@ -67,25 +67,26 @@ JSON
 ### 2) Run the server
 
 ```bash
-cargo run -- --folder ./data --bind 127.0.0.1:3000
+cargo run -- --folder ./data --bind 127.0.0.1:4444
 
 # Read-only mode (only GET routes)
-cargo run -- --folder ./data --bind 127.0.0.1:3000 --readonly
+cargo run -- --folder ./data --bind 127.0.0.1:4444 --readonly
 
 # Explicit schema file (if not using ./data/schema.dbml)
 cargo run -- --folder ./data --schema ./schema.dbml
 
 # Serve a single json-server-style database file
-cargo run -- --file ./db.json --bind 127.0.0.1:3000
+cargo run -- --file ./db.json --bind 127.0.0.1:4444
 ```
 
 ### 3) Try the API
 
 ```bash
-curl http://127.0.0.1:3000/
-curl http://127.0.0.1:3000/users
-curl http://127.0.0.1:3000/users/1
-curl -X POST http://127.0.0.1:3000/users \
+curl http://127.0.0.1:4444/
+open http://127.0.0.1:4444/
+curl http://127.0.0.1:4444/users
+curl http://127.0.0.1:4444/users/1
+curl -X POST http://127.0.0.1:4444/users \
   -H 'content-type: application/json' \
   -d '{"name":"Grace"}'
 ```
@@ -121,7 +122,7 @@ A GitHub Actions workflow is provided at `.github/workflows/rust-to-npm.yml`.
 Once published, users can run:
 
 ```bash
-npx folder-server --folder ./data --bind 127.0.0.1:3000
+npx folder-server --folder ./data --bind 127.0.0.1:4444
 ```
 
 ## Notes
