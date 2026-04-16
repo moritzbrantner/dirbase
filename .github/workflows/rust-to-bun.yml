@@ -36,6 +36,9 @@ jobs:
         with:
           bun-version-file: '.bun-version'
 
+      - name: Install UI dependencies
+        run: bun install --cwd ../ui --frozen-lockfile
+
       - name: Build Rust binary
         run: cargo build --release --manifest-path ../Cargo.toml
 

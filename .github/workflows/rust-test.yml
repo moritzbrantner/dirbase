@@ -26,6 +26,9 @@ jobs:
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install UI dependencies
+        run: bun install --cwd ui --frozen-lockfile
+
       - name: Run tests
         run: |
           rm -rf ui/dist
