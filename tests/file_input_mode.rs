@@ -35,7 +35,6 @@ fn serves_json_server_style_single_file_input() {
     .expect("write db file");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--file")
         .arg(&db_path)
         .arg("--bind")
         .arg("127.0.0.1:3033")
@@ -81,7 +80,6 @@ fn html_overview_explains_top_level_keys_in_file_mode() {
     .expect("write db file");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--file")
         .arg(&db_path)
         .arg("--bind")
         .arg("127.0.0.1:3034")
@@ -105,6 +103,38 @@ fn html_overview_explains_top_level_keys_in_file_mode() {
         html_response.contains("Each valid top-level key in the JSON file becomes `/{resource}`."),
         "{html_response}"
     );
+}
+
+#[test]
+fn serves_folder_when_directory_is_passed_positionally() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"id": 1, "name": "Ada"}
+]
+"#,
+    )
+    .expect("write users file");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3035")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3035", Duration::from_secs(5));
+
+    let response = http_request("GET", "127.0.0.1:3035", "/users", None, None);
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+
+    let payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&response)).expect("users body json");
+    assert_eq!(payload.as_array().expect("users array")[0]["name"], "Ada");
 }
 
 fn wait_for_server(addr: &str, timeout: Duration) {

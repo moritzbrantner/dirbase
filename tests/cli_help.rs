@@ -10,6 +10,7 @@ fn prints_help_when_no_arguments_are_provided() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Usage:"), "stdout was: {stdout}");
+    assert!(stdout.contains("[PATH]"), "stdout was: {stdout}");
     assert!(stdout.contains("--folder <FOLDER>"), "stdout was: {stdout}");
     assert!(stdout.contains("--file <FILE>"), "stdout was: {stdout}");
 }

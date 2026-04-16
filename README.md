@@ -10,7 +10,7 @@
 - the file name becomes the route name,
 - writes are persisted back to the same file.
 
-You can also point `folder-server` directly at a single JSON database file (for example `db.json`) with `--file`. In that mode, each top-level key in the file is served as a resource, like `json-server`.
+You can point `folder-server` directly at either a folder or a single JSON database file by passing the path positionally. In file mode, each top-level key in the file is served as a resource, like `json-server`.
 
 So if the folder contains:
 
@@ -42,6 +42,8 @@ you get:
 - `POST /{resource}` appends a new object to the array and auto-generates a numeric primary key when none is provided.
 - `PUT`, `PATCH`, and `DELETE` mutate the corresponding array item and persist changes to disk.
 - For object resources, `PUT /{resource}` replaces the full object and `PATCH /{resource}` merges fields.
+- Passing a positional path makes `folder-server` inspect the filesystem and choose file or folder mode automatically.
+- If the positional path does not exist yet, it is treated as a folder unless it ends in `.json`.
 - `--log` enables request logging and `--logname <path>` selects the log output file (default `requests.log`).
 - `--readonly` disables mutation routes and only serves `GET` endpoints.
 - GraphQL is not supported; use REST endpoints (`/{resource}`, `/{resource}/{id}`) and `/sql` for query-style access.
@@ -75,16 +77,16 @@ JSON
 ### 2) Run the server
 
 ```bash
-cargo run -- --folder ./data --bind 127.0.0.1:4444
+cargo run -- ./data --bind 127.0.0.1:4444
 
 # Read-only mode (only GET routes)
-cargo run -- --folder ./data --bind 127.0.0.1:4444 --readonly
+cargo run -- ./data --bind 127.0.0.1:4444 --readonly
 
 # Explicit schema file (if not using ./data/schema.dbml)
-cargo run -- --folder ./data --schema ./schema.dbml
+cargo run -- ./data --schema ./schema.dbml
 
 # Serve a single json-server-style database file
-cargo run -- --file ./db.json --bind 127.0.0.1:4444
+cargo run -- ./db.json --bind 127.0.0.1:4444
 ```
 
 ### 3) Try the API
@@ -198,7 +200,7 @@ A GitHub Actions workflow is provided at `.github/workflows/rust-to-npm.yml`.
 Once published, users can run:
 
 ```bash
-npx folder-server --folder ./data --bind 127.0.0.1:4444
+npx folder-server ./data --bind 127.0.0.1:4444
 ```
 
 ## Notes
