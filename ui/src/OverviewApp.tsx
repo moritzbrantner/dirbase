@@ -126,18 +126,36 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
 
   useEffect(() => {
     const source = new EventSource('/events');
+    let invalidateTimeout: number | null = null;
     const invalidate = () => {
-      void queryClient.invalidateQueries({ queryKey: ['overview'] });
-      void queryClient.invalidateQueries({ queryKey: ['resource'] });
-      void queryClient.invalidateQueries({ queryKey: ['schema'] });
+      if (invalidateTimeout !== null) {
+        window.clearTimeout(invalidateTimeout);
+      }
+
+      // File writes can emit multiple watcher events in quick succession.
+      invalidateTimeout = window.setTimeout(() => {
+        invalidateTimeout = null;
+        void queryClient.invalidateQueries({ queryKey: ['overview'] });
+        void queryClient.invalidateQueries({ queryKey: ['resource'] });
+        void queryClient.invalidateQueries({ queryKey: ['schema'] });
+      }, 150);
     };
     source.addEventListener('overview_changed', invalidate);
     source.addEventListener('resource_changed', invalidate);
     source.addEventListener('schema_changed', invalidate);
     source.onerror = () => {
+      if (invalidateTimeout !== null) {
+        window.clearTimeout(invalidateTimeout);
+        invalidateTimeout = null;
+      }
       source.close();
     };
-    return () => source.close();
+    return () => {
+      if (invalidateTimeout !== null) {
+        window.clearTimeout(invalidateTimeout);
+      }
+      source.close();
+    };
   }, []);
 
   useEffect(() => {
