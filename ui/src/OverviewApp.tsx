@@ -3,11 +3,15 @@ import { flexRender, getCoreRowModel, useReactTable, type ColumnDef, type Visibi
 import {
   Background,
   Controls,
+  Handle,
   MiniMap,
+  Position,
   ReactFlow,
   ReactFlowProvider,
+  type Connection,
   type Edge,
-  type Node
+  type Node,
+  type NodeProps
 } from '@xyflow/react';
 import {
   startTransition,
@@ -28,9 +32,18 @@ import {
   summarizeValue,
   truncate
 } from './helpers';
+import {
+  buildSchemaHandleId,
+  deriveSchemaEdges,
+  parseSchemaConnection,
+  parseSchemaDocument,
+  upsertSchemaRelationship
+} from './schemaEditor';
 import type {
   FilterDescriptor,
   FilterOperator,
+  OverviewColumn,
+  OverviewEdge,
   OverviewPageData,
   OverviewRelation,
   OverviewUrlState,
@@ -75,6 +88,7 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
   const [mobilePanel, setMobilePanel] = useState<'map' | 'data' | 'details'>('data');
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const [schemaDraft, setSchemaDraft] = useState('{}');
+  const [schemaDraftDirty, setSchemaDraftDirty] = useState(false);
   const [schemaStatus, setSchemaStatus] = useState<string | null>(null);
 
   const overviewQuery = useQuery({
@@ -88,6 +102,7 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
   const saveSchemaMutation = useMutation({
     mutationFn: saveSchemaDocument,
     onSuccess: async () => {
+      setSchemaDraftDirty(false);
       setSchemaStatus('Schema saved.');
       await queryClient.invalidateQueries({ queryKey: ['schema'] });
       await queryClient.invalidateQueries({ queryKey: ['overview'] });
@@ -126,13 +141,18 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
   }, []);
 
   useEffect(() => {
-    if (!schemaQuery.data) {
+    if (!schemaQuery.data || schemaDraftDirty) {
       return;
     }
     setSchemaDraft(formatJson(schemaQuery.data));
-  }, [schemaQuery.data]);
+  }, [schemaDraftDirty, schemaQuery.data]);
 
   const resources = overviewQuery.data?.resources ?? [];
+  const parsedSchemaDraft = parseSchemaDocument(schemaDraft);
+  const hasUsableSchemaDraft = schemaDraftDirty || Boolean(schemaQuery.data);
+  const schemaEdges = hasUsableSchemaDraft && parsedSchemaDraft.document
+    ? deriveSchemaEdges(parsedSchemaDraft.document, resources)
+    : overviewQuery.data?.edges ?? [];
   const selectedResource =
     resources.find((resource) => resource.name === urlState.resource) ?? resources[0] ?? null;
 
@@ -251,6 +271,42 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
     window.setTimeout(() => setCopyStatus(null), 1_500);
   }
 
+  function updateSchemaDraft(nextDraft: string) {
+    setSchemaDraft(nextDraft);
+    setSchemaDraftDirty(true);
+    setSchemaStatus(null);
+  }
+
+  function reloadSchemaDraft() {
+    if (schemaQuery.data) {
+      setSchemaDraft(formatJson(schemaQuery.data));
+    }
+    setSchemaDraftDirty(false);
+    setSchemaStatus('Schema reloaded from the server.');
+    void queryClient.invalidateQueries({ queryKey: ['schema'] });
+  }
+
+  function handleRelationshipCreate(connection: Connection) {
+    const parsedConnection = parseSchemaConnection(connection);
+    if (!parsedConnection) {
+      setSchemaStatus('Drag from a source column on one table to a target column on another table.');
+      return;
+    }
+
+    if (!parsedSchemaDraft.document) {
+      setSchemaStatus(parsedSchemaDraft.error ?? 'Fix the schema draft before creating relationships from the map.');
+      return;
+    }
+
+    const nextSchema = upsertSchemaRelationship(parsedSchemaDraft.document, parsedConnection);
+    setSchemaDraft(formatJson(nextSchema));
+    setSchemaDraftDirty(true);
+    setSchemaStatus(
+      `Staged ${parsedConnection.sourceTable}.${parsedConnection.sourceColumn} -> ${parsedConnection.targetTable}.${parsedConnection.targetColumn}. Save schema to persist it.`
+    );
+    setMobilePanel('details');
+  }
+
   const selectedOutgoingLinks = selectedResource && selectedRow
     ? selectedResource.outgoing_relations
         .map((relation) => ({
@@ -316,14 +372,18 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
             <h2>Graphical interface to your data</h2>
           </div>
           <p className="overview-copy">
-            Click a node to jump into that resource. Relation edges reflect the same schema metadata
-            used by REST embeds and item routes.
+            Click a node to jump into that resource. Drag from a source column on the right side of
+            one table card to a target column on the left side of another table card to stage a
+            relationship in the schema draft.
           </p>
         </div>
         <RelationMap
           overview={overviewQuery.data ?? null}
+          schemaEdges={schemaEdges}
           selectedResourceName={selectedResource?.name ?? null}
           onSelectResource={selectResource}
+          onCreateRelationship={handleRelationshipCreate}
+          connectable={parsedSchemaDraft.document !== null}
           loading={overviewQuery.isLoading}
         />
       </section>
@@ -449,8 +509,7 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
               className="schema-editor"
               value={schemaDraft}
               onChange={(event) => {
-                setSchemaDraft(event.target.value);
-                setSchemaStatus(null);
+                updateSchemaDraft(event.target.value);
               }}
               spellCheck={false}
             />
@@ -458,7 +517,7 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
               <button
                 type="button"
                 className="overview-secondary-button"
-                onClick={() => void queryClient.invalidateQueries({ queryKey: ['schema'] })}
+                onClick={reloadSchemaDraft}
               >
                 Reload schema
               </button>
@@ -471,6 +530,7 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
                 {saveSchemaMutation.isPending ? 'Saving…' : 'Save schema'}
               </button>
             </div>
+            {parsedSchemaDraft.error && <p className="copy-status">{parsedSchemaDraft.error}</p>}
             {schemaStatus && <p className="copy-status">{schemaStatus}</p>}
           </section>
 
@@ -548,6 +608,70 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
   }
 }
 
+interface RelationNodeData extends Record<string, unknown> {
+  resource: ResourceOverview;
+  selected: boolean;
+}
+
+type RelationFlowNode = Node<RelationNodeData, 'schemaTable'>;
+
+const RELATION_NODE_TYPES = {
+  schemaTable: RelationNodeCard
+};
+
+function RelationNodeCard({ data }: NodeProps<RelationFlowNode>) {
+  const columns = getRelationNodeColumns(data.resource);
+
+  return (
+    <div className={`graph-node-card ${data.selected ? 'is-selected' : ''}`}>
+      <div className="graph-node-head">
+        <strong>{data.resource.name}</strong>
+        <span className="overview-kind-badge">{data.resource.kind}</span>
+      </div>
+      <p>
+        {data.resource.row_count !== null
+          ? `${data.resource.row_count} rows`
+          : data.resource.key_count !== null
+            ? `${data.resource.key_count} keys`
+            : 'scalar value'}
+      </p>
+      {columns.length > 0 ? (
+        <div className="graph-node-columns">
+          {columns.map((column) => (
+            <div
+              key={column.name}
+              className={`graph-column-row ${column.is_primary_key ? 'is-primary' : ''}`}
+            >
+              <Handle
+                type="target"
+                position={Position.Left}
+                id={buildSchemaHandleId('target', column.name)}
+                className="graph-column-handle is-target"
+              />
+              <div className="graph-column-copy">
+                <span className="graph-column-name">{column.name}</span>
+                <span className="graph-column-meta">
+                  {column.column_type}
+                  {column.is_primary_key ? ' · pk' : ''}
+                  {column.relation ? ' · fk' : ''}
+                </span>
+              </div>
+              <Handle
+                type="source"
+                position={Position.Right}
+                id={buildSchemaHandleId('source', column.name)}
+                className="graph-column-handle is-source"
+              />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="graph-node-empty">No schema columns available for connection editing.</div>
+      )}
+    </div>
+  );
+}
+
 function SummaryCard({ label, value, copy }: { label: string; value: string; copy: string }) {
   return (
     <article className="summary-card">
@@ -560,13 +684,19 @@ function SummaryCard({ label, value, copy }: { label: string; value: string; cop
 
 function RelationMap({
   overview,
+  schemaEdges,
   selectedResourceName,
   onSelectResource,
+  onCreateRelationship,
+  connectable,
   loading
 }: {
   overview: OverviewPageData | null;
+  schemaEdges: OverviewEdge[];
   selectedResourceName: string | null;
   onSelectResource: (resourceName: string) => void;
+  onCreateRelationship: (connection: Connection) => void;
+  connectable: boolean;
   loading: boolean;
 }) {
   if (loading) {
@@ -577,37 +707,35 @@ function RelationMap({
   }
 
   const columns = Math.max(1, Math.ceil(Math.sqrt(overview.resources.length)));
-  const nodes: Node[] = overview.resources.map((resource, index) => ({
-    id: resource.name,
-    position: {
-      x: (index % columns) * 280,
-      y: Math.floor(index / columns) * 180
-    },
-    draggable: false,
-    data: {
-      label: (
-        <div className={`graph-node-card ${resource.name === selectedResourceName ? 'is-selected' : ''}`}>
-          <div className="graph-node-head">
-            <strong>{resource.name}</strong>
-            <span className="overview-kind-badge">{resource.kind}</span>
-          </div>
-          <p>
-            {resource.row_count !== null
-              ? `${resource.row_count} rows`
-              : resource.key_count !== null
-                ? `${resource.key_count} keys`
-                : 'scalar value'}
-          </p>
-        </div>
-      )
-    },
-    selectable: false
-  }));
+  const columnHeights = Array.from({ length: columns }, () => 0);
+  const nodes: RelationFlowNode[] = overview.resources.map((resource, index) => {
+    const columnIndex = index % columns;
+    const nodeHeight = estimateRelationNodeHeight(resource);
+    const position = {
+      x: columnIndex * 320,
+      y: columnHeights[columnIndex]
+    };
+    columnHeights[columnIndex] += nodeHeight + 36;
 
-  const edges: Edge[] = overview.edges.map((edge) => ({
+    return {
+      id: resource.name,
+      type: 'schemaTable',
+      position,
+      draggable: false,
+      data: {
+        resource,
+        selected: resource.name === selectedResourceName
+      },
+      selectable: false
+    };
+  });
+
+  const edges: Edge[] = schemaEdges.map((edge) => ({
     id: `${edge.source_table}:${edge.source_column}:${edge.target_table}:${edge.target_column}`,
     source: edge.source_table,
     target: edge.target_table,
+    sourceHandle: buildSchemaHandleId('source', edge.source_column),
+    targetHandle: buildSchemaHandleId('target', edge.target_column),
     label: `${edge.source_column} -> ${edge.target_column}`,
     animated: edge.source_table === selectedResourceName || edge.target_table === selectedResourceName,
     style:
@@ -623,8 +751,10 @@ function RelationMap({
         fitView
         nodes={nodes}
         edges={edges}
-        nodesConnectable={false}
+        nodeTypes={RELATION_NODE_TYPES}
+        nodesConnectable={connectable}
         elementsSelectable={false}
+        onConnect={onCreateRelationship}
         onNodeClick={(_, node) => onSelectResource(node.id)}
       >
         <MiniMap zoomable pannable className="relation-map-minimap" />
@@ -633,6 +763,25 @@ function RelationMap({
       </ReactFlow>
     </div>
   );
+}
+
+function getRelationNodeColumns(resource: ResourceOverview): OverviewColumn[] {
+  if (resource.columns.length > 0) {
+    return resource.columns;
+  }
+
+  return resource.field_names.map((fieldName) => ({
+    name: fieldName,
+    column_type: 'unknown',
+    nullable: true,
+    relation: null,
+    is_primary_key: resource.primary_key === fieldName
+  }));
+}
+
+function estimateRelationNodeHeight(resource: ResourceOverview): number {
+  const columnCount = getRelationNodeColumns(resource).length;
+  return 96 + columnCount * 34;
 }
 
 export function DataExplorerPanel({

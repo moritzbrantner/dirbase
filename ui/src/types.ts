@@ -120,7 +120,26 @@ export interface ResourceResponse {
   parsed: unknown;
 }
 
+export interface SchemaForeignKey {
+  target_table: string;
+  target_column: string;
+}
+
+export interface SchemaColumn {
+  column_type?: string;
+  nullable?: boolean;
+  [key: string]: unknown;
+}
+
+export interface SchemaTable {
+  columns?: Record<string, SchemaColumn>;
+  primary_key?: string | null;
+  kind?: string | null;
+  foreign_keys?: Record<string, SchemaForeignKey>;
+  [key: string]: unknown;
+}
+
 export interface SchemaResponse {
-  tables?: Record<string, unknown>;
+  tables?: Record<string, SchemaTable>;
   [key: string]: unknown;
 }
