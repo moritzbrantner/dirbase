@@ -6,7 +6,7 @@
     "build": "node esbuild.config.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test --config=playwright.config.cjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.91.0",

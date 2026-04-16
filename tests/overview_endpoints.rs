@@ -76,6 +76,10 @@ Table posts {
     let payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&response)).expect("overview json body");
     assert_eq!(payload["data_source_kind"], "folder");
+    assert_eq!(payload["server_capabilities"]["readonly"], false);
+    assert_eq!(payload["server_capabilities"]["resource_write"], true);
+    assert_eq!(payload["server_capabilities"]["schema_write"], true);
+    assert_eq!(payload["server_capabilities"]["schema_infer"], true);
     assert_eq!(payload["stats"]["resource_count"], 2);
     assert_eq!(payload["stats"]["relation_count"], 1);
     assert_eq!(payload["stats"]["total_rows"], 3);
@@ -85,14 +89,19 @@ Table posts {
             .expect("resources array")
             .iter()
             .any(|resource| resource["name"] == "posts"
-                && resource["query_capabilities"]["pagination"] == true)
+                && resource["query_capabilities"]["pagination"] == true
+                && resource["mutation_capabilities"]["create_item"] == true
+                && resource["mutation_capabilities"]["update_item"] == true
+                && resource["mutation_capabilities"]["delete_item"] == true)
     );
     assert!(
         payload["resources"]
             .as_array()
             .expect("resources array")
             .iter()
-            .any(|resource| resource["name"] == "users" && resource["sample_item_id"] == "1")
+            .any(|resource| resource["name"] == "users"
+                && resource["sample_item_id"] == "1"
+                && resource["mutation_capabilities"]["replace_object"] == false)
     );
     assert_eq!(payload["edges"][0]["source_table"], "posts");
     assert_eq!(payload["edges"][0]["target_table"], "users");
@@ -144,7 +153,10 @@ fn overview_json_describes_file_mode_and_assets_are_served() {
             .as_array()
             .expect("resources array")
             .iter()
-            .any(|resource| resource["name"] == "settings" && resource["kind"] == "object")
+            .any(|resource| resource["name"] == "settings"
+                && resource["kind"] == "object"
+                && resource["mutation_capabilities"]["patch_object"] == true
+                && resource["mutation_capabilities"]["replace_object"] == true)
     );
 
     let css_response = http_request("GET", &bind_addr, "/assets/overview.css", None);
@@ -156,6 +168,58 @@ fn overview_json_describes_file_mode_and_assets_are_served() {
     assert!(js_response.starts_with("HTTP/1.1 200 OK\r\n"), "{js_response}");
     assert!(js_response.contains("content-type: text/javascript; charset=utf-8"), "{js_response}");
     assert!(parse_http_body(&js_response).contains("overview-root"), "{js_response}");
+}
+
+#[test]
+fn overview_json_reflects_readonly_capabilities() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"id": 1, "name": "Ada"}
+]
+"#,
+    )
+    .expect("write users");
+    fs::write(
+        temp.path().join("settings.json"),
+        r#"{"theme":"warm"}
+"#,
+    )
+    .expect("write settings");
+
+    let bind_addr = reserve_bind_addr();
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg(&bind_addr)
+        .arg("--readonly")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server(&bind_addr, Duration::from_secs(5));
+
+    let response = http_request("GET", &bind_addr, "/overview.json", None);
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+
+    let payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&response)).expect("overview json body");
+    assert_eq!(payload["server_capabilities"]["readonly"], true);
+    assert_eq!(payload["server_capabilities"]["resource_write"], false);
+    assert_eq!(payload["server_capabilities"]["schema_write"], false);
+    assert_eq!(payload["server_capabilities"]["schema_infer"], false);
+    assert!(
+        payload["resources"]
+            .as_array()
+            .expect("resources array")
+            .iter()
+            .any(|resource| resource["name"] == "users"
+                && resource["mutation_capabilities"]["create_item"] == true)
+    );
 }
 
 fn reserve_bind_addr() -> String {

@@ -94,3 +94,17 @@ export function coerceRelationValue(row: Record<string, unknown>, relation: Over
   }
   return null;
 }
+
+export function coerceIncomingRelationValue(
+  row: Record<string, unknown>,
+  relation: OverviewRelation
+): string | null {
+  const raw = row[relation.target_column];
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') {
+    return String(raw);
+  }
+  return null;
+}
