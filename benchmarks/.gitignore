@@ -1,3 +1,5 @@
 .work/
 results/*.json
+results/*.md
+results/suite-logs/
 !results/.gitkeep

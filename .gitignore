@@ -1,4 +1,6 @@
 /target
+/data
+/requests.log
 js/node_modules
 js/dist
 js/bin
