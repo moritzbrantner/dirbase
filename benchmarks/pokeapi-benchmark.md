@@ -40,6 +40,12 @@ The PokeAPI benchmark exercises a broader mix of reads than the synthetic benchm
 scripts/benchmark_pokeapi.sh
 ```
 
+Single-command validation run:
+
+```bash
+python3 scripts/run_tests_and_benchmark.py
+```
+
 Optional knobs:
 
 ```bash

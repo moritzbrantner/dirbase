@@ -27,8 +27,26 @@ pub enum FilterOperator {
 #[derive(Debug, Clone)]
 pub struct FilterCondition {
     pub field_path: String,
+    field_segments: Vec<String>,
     pub operator: FilterOperator,
     pub value: String,
+    value_lower: String,
+    prepared_value: ComparableValue,
+    prepared_in_values: Vec<ComparableValue>,
+}
+
+impl FilterCondition {
+    pub fn new(field_path: String, operator: FilterOperator, value: String) -> Self {
+        Self {
+            field_segments: field_path.split('.').map(str::to_string).collect(),
+            field_path,
+            operator,
+            value_lower: value.to_lowercase(),
+            prepared_value: prepare_expected_value(&value),
+            prepared_in_values: prepare_in_values(&value),
+            value,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +59,19 @@ pub struct SortColumn {
 pub struct Pagination {
     pub page: usize,
     pub per_page: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PaginationWindow {
+    pub first: usize,
+    pub prev: Option<usize>,
+    pub next: Option<usize>,
+    pub last: usize,
+    pub page: usize,
+    pub pages: usize,
+    pub items: usize,
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Debug, Default)]
@@ -107,7 +138,7 @@ pub fn parse_collection_query_params(
         }
 
         let (field_path, operator) = parse_filter_key(&key)?;
-        filters.push(FilterCondition { field_path, operator, value });
+        filters.push(FilterCondition::new(field_path, operator, value));
     }
 
     let pagination = match (page, per_page) {
@@ -189,41 +220,90 @@ pub fn filter_collection_data(
     let items = data
         .as_array()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
-    Ok(Value::Array(
-        items.iter().filter(|item| item_matches_filters(item, filters, table)).cloned().collect(),
-    ))
+    Ok(Value::Array(filter_collection_refs(items, filters, table).into_iter().cloned().collect()))
 }
 
 pub fn sort_collection_data(data: Value, sort_columns: &[SortColumn]) -> Result<Value, AppError> {
     let items = data
         .as_array()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
-    let mut sorted = items.to_vec();
-    sorted.sort_by(|a, b| compare_items_by_columns(a, b, sort_columns));
-    Ok(Value::Array(sorted))
+    let mut sorted = items.iter().collect::<Vec<_>>();
+    sort_collection_refs(sorted.as_mut_slice(), sort_columns);
+    Ok(Value::Array(sorted.into_iter().cloned().collect()))
 }
 
 pub fn paginate_collection_data(data: Value, pagination: Pagination) -> Result<Value, AppError> {
     let items = data
         .as_array()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
-    let total_items = items.len();
+    let window = pagination_window(items.len(), pagination);
+    let data = if window.start < window.items {
+        items[window.start..window.end].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    Ok(serde_json::json!({
+        "first": window.first,
+        "prev": window.prev,
+        "next": window.next,
+        "last": window.last,
+        "page": window.page,
+        "pages": window.pages,
+        "items": window.items,
+        "data": data,
+    }))
+}
+
+pub fn filter_collection_refs<'a>(
+    items: &'a [Value],
+    filters: &[FilterCondition],
+    table: Option<&TableSchema>,
+) -> Vec<&'a Value> {
+    items.iter().filter(|item| item_matches_filters(item, filters, table)).collect()
+}
+
+pub fn sort_collection_refs(items: &mut [&Value], sort_columns: &[SortColumn]) {
+    items.sort_by(|a, b| compare_items_by_columns(a, b, sort_columns));
+}
+
+pub fn pagination_window(total_items: usize, pagination: Pagination) -> PaginationWindow {
     let pages = if total_items == 0 { 1 } else { total_items.div_ceil(pagination.per_page) };
     let page = pagination.page.max(1).min(pages.max(1));
     let start = (page - 1) * pagination.per_page;
     let end = (start + pagination.per_page).min(total_items);
-    let data = if start < total_items { items[start..end].to_vec() } else { Vec::new() };
 
-    Ok(serde_json::json!({
-        "first": 1,
-        "prev": if page > 1 { Some(page - 1) } else { None::<usize> },
-        "next": if page < pages { Some(page + 1) } else { None::<usize> },
-        "last": pages,
-        "page": page,
-        "pages": pages,
-        "items": total_items,
+    PaginationWindow {
+        first: 1,
+        prev: if page > 1 { Some(page - 1) } else { None },
+        next: if page < pages { Some(page + 1) } else { None },
+        last: pages,
+        page,
+        pages,
+        items: total_items,
+        start,
+        end,
+    }
+}
+
+pub fn paginate_collection_refs(items: &[&Value], pagination: Pagination) -> Value {
+    let window = pagination_window(items.len(), pagination);
+    let data = if window.start < window.items {
+        items[window.start..window.end].iter().map(|item| (*item).clone()).collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    serde_json::json!({
+        "first": window.first,
+        "prev": window.prev,
+        "next": window.next,
+        "last": window.last,
+        "page": window.page,
+        "pages": window.pages,
+        "items": window.items,
         "data": data,
-    }))
+    })
 }
 
 pub fn get_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
@@ -278,7 +358,7 @@ fn item_matches_filters(
     table: Option<&TableSchema>,
 ) -> bool {
     filters.iter().all(|condition| {
-        let actual = get_value_at_path(item, &condition.field_path).unwrap_or(&Value::Null);
+        let actual = get_value_at_segments(item, &condition.field_segments).unwrap_or(&Value::Null);
         let column = table.and_then(|t| t.columns.get(&condition.field_path));
         matches_filter(actual, condition, column)
     })
@@ -291,42 +371,52 @@ fn matches_filter(
     match condition.operator {
         FilterOperator::IsNull => actual.is_null(),
         FilterOperator::IsNotNull => !actual.is_null(),
-        FilterOperator::Eq => compare_with_expected(actual, &condition.value, column)
+        FilterOperator::Eq => compare_with_prepared(actual, condition, column)
             .is_some_and(|cmp| cmp == Ordering::Equal),
-        FilterOperator::Ne => compare_with_expected(actual, &condition.value, column)
+        FilterOperator::Ne => compare_with_prepared(actual, condition, column)
             .is_some_and(|cmp| cmp != Ordering::Equal),
-        FilterOperator::Lt => compare_with_expected(actual, &condition.value, column)
+        FilterOperator::Lt => compare_with_prepared(actual, condition, column)
             .is_some_and(|cmp| cmp == Ordering::Less),
-        FilterOperator::Lte => compare_with_expected(actual, &condition.value, column)
+        FilterOperator::Lte => compare_with_prepared(actual, condition, column)
             .is_some_and(|cmp| cmp == Ordering::Less || cmp == Ordering::Equal),
-        FilterOperator::Gt => compare_with_expected(actual, &condition.value, column)
+        FilterOperator::Gt => compare_with_prepared(actual, condition, column)
             .is_some_and(|cmp| cmp == Ordering::Greater),
-        FilterOperator::Gte => compare_with_expected(actual, &condition.value, column)
+        FilterOperator::Gte => compare_with_prepared(actual, condition, column)
             .is_some_and(|cmp| cmp == Ordering::Greater || cmp == Ordering::Equal),
-        FilterOperator::In => {
-            condition.value.split(',').map(str::trim).filter(|v| !v.is_empty()).any(|v| {
-                compare_with_expected(actual, v, column).is_some_and(|cmp| cmp == Ordering::Equal)
-            })
+        FilterOperator::In => condition.prepared_in_values.iter().any(|prepared| {
+            compare_with_prepared_value(actual, prepared, &condition.value, column)
+                .is_some_and(|cmp| cmp == Ordering::Equal)
+        }),
+        FilterOperator::Contains => {
+            actual.as_str().is_some_and(|text| text.to_lowercase().contains(&condition.value_lower))
         }
-        FilterOperator::Contains => actual
-            .as_str()
-            .is_some_and(|text| text.to_lowercase().contains(&condition.value.to_lowercase())),
         FilterOperator::StartsWith => actual
             .as_str()
-            .is_some_and(|text| text.to_lowercase().starts_with(&condition.value.to_lowercase())),
+            .is_some_and(|text| text.to_lowercase().starts_with(&condition.value_lower)),
         FilterOperator::EndsWith => actual
             .as_str()
-            .is_some_and(|text| text.to_lowercase().ends_with(&condition.value.to_lowercase())),
+            .is_some_and(|text| text.to_lowercase().ends_with(&condition.value_lower)),
     }
 }
-fn compare_with_expected(
+fn compare_with_prepared(
     actual: &Value,
-    expected: &str,
+    condition: &FilterCondition,
+    column: Option<&ColumnSchema>,
+) -> Option<Ordering> {
+    compare_with_prepared_value(actual, &condition.prepared_value, &condition.value, column)
+}
+fn compare_with_prepared_value(
+    actual: &Value,
+    prepared: &ComparableValue,
+    raw_expected: &str,
     column: Option<&ColumnSchema>,
 ) -> Option<Ordering> {
     let left = coerce_actual_value(actual, column)?;
-    let right = coerce_expected_value(expected, column)?;
-    compare_comparable_values(&left, &right)
+    if column.is_some() {
+        let right = coerce_expected_value(raw_expected, column)?;
+        return compare_comparable_values(&left, &right);
+    }
+    compare_comparable_values(&left, prepared)
 }
 fn coerce_actual_value(actual: &Value, column: Option<&ColumnSchema>) -> Option<ComparableValue> {
     if actual.is_null() {
@@ -410,6 +500,32 @@ fn compare_comparable_values(left: &ComparableValue, right: &ComparableValue) ->
         (ComparableValue::String(left), ComparableValue::String(right)) => Some(left.cmp(right)),
         _ => None,
     }
+}
+
+fn get_value_at_segments<'a>(value: &'a Value, segments: &[String]) -> Option<&'a Value> {
+    let mut current = value;
+    for segment in segments {
+        let object = current.as_object()?;
+        current = object.get(segment.as_str())?;
+    }
+    Some(current)
+}
+
+fn prepare_expected_value(expected: &str) -> ComparableValue {
+    if expected.eq_ignore_ascii_case("null") {
+        return ComparableValue::Null;
+    }
+    if let Ok(number) = expected.parse::<f64>() {
+        return ComparableValue::Number(number);
+    }
+    if let Ok(boolean) = expected.parse::<bool>() {
+        return ComparableValue::Bool(boolean);
+    }
+    ComparableValue::String(expected.to_string())
+}
+
+fn prepare_in_values(value: &str) -> Vec<ComparableValue> {
+    value.split(',').map(str::trim).filter(|v| !v.is_empty()).map(prepare_expected_value).collect()
 }
 
 pub fn value_to_filter_string(value: &Value) -> String {

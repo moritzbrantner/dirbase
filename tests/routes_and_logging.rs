@@ -113,7 +113,7 @@ fn supports_all_object_resource_routes() {
 }
 
 #[test]
-fn graphql_endpoint_is_not_available() {
+fn graphql_endpoint_serves_graphiql() {
     let temp = tempfile::tempdir().expect("create temp directory");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
@@ -129,8 +129,16 @@ fn graphql_endpoint_is_not_available() {
 
     wait_for_server("127.0.0.1:3013", Duration::from_secs(5));
 
-    let graphql = http_request("127.0.0.1:3013", "GET", "/graphql", None);
-    assert!(graphql.starts_with("HTTP/1.1 404 Not Found\r\n"));
+    let graphql = http_request_with_headers(
+        "127.0.0.1:3013",
+        "GET",
+        "/graphql",
+        Some("Accept: text/html,application/xhtml+xml\r\n"),
+        None,
+    );
+    assert!(graphql.starts_with("HTTP/1.1 200 OK\r\n"), "{graphql}");
+    assert!(graphql.contains("content-type: text/html; charset=utf-8"), "{graphql}");
+    assert!(graphql.contains("GraphiQL"), "{graphql}");
 }
 
 #[test]
@@ -213,16 +221,30 @@ fn wait_for_server(addr: &str, timeout: Duration) {
 }
 
 fn http_request(addr: &str, method: &str, path: &str, body: Option<&str>) -> String {
+    http_request_with_headers(addr, method, path, None, body)
+}
+
+fn http_request_with_headers(
+    addr: &str,
+    method: &str,
+    path: &str,
+    extra_headers: Option<&str>,
+    body: Option<&str>,
+) -> String {
     let mut stream = TcpStream::connect(addr).expect("connect to server");
     let payload = body.unwrap_or("");
 
     let request = if body.is_some() {
         format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}",
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}",
+            extra_headers.unwrap_or(""),
             payload.len()
         )
     } else {
-        format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{}\r\n",
+            extra_headers.unwrap_or("")
+        )
     };
 
     stream.write_all(request.as_bytes()).expect("write request");

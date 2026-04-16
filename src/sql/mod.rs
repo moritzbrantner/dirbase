@@ -111,7 +111,7 @@ async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, Ap
     let data = data.as_ref().clone();
     validate_resource_data(&state, &parsed.resource, &data)?;
 
-    let table = state.schema_table(&parsed.resource)?;
+    let table = state.schema_table(&parsed.resource);
     let scanned_rows = data
         .as_array()
         .map(|rows| rows.len())
@@ -129,7 +129,7 @@ async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, Ap
     let filtered = if parsed.filters.is_empty() {
         data
     } else {
-        filter_collection_data(data, &parsed.filters, table)?
+        filter_collection_data(data, &parsed.filters, table.as_ref())?
     };
     let sorted = if parsed.sort_columns.is_empty() {
         filtered
@@ -364,18 +364,18 @@ fn parse_sql_where(expr: &Expr) -> Result<Vec<FilterCondition>, AppError> {
                     },
                 ));
             }
-            Ok(vec![FilterCondition { field_path, operator, value }])
+            Ok(vec![FilterCondition::new(field_path, operator, value)])
         }
-        Expr::IsNull(expr) => Ok(vec![FilterCondition {
-            field_path: parse_sql_column_expr(expr)?,
-            operator: FilterOperator::IsNull,
-            value: String::new(),
-        }]),
-        Expr::IsNotNull(expr) => Ok(vec![FilterCondition {
-            field_path: parse_sql_column_expr(expr)?,
-            operator: FilterOperator::IsNotNull,
-            value: String::new(),
-        }]),
+        Expr::IsNull(expr) => Ok(vec![FilterCondition::new(
+            parse_sql_column_expr(expr)?,
+            FilterOperator::IsNull,
+            String::new(),
+        )]),
+        Expr::IsNotNull(expr) => Ok(vec![FilterCondition::new(
+            parse_sql_column_expr(expr)?,
+            FilterOperator::IsNotNull,
+            String::new(),
+        )]),
         _ => Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "Unsupported WHERE clause. Only AND-combined simple predicates are supported",
@@ -543,9 +543,8 @@ fn resolve_export_columns(
     resource: &str,
     rows: &[BTreeMap<String, Value>],
 ) -> Result<Vec<(String, ColumnSchema)>, AppError> {
-    if let Some(table) =
-        state.schema.as_ref().as_ref().and_then(|schema| schema.tables.get(resource))
-    {
+    let schema = state.schema_snapshot();
+    if let Some(table) = schema.tables.get(resource) {
         return Ok(table
             .columns
             .iter()
@@ -679,9 +678,12 @@ fn validate_sql_query_fields(
     filters: &[FilterCondition],
     sort_columns: &[SortColumn],
 ) -> Result<(), AppError> {
-    let Some(table) = state.schema_table(resource)? else {
+    let Some(table) = state.validation_schema_table(resource) else {
         return Ok(());
     };
+    if table.columns.is_empty() {
+        return Ok(());
+    }
 
     if let Some(selected_columns) = selected_columns {
         for column in selected_columns {
@@ -742,7 +744,8 @@ mod tests {
             resources: Arc::new(RwLock::new(BTreeSet::from(["users".to_string()]))),
             resource_cache: Arc::new(RwLock::new(HashMap::new())),
             resource_locks: Arc::new(RwLock::new(HashMap::new())),
-            schema: Arc::new(None),
+            schema_store: Arc::new(std::sync::RwLock::new(crate::app::SchemaStore::default())),
+            graphql_store: Arc::new(RwLock::new(crate::app::GraphqlStore::default())),
         };
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
         let parsed =

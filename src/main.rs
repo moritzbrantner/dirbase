@@ -6,15 +6,17 @@ use tokio::sync::RwLock;
 
 mod app;
 mod error;
+mod graphql;
 mod http;
 mod query;
+mod relations;
 mod schema;
 mod sql;
 mod storage;
 mod watcher;
 
 use http::routes::build_router;
-use schema::load_schema;
+use schema::{Schema, infer_schema_from_data_source, load_schema};
 use storage::scan_resources;
 use watcher::start_resource_watcher;
 
@@ -83,7 +85,7 @@ async fn main() {
         }
     };
 
-    let schema = match load_schema(&schema_root, cli.schema.as_deref()) {
+    let declared_schema = match load_schema(&schema_root, cli.schema.as_deref()) {
         Ok(schema) => schema,
         Err(err) => {
             eprintln!("Failed to load schema: {err}");
@@ -92,18 +94,33 @@ async fn main() {
     };
 
     let initial_resources = scan_resources(&data_source).unwrap_or_default();
+    let inferred_schema = match infer_schema_from_data_source(&data_source, &initial_resources) {
+        Ok(schema) => schema,
+        Err(err) => {
+            eprintln!("Failed to infer schema: {err}");
+            Schema::default()
+        }
+    };
     let state = AppState {
         data_source: Arc::new(data_source),
         resources: Arc::new(RwLock::new(initial_resources)),
         resource_cache: Arc::new(RwLock::new(HashMap::new())),
         resource_locks: Arc::new(RwLock::new(HashMap::new())),
-        schema: Arc::new(schema),
+        schema_store: Arc::new(std::sync::RwLock::new(
+            app::SchemaStore::new(declared_schema, inferred_schema).unwrap_or_else(|err| {
+                eprintln!("Failed to build schema: {err}");
+                std::process::exit(1);
+            }),
+        )),
+        graphql_store: Arc::new(RwLock::new(app::GraphqlStore::default())),
     };
 
     start_resource_watcher(
         state.data_source.clone(),
         state.resources.clone(),
         state.resource_cache.clone(),
+        state.schema_store.clone(),
+        state.graphql_store.clone(),
     );
 
     let app = build_router(state.clone(), cli.readonly, cli.log);

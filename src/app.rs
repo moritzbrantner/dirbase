@@ -1,17 +1,13 @@
 use std::{
     collections::{BTreeSet, HashMap},
     path::PathBuf,
-    sync::Arc,
-    time::SystemTime,
+    sync::{Arc, RwLock as StdRwLock},
 };
 
+use async_graphql::dynamic::Schema as DynamicSchema;
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 
-use crate::{
-    error::AppError,
-    schema::{Schema, TableSchema},
-};
-use axum::http::StatusCode;
+use crate::schema::{DeclaredSchema, DeclaredTableSchema, Schema, TableSchema, merge_schemas};
 use serde_json::Value;
 
 #[derive(Clone)]
@@ -26,33 +22,59 @@ pub struct AppState {
     pub resources: Arc<RwLock<BTreeSet<String>>>,
     pub resource_cache: Arc<RwLock<HashMap<String, CachedResource>>>,
     pub resource_locks: Arc<RwLock<HashMap<String, Arc<RwLock<()>>>>>,
-    pub schema: Arc<Option<Schema>>,
+    pub schema_store: Arc<StdRwLock<SchemaStore>>,
+    pub graphql_store: Arc<RwLock<GraphqlStore>>,
 }
 
 #[derive(Clone)]
 pub struct CachedResource {
     pub value: Arc<Value>,
-    pub metadata: CachedMetadata,
+    pub id_index: Option<HashMap<String, usize>>,
+    pub primary_key: String,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct CachedMetadata {
-    pub modified: SystemTime,
-    pub len: u64,
+#[derive(Clone, Debug, Default)]
+pub struct SchemaStore {
+    pub declared: Option<DeclaredSchema>,
+    pub inferred: Schema,
+    pub merged: Schema,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct GraphqlStore {
+    pub schema: Option<DynamicSchema>,
+    pub build_error: Option<String>,
+}
+
+impl SchemaStore {
+    pub fn new(declared: Option<DeclaredSchema>, inferred: Schema) -> Result<Self, String> {
+        let merged = merge_schemas(declared.as_ref(), &inferred)?;
+        Ok(Self { declared, inferred, merged })
+    }
+
+    pub fn replace_inferred(&mut self, inferred: Schema) -> Result<(), String> {
+        self.inferred = inferred;
+        self.merged = merge_schemas(self.declared.as_ref(), &self.inferred)?;
+        Ok(())
+    }
 }
 
 impl AppState {
-    pub fn schema_table(&self, resource: &str) -> Result<Option<&TableSchema>, AppError> {
-        let Some(schema) = self.schema.as_ref() else {
-            return Ok(None);
-        };
+    pub fn schema_snapshot(&self) -> Schema {
+        self.schema_store.read().expect("schema store").merged.clone()
+    }
 
-        schema.tables.get(resource).map(Some).ok_or_else(|| {
-            AppError::new(
-                StatusCode::BAD_REQUEST,
-                format!("Resource '{resource}' is not defined in schema"),
-            )
-        })
+    pub fn schema_table(&self, resource: &str) -> Option<TableSchema> {
+        self.schema_store.read().expect("schema store").merged.tables.get(resource).cloned()
+    }
+
+    pub fn validation_schema_table(&self, resource: &str) -> Option<DeclaredTableSchema> {
+        let store = self.schema_store.read().expect("schema store");
+        store.declared.as_ref().and_then(|schema| schema.tables.get(resource).cloned())
+    }
+
+    pub fn update_inferred_schema(&self, inferred: Schema) -> Result<(), String> {
+        self.schema_store.write().expect("schema store").replace_inferred(inferred)
     }
 
     pub async fn resource_names_sorted(&self) -> Vec<String> {
@@ -85,5 +107,42 @@ impl AppState {
 
         let mut locks = self.resource_locks.write().await;
         locks.entry(resource.to_string()).or_insert_with(|| Arc::new(RwLock::new(()))).clone()
+    }
+
+    pub async fn invalidate_graphql_schema(&self) {
+        let mut store = self.graphql_store.write().await;
+        *store = GraphqlStore::default();
+    }
+
+    pub async fn graphql_schema(&self) -> Result<DynamicSchema, String> {
+        {
+            let store = self.graphql_store.read().await;
+            if let Some(schema) = &store.schema {
+                return Ok(schema.clone());
+            }
+            if let Some(error) = &store.build_error {
+                return Err(error.clone());
+            }
+        }
+
+        let built = crate::graphql::build_schema(self).await;
+        let mut store = self.graphql_store.write().await;
+        if store.schema.is_none() && store.build_error.is_none() {
+            match built {
+                Ok(schema) => {
+                    store.schema = Some(schema.clone());
+                    return Ok(schema);
+                }
+                Err(error) => {
+                    store.build_error = Some(error.clone());
+                    return Err(error);
+                }
+            }
+        }
+
+        if let Some(schema) = &store.schema {
+            return Ok(schema.clone());
+        }
+        Err(store.build_error.clone().unwrap_or_else(|| "GraphQL schema unavailable".to_string()))
     }
 }

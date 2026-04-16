@@ -1,0 +1,18 @@
+Table members {
+  id int [pk]
+  name varchar
+  code varchar
+  team_id int [ref: > teams.id]
+  city varchar
+}
+
+Table teams {
+  id int [pk]
+  name varchar
+  lead varchar
+}
+
+Table settings {
+  theme varchar
+  preview boolean
+}

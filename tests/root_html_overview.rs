@@ -75,11 +75,13 @@ Table posts {
     assert!(response.contains("content-type: text/html; charset=utf-8"), "{response}");
     assert!(response.contains("<h1>Visual overview of your data</h1>"), "{response}");
     assert!(response.contains("Rules of paths"), "{response}");
-    assert!(response.contains("Interactive playground"), "{response}");
+    assert!(response.contains("id=\"overview-root\""), "{response}");
+    assert!(response.contains("data-overview-endpoint=\"/overview.json\""), "{response}");
+    assert!(response.contains("href=\"/assets/overview.css\""), "{response}");
+    assert!(response.contains("src=\"/assets/overview.js\""), "{response}");
     assert!(response.contains("Each valid `*.json` filename becomes `/{resource}`."), "{response}");
     assert!(response.contains("data-resource=\"posts\""), "{response}");
     assert!(response.contains("data-resource=\"users\""), "{response}");
-    assert!(response.contains("user_id -&gt; users.id"), "{response}");
 }
 
 fn reserve_bind_addr() -> String {
