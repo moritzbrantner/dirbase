@@ -9,7 +9,7 @@ module.exports = defineConfig({
   },
   webServer: {
     command:
-      `bash -lc 'cd ui && npm run build && cd .. && tmpdir=$(mktemp -d) && cp ./ui/e2e/fixtures/* "$tmpdir"/ && cargo run -- --folder "$tmpdir" --bind 127.0.0.1:4510'`,
+      `bash -lc 'cd ui && bun run build && cd .. && tmpdir=$(mktemp -d) && cp ./ui/e2e/fixtures/* "$tmpdir"/ && cargo run -- --folder "$tmpdir" --bind 127.0.0.1:4510'`,
     cwd: '..',
     url: 'http://127.0.0.1:4510',
     reuseExistingServer: true,
