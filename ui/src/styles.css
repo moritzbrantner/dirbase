@@ -334,7 +334,7 @@ a {
 }
 
 .graph-node-card {
-  width: 220px;
+  width: 248px;
   padding: 0.9rem;
   border-radius: 20px;
   border: 1px solid var(--line-soft);
@@ -355,6 +355,68 @@ a {
   margin-top: 0.65rem;
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.graph-node-columns {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.85rem;
+}
+
+.graph-column-row {
+  position: relative;
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.55rem 1.1rem;
+  border-radius: 14px;
+  background: rgba(247, 243, 236, 0.82);
+  border: 1px solid rgba(31, 46, 42, 0.08);
+}
+
+.graph-column-row.is-primary {
+  border-color: rgba(194, 106, 61, 0.32);
+  background: rgba(255, 244, 236, 0.94);
+}
+
+.graph-column-copy {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.graph-column-name {
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+.graph-column-meta,
+.graph-node-empty {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.graph-node-empty {
+  margin-top: 0.8rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 14px;
+  background: rgba(247, 243, 236, 0.72);
+}
+
+.react-flow__handle.graph-column-handle {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+  background: #fffdf8;
+}
+
+.react-flow__handle.graph-column-handle.is-target {
+  left: -7px;
+  border-color: #c26a3d;
+}
+
+.react-flow__handle.graph-column-handle.is-source {
+  right: -7px;
+  border-color: #0f766e;
 }
 
 .relation-map-minimap {
