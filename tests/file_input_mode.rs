@@ -35,7 +35,6 @@ fn serves_json_server_style_single_file_input() {
     .expect("write db file");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--file")
         .arg(&db_path)
         .arg("--bind")
         .arg("127.0.0.1:3033")
@@ -47,7 +46,7 @@ fn serves_json_server_style_single_file_input() {
 
     wait_for_server("127.0.0.1:3033", Duration::from_secs(5));
 
-    let root_response = http_request("GET", "127.0.0.1:3033", "/", None);
+    let root_response = http_request("GET", "127.0.0.1:3033", "/", None, None);
     assert!(root_response.starts_with("HTTP/1.1 200 OK\r\n"), "{root_response}");
     let root_body: serde_json::Value =
         serde_json::from_str(parse_http_body(&root_response)).expect("root body json");
@@ -55,13 +54,87 @@ fn serves_json_server_style_single_file_input() {
     assert!(resources.iter().any(|resource| resource.as_str() == Some("users")));
     assert!(resources.iter().any(|resource| resource.as_str() == Some("settings")));
 
-    let post_response = http_request("POST", "127.0.0.1:3033", "/users", Some(r#"{"name":"Lin"}"#));
+    let post_response =
+        http_request("POST", "127.0.0.1:3033", "/users", Some(r#"{"name":"Lin"}"#), None);
     assert!(post_response.starts_with("HTTP/1.1 201 Created\r\n"), "{post_response}");
 
     let db_text = fs::read_to_string(&db_path).expect("read db file");
     let db: serde_json::Value = serde_json::from_str(&db_text).expect("db json");
     assert_eq!(db["users"].as_array().expect("users array").len(), 2);
     assert_eq!(db["settings"]["theme"], "dark");
+}
+
+#[test]
+fn html_overview_explains_top_level_keys_in_file_mode() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let db_path = temp.path().join("db.json");
+    fs::write(
+        &db_path,
+        r#"{
+  "users": [
+    {"id": 1, "name": "Ada"}
+  ]
+}
+"#,
+    )
+    .expect("write db file");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg(&db_path)
+        .arg("--bind")
+        .arg("127.0.0.1:3034")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3034", Duration::from_secs(5));
+
+    let html_response = http_request(
+        "GET",
+        "127.0.0.1:3034",
+        "/",
+        None,
+        Some("Accept: text/html,application/xhtml+xml\r\n"),
+    );
+    assert!(html_response.starts_with("HTTP/1.1 200 OK\r\n"), "{html_response}");
+    assert!(
+        html_response.contains("Each valid top-level key in the JSON file becomes `/{resource}`."),
+        "{html_response}"
+    );
+}
+
+#[test]
+fn serves_folder_when_directory_is_passed_positionally() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"id": 1, "name": "Ada"}
+]
+"#,
+    )
+    .expect("write users file");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3035")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3035", Duration::from_secs(5));
+
+    let response = http_request("GET", "127.0.0.1:3035", "/users", None, None);
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+
+    let payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&response)).expect("users body json");
+    assert_eq!(payload.as_array().expect("users array")[0]["name"], "Ada");
 }
 
 fn wait_for_server(addr: &str, timeout: Duration) {
@@ -84,17 +157,29 @@ fn parse_http_body(response: &str) -> &str {
         .expect("response should have body")
 }
 
-fn http_request(method: &str, addr: &str, path: &str, body: Option<&str>) -> String {
+fn http_request(
+    method: &str,
+    addr: &str,
+    path: &str,
+    body: Option<&str>,
+    extra_headers: Option<&str>,
+) -> String {
     let mut stream = TcpStream::connect(addr).expect("connect to server");
-
-    let request = if let Some(body) = body {
-        format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
+    let (body, extra_headers) = if let Some(body) = body {
+        (
+            body,
+            format!(
+                "{}Content-Type: application/json\r\nContent-Length: {}\r\n",
+                extra_headers.unwrap_or(""),
+                body.len()
+            ),
         )
     } else {
-        format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        ("", extra_headers.unwrap_or("").to_string())
     };
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{extra_headers}\r\n{body}"
+    );
 
     stream.write_all(request.as_bytes()).expect("write request");
 

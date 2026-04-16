@@ -15,10 +15,11 @@
     "bin"
   ],
   "scripts": {
+    "clean": "node scripts/clean-package-output.mjs",
     "build:js": "node esbuild.config.mjs",
     "build:rust": "cargo build --release --manifest-path ../Cargo.toml",
     "copy:binary": "node scripts/copy-rust-binary.mjs",
-    "build": "npm run build:js && npm run build:rust && npm run copy:binary",
+    "build": "npm run clean && npm run build:js && npm run build:rust && npm run copy:binary",
     "prepack": "npm run build"
   },
   "keywords": [

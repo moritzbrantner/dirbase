@@ -275,6 +275,122 @@ fn retrieval_returns_400_for_invalid_resource_name() {
     );
 }
 
+#[test]
+fn retrieval_and_create_use_declared_primary_key() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("schema.json"),
+        r#"{
+  "tables": {
+    "users": {
+      "primary_key": "user_id",
+      "columns": {
+        "user_id": {"column_type": "integer", "nullable": false},
+        "name": {"column_type": "string", "nullable": false}
+      }
+    }
+  }
+}
+"#,
+    )
+    .expect("write schema");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"user_id": 1, "name": "Ada"},
+  {"user_id": 2, "name": "Grace"}
+]
+"#,
+    )
+    .expect("write users");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3019")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3019", Duration::from_secs(5));
+
+    let get_existing = http_get("127.0.0.1:3019", "/users/1");
+    assert!(get_existing.starts_with("HTTP/1.1 200 OK\r\n"), "{get_existing}");
+    let existing_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&get_existing)).expect("valid json body");
+    assert_eq!(existing_payload["name"], "Ada");
+
+    let post_response = http_request("127.0.0.1:3019", "POST", "/users", Some(r#"{"name":"Lin"}"#));
+    assert!(post_response.starts_with("HTTP/1.1 201 Created\r\n"), "{post_response}");
+    let created_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&post_response)).expect("created json");
+    assert_eq!(created_payload["user_id"], 3);
+    assert_eq!(created_payload["name"], "Lin");
+
+    let get_created = http_get("127.0.0.1:3019", "/users/3");
+    assert!(get_created.starts_with("HTTP/1.1 200 OK\r\n"), "{get_created}");
+}
+
+#[test]
+fn overlay_schema_validation_allows_undeclared_resources_and_columns() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("schema.json"),
+        r#"{
+  "tables": {
+    "posts": {
+      "columns": {
+        "title": {"column_type": "string", "nullable": false}
+      }
+    }
+  }
+}
+"#,
+    )
+    .expect("write schema");
+    fs::write(
+        temp.path().join("posts.json"),
+        r#"[
+  {"id": 1, "title": "Hello", "extra": true}
+]
+"#,
+    )
+    .expect("write posts");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"id": 1, "name": "Ada"}
+]
+"#,
+    )
+    .expect("write users");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3028")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3028", Duration::from_secs(5));
+
+    let users_response = http_get("127.0.0.1:3028", "/users");
+    assert!(users_response.starts_with("HTTP/1.1 200 OK\r\n"), "{users_response}");
+
+    let posts_response = http_get("127.0.0.1:3028", "/posts");
+    assert!(posts_response.starts_with("HTTP/1.1 200 OK\r\n"), "{posts_response}");
+    let posts_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&posts_response)).expect("posts json");
+    assert_eq!(posts_payload[0]["extra"], true);
+}
+
 fn wait_for_server(addr: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
 
@@ -298,6 +414,26 @@ fn parse_http_body(response: &str) -> &str {
 fn http_get(addr: &str, path: &str) -> String {
     let mut stream = TcpStream::connect(addr).expect("connect to server");
     let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+
+    stream.write_all(request.as_bytes()).expect("write request");
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read response");
+
+    response
+}
+
+fn http_request(addr: &str, method: &str, path: &str, body: Option<&str>) -> String {
+    let mut stream = TcpStream::connect(addr).expect("connect to server");
+    let payload = body.unwrap_or("");
+    let request = if body.is_some() {
+        format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+            payload.len()
+        )
+    } else {
+        format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+    };
 
     stream.write_all(request.as_bytes()).expect("write request");
 

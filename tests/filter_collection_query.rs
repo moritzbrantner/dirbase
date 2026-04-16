@@ -50,16 +50,16 @@ fn collection_supports_filtering_with_multiple_query_parameters() {
         .arg("--folder")
         .arg(temp.path())
         .arg("--bind")
-        .arg("127.0.0.1:3001")
+        .arg("127.0.0.1:3211")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("start folder-server");
     let _child = ChildGuard { child };
 
-    wait_for_server("127.0.0.1:3001", Duration::from_secs(5));
+    wait_for_server("127.0.0.1:3211", Duration::from_secs(5));
 
-    let response = http_get("127.0.0.1:3001", "/users?role=admin&active=true");
+    let response = http_get("127.0.0.1:3211", "/users?role=admin&active=true");
 
     assert!(
         response.starts_with("HTTP/1.1 200 OK\r\n"),

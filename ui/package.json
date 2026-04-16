@@ -1,0 +1,30 @@
+{
+  "name": "folder-server-overview-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.91.0",
+    "@tanstack/react-table": "^8.21.3",
+    "@xyflow/react": "^12.10.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "esbuild": "^0.27.4",
+    "jsdom": "^29.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  }
+}
