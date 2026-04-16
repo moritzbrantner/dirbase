@@ -127,6 +127,36 @@ Table posts {
 }
 
 #[test]
+fn graphql_collection_query_fields_support_filter_sort_and_pagination() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"id": 1, "name": "Ada"},
+  {"id": 2, "name": "Grace"},
+  {"id": 3, "name": "Linus"}
+]
+"#,
+    )
+    .expect("write users");
+
+    let bind_addr = "127.0.0.1:3040".to_string();
+    let child = spawn_server(temp.path(), &bind_addr, false);
+    let _child = ChildGuard { child };
+    wait_for_server(&bind_addr, Duration::from_secs(5));
+
+    let payload = graphql_json(
+        &bind_addr,
+        r#"{ usersQuery(filter: [{field: "name", operator: CONTAINS, value: "a"}], sort: [{field: "id", direction: DESC}], page: 1, perPage: 1) { page pages items data { id name } } }"#,
+    );
+    assert_eq!(payload["data"]["usersQuery"]["page"], 1);
+    assert_eq!(payload["data"]["usersQuery"]["pages"], 2);
+    assert_eq!(payload["data"]["usersQuery"]["items"], 2);
+    assert_eq!(payload["data"]["usersQuery"]["data"][0]["id"], 2);
+    assert_eq!(payload["data"]["usersQuery"]["data"][0]["name"], "Grace");
+}
+
+#[test]
 fn graphql_respects_declared_primary_keys_and_manual_relations() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(

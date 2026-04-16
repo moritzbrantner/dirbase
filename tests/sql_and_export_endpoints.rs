@@ -215,6 +215,62 @@ fn readonly_mode_allows_sql_and_export_and_rejects_post_sql() {
     assert!(post_sql.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"), "{post_sql}");
 }
 
+#[test]
+fn sql_inner_join_supports_schema_backed_relations() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"id": 1, "name": "Ada"},
+  {"id": 2, "name": "Grace"}
+]
+"#,
+    )
+    .expect("write users");
+    std::fs::write(
+        temp.path().join("teams.json"),
+        r#"[
+  {"id": 10, "user_id": 1, "name": "Core"},
+  {"id": 11, "user_id": 2, "name": "Infra"}
+]
+"#,
+    )
+    .expect("write teams");
+    std::fs::write(
+        temp.path().join("schema.dbml"),
+        r#"
+        Table users {
+          id int [pk]
+          name varchar
+        }
+
+        Table teams {
+          id int [pk]
+          user_id int [ref: > users.id]
+          name varchar
+        }
+        "#,
+    )
+    .expect("write schema");
+
+    let _child = start_server(temp.path(), 3026, false);
+
+    let response = http_get(
+        "127.0.0.1:3026",
+        "/sql?q=SELECT%20u.name,t.name%20FROM%20users%20u%20JOIN%20teams%20t%20ON%20u.id%20=%20t.user_id%20ORDER%20BY%20u.id%20ASC%20LIMIT%202",
+    );
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    let payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&response)).expect("join payload");
+    assert_eq!(
+        payload["rows"],
+        serde_json::json!([
+            {"u.name": "Ada", "t.name": "Core"},
+            {"u.name": "Grace", "t.name": "Infra"}
+        ])
+    );
+}
+
 fn start_server(folder: &std::path::Path, port: u16, readonly: bool) -> ChildGuard {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_folder-server"));
     cmd.arg("--folder").arg(folder).arg("--bind").arg(format!("127.0.0.1:{port}"));

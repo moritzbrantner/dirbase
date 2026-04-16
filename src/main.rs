@@ -1,6 +1,6 @@
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc};
 
-use app::AppState;
+use app::{AppConfig, AppState, HealthState, MetricsStore};
 use clap::{CommandFactory, Parser};
 use tokio::sync::RwLock;
 
@@ -39,6 +39,18 @@ struct Cli {
     log: bool,
     #[arg(long, default_value = "requests.log")]
     logname: PathBuf,
+    #[arg(long)]
+    auth_token: Option<String>,
+    #[arg(long)]
+    cors_origin: Option<String>,
+    #[arg(long, default_value_t = 1024 * 1024)]
+    max_body_bytes: usize,
+    #[arg(long, default_value_t = 100)]
+    max_per_page: usize,
+    #[arg(long, default_value_t = 50_000)]
+    max_sql_scan_rows: usize,
+    #[arg(long, default_value_t = 1_000)]
+    max_sql_selected_rows: usize,
 }
 
 #[tokio::main]
@@ -83,15 +95,29 @@ async fn main() {
     };
 
     let initial_resources = scan_resources(&data_source).unwrap_or_default();
-    let inferred_schema = match infer_schema_from_data_source(&data_source, &initial_resources) {
-        Ok(schema) => schema,
-        Err(err) => {
-            eprintln!("Failed to infer schema: {err}");
-            Schema::default()
-        }
-    };
+    let (inferred_schema, health) =
+        match infer_schema_from_data_source(&data_source, &initial_resources) {
+            Ok(schema) => (schema, Arc::new(HealthState::new(true, None))),
+            Err(err) => {
+                eprintln!("Failed to infer schema: {err}");
+                (Schema::default(), Arc::new(HealthState::new(false, Some(err))))
+            }
+        };
+    let config = Arc::new(AppConfig {
+        readonly: cli.readonly,
+        enable_log: cli.log,
+        auth_token: cli.auth_token.clone(),
+        cors_origin: cli.cors_origin.clone(),
+        max_body_bytes: cli.max_body_bytes,
+        max_per_page: cli.max_per_page,
+        max_sql_scan_rows: cli.max_sql_scan_rows,
+        max_sql_selected_rows: cli.max_sql_selected_rows,
+    });
+    let metrics = Arc::new(MetricsStore::default());
+    let (event_bus, _) = tokio::sync::broadcast::channel(256);
     let state = AppState {
         data_source: Arc::new(data_source),
+        config,
         resources: Arc::new(RwLock::new(initial_resources)),
         resource_cache: Arc::new(RwLock::new(HashMap::new())),
         resource_locks: Arc::new(RwLock::new(HashMap::new())),
@@ -102,6 +128,9 @@ async fn main() {
             }),
         )),
         graphql_store: Arc::new(RwLock::new(app::GraphqlStore::default())),
+        metrics,
+        health,
+        event_bus,
     };
 
     start_resource_watcher(
@@ -110,9 +139,11 @@ async fn main() {
         state.resource_cache.clone(),
         state.schema_store.clone(),
         state.graphql_store.clone(),
+        state.health.clone(),
+        state.clone(),
     );
 
-    let app = build_router(state.clone(), cli.readonly, cli.log);
+    let app = build_router(state.clone());
     tracing::info!(readonly = cli.readonly, "Readonly mode");
     tracing::info!("Listening on http://{}", cli.bind);
     let listener = tokio::net::TcpListener::bind(cli.bind).await.expect("binding server listener");

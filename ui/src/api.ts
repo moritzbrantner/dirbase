@@ -1,4 +1,4 @@
-import type { OverviewPageData, ResourceResponse } from './types';
+import type { OverviewPageData, ResourceResponse, SchemaResponse } from './types';
 
 export async function fetchOverview(overviewEndpoint: string): Promise<OverviewPageData> {
   const response = await fetch(overviewEndpoint, {
@@ -32,4 +32,31 @@ export async function fetchResource(path: string): Promise<ResourceResponse> {
     rawText,
     parsed
   };
+}
+
+export async function fetchSchema(): Promise<SchemaResponse> {
+  const response = await fetch('/schema', {
+    headers: {
+      Accept: 'application/json'
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`Schema request failed: ${response.status} ${response.statusText}`);
+  }
+  return response.json() as Promise<SchemaResponse>;
+}
+
+export async function saveSchemaDocument(schema: string): Promise<void> {
+  const response = await fetch('/schema', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: schema
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Schema save failed: ${response.status} ${response.statusText}`);
+  }
 }

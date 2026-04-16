@@ -9,6 +9,7 @@ use std::{
 };
 
 use axum::http::StatusCode;
+use fs2::FileExt;
 use serde_json::Value;
 use tokio::fs;
 
@@ -90,30 +91,37 @@ pub async fn write_resource(
                 .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             format!("{content}\n")
         }
-        DataSource::File(_) => {
-            let _guard = state.write_lock_for_resource("__db_file__").await;
-            let raw = fs::read_to_string(&file)
-                .await
-                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            let mut root: Value = serde_json::from_str(&raw).map_err(|e| {
-                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
-            })?;
-            let root_obj = root.as_object_mut().ok_or_else(|| {
-                AppError::new(StatusCode::BAD_REQUEST, "Database file must contain a JSON object")
-            })?;
-            root_obj.insert(resource.to_string(), value.clone());
-            let content = serde_json::to_string_pretty(&root)
-                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            format!("{content}\n")
-        }
+        DataSource::File(_) => String::new(),
     };
 
     let file_for_write = file.clone();
-    tokio::task::spawn_blocking(move || write_json_atomically(&file_for_write, payload))
-        .await
-        .map_err(|e| {
-        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Atomic write task failed: {e}"))
-    })??;
+    let resource_name = resource.to_string();
+    let value_for_write = value.clone();
+    match &*state.data_source {
+        DataSource::Folder(_) => {
+            tokio::task::spawn_blocking(move || write_json_atomically(&file_for_write, payload))
+                .await
+                .map_err(|e| {
+                    AppError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Atomic write task failed: {e}"),
+                    )
+                })??;
+        }
+        DataSource::File(_) => {
+            let _guard = state.write_lock_for_resource("__db_file__").await;
+            tokio::task::spawn_blocking(move || {
+                write_resource_in_db_file(&file_for_write, &resource_name, &value_for_write)
+            })
+            .await
+            .map_err(|e| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Atomic write task failed: {e}"),
+                )
+            })??;
+        }
+    }
 
     let table = state.schema_table(resource);
     state.resource_cache.write().await.insert(
@@ -126,10 +134,18 @@ pub async fn write_resource(
     );
     refresh_inferred_schema(state).await?;
     state.invalidate_graphql_schema().await;
+    state.emit_event("resource_changed", Some(resource.to_string()));
+    state.emit_event("schema_changed", None);
+    state.emit_event("overview_changed", None);
+    state.health.mark_ready();
     Ok(())
 }
 
 fn write_json_atomically(file: &Path, payload: String) -> Result<(), AppError> {
+    with_exclusive_file_lock(file, || write_json_atomically_unlocked(file, &payload))
+}
+
+fn write_json_atomically_unlocked(file: &Path, payload: &str) -> Result<(), AppError> {
     let temp_file = temp_file_path(file);
     let mut handle = OpenOptions::new()
         .create_new(true)
@@ -152,6 +168,47 @@ fn write_json_atomically(file: &Path, payload: String) -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+fn write_resource_in_db_file(file: &Path, resource: &str, value: &Value) -> Result<(), AppError> {
+    with_exclusive_file_lock(file, || {
+        let raw = std::fs::read_to_string(file)
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let mut root: Value = serde_json::from_str(&raw).map_err(|e| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
+        })?;
+        let root_obj = root.as_object_mut().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Database file must contain a JSON object")
+        })?;
+        root_obj.insert(resource.to_string(), value.clone());
+        let content = serde_json::to_string_pretty(&root)
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        write_json_atomically_unlocked(file, &format!("{content}\n"))
+    })
+}
+
+fn with_exclusive_file_lock<T>(
+    file: &Path,
+    f: impl FnOnce() -> Result<T, AppError>,
+) -> Result<T, AppError> {
+    let lock_path = lock_file_path(file);
+    let lock_handle = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    lock_handle
+        .lock_exclusive()
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let result = f();
+    let _ = lock_handle.unlock();
+    result
+}
+
+fn lock_file_path(file: &Path) -> PathBuf {
+    let file_name = file.file_name().and_then(|name| name.to_str()).unwrap_or("resource");
+    file.with_file_name(format!("{file_name}.lock"))
 }
 
 fn temp_file_path(file: &Path) -> PathBuf {
@@ -305,7 +362,7 @@ pub fn is_valid_resource_name(name: &str) -> bool {
 }
 
 pub fn is_reserved_resource_name(name: &str) -> bool {
-    name == "schema" || name == "graphql"
+    matches!(name, "schema" | "graphql" | "sql" | "events" | "healthz" | "readyz" | "metrics")
 }
 
 pub fn find_item_by_key<'a>(items: &'a [Value], key_name: &str, id: &str) -> Option<&'a Value> {
@@ -402,6 +459,7 @@ async fn refresh_inferred_schema(state: &AppState) -> Result<(), AppError> {
     state
         .update_inferred_schema(inferred)
         .map_err(|err| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, err))?;
+    state.health.mark_ready();
     Ok(())
 }
 
@@ -417,11 +475,24 @@ mod tests {
     fn test_state(folder: PathBuf) -> AppState {
         AppState {
             data_source: Arc::new(DataSource::Folder(folder)),
+            config: Arc::new(crate::app::AppConfig {
+                readonly: false,
+                enable_log: false,
+                auth_token: None,
+                cors_origin: None,
+                max_body_bytes: 1024 * 1024,
+                max_per_page: 100,
+                max_sql_scan_rows: 50_000,
+                max_sql_selected_rows: 1_000,
+            }),
             resources: Arc::new(RwLock::new(BTreeSet::new())),
             resource_cache: Arc::new(RwLock::new(HashMap::new())),
             resource_locks: Arc::new(RwLock::new(HashMap::new())),
             schema_store: Arc::new(std::sync::RwLock::new(crate::app::SchemaStore::default())),
             graphql_store: Arc::new(RwLock::new(crate::app::GraphqlStore::default())),
+            metrics: Arc::new(crate::app::MetricsStore::default()),
+            health: Arc::new(crate::app::HealthState::new(true, None)),
+            event_bus: tokio::sync::broadcast::channel(16).0,
         }
     }
 

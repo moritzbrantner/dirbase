@@ -52,4 +52,21 @@ describe('overview URL state', () => {
 
     expect(queryString).toBe('?resource=users&page=3&per_page=100&sort=last_name%2C-age&embed=manager_id');
   });
+
+  it('serializes null operators without a value payload', () => {
+    const params = buildResourceSearchParams({
+      page: 1,
+      perPage: 25,
+      sorting: [],
+      embeds: [],
+      filters: [
+        { id: '1', field: 'deleted_at', operator: 'isNull', value: '' },
+        { id: '2', field: 'published_at', operator: 'isNotNull', value: '' }
+      ]
+    });
+
+    expect(params.toString()).toBe(
+      'page=1&per_page=25&deleted_at%3AisNull=true&published_at%3AisNotNull=true'
+    );
+  });
 });

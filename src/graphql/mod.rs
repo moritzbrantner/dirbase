@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use async_graphql::{
     Error as GraphqlError, Request as GraphqlRequest, Value as GraphqlValue,
     dynamic::{
-        Field, FieldFuture, FieldValue, InputValue, Object, Scalar, Schema as DynamicSchema,
-        TypeRef,
+        Enum, EnumItem, Field, FieldFuture, FieldValue, InputObject, InputValue, Object, Scalar,
+        Schema as DynamicSchema, TypeRef,
     },
     http::{GraphiQLSource, parse_query_string},
 };
@@ -23,6 +23,10 @@ use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use crate::{
     app::AppState,
     error::AppError,
+    query::filters::{
+        FilterCondition, FilterOperator, Pagination, SortColumn, filter_collection_refs,
+        paginate_collection_refs, sort_collection_refs,
+    },
     relations::resolve_related_row,
     schema::{ColumnSchema, ColumnType, TableSchema, primary_key_name},
     storage::{find_item_by_key, load_resource, validate_resource_data},
@@ -62,6 +66,11 @@ enum RootFieldSpec {
         row_type_name: String,
         primary_key: String,
     },
+    CollectionQuery {
+        resource: String,
+        graphql_name: String,
+        page_type_name: String,
+    },
     Object {
         resource: String,
         graphql_name: String,
@@ -75,6 +84,17 @@ enum RootFieldSpec {
 
 #[derive(Clone, Debug)]
 struct GraphqlObjectValue {
+    object: JsonMap<String, JsonValue>,
+}
+
+#[derive(Clone, Debug)]
+struct PageTypeSpec {
+    type_name: String,
+    row_type_name: String,
+}
+
+#[derive(Clone, Debug)]
+struct GraphqlPageValue {
     object: JsonMap<String, JsonValue>,
 }
 
@@ -96,6 +116,7 @@ pub async fn build_schema(state: &AppState) -> Result<DynamicSchema, String> {
     let mut type_name_registry = BTreeMap::new();
     let mut root_field_registry = BTreeMap::new();
     let mut collection_type_names = BTreeMap::new();
+    let mut page_type_names = BTreeMap::new();
 
     for resource in &resources {
         let Some(table) = schema.tables.get(resource) else {
@@ -110,10 +131,18 @@ pub async fn build_schema(state: &AppState) -> Result<DynamicSchema, String> {
             format!("collection type for resource '{resource}'"),
             "GraphQL type names",
         )?;
+        let page_type_name = register_graphql_name(
+            &mut type_name_registry,
+            collection_page_type_name(resource),
+            format!("collection page type for resource '{resource}'"),
+            "GraphQL type names",
+        )?;
         collection_type_names.insert(resource.clone(), type_name);
+        page_type_names.insert(resource.clone(), page_type_name);
     }
 
     let mut object_types = Vec::new();
+    let mut page_types = Vec::new();
     let mut root_fields = Vec::new();
 
     for resource in &resources {
@@ -138,6 +167,21 @@ pub async fn build_schema(state: &AppState) -> Result<DynamicSchema, String> {
                     graphql_name: collection_field_name,
                     row_type_name: row_type_name.clone(),
                 });
+                let query_field_name = register_graphql_name(
+                    &mut root_field_registry,
+                    normalize_graphql_name(&format!("{resource}Query")),
+                    format!("query field for resource '{resource}'"),
+                    "GraphQL root fields",
+                )?;
+                let page_type_name = page_type_names
+                    .get(resource)
+                    .cloned()
+                    .ok_or_else(|| format!("Missing page type for resource '{resource}'"))?;
+                root_fields.push(RootFieldSpec::CollectionQuery {
+                    resource: resource.clone(),
+                    graphql_name: query_field_name,
+                    page_type_name: page_type_name.clone(),
+                });
 
                 if table.primary_key.is_some() {
                     let by_id_name = register_graphql_name(
@@ -158,6 +202,10 @@ pub async fn build_schema(state: &AppState) -> Result<DynamicSchema, String> {
                     source_resource: resource.clone(),
                     type_name: row_type_name,
                     fields,
+                });
+                page_types.push(PageTypeSpec {
+                    type_name: page_type_name,
+                    row_type_name: collection_type_names.get(resource).cloned().expect("row type"),
                 });
                 continue;
             }
@@ -222,13 +270,25 @@ pub async fn build_schema(state: &AppState) -> Result<DynamicSchema, String> {
         query = query.field(build_root_field(root_field));
     }
 
+    let filter_operator = build_filter_operator_enum();
+    let sort_direction = build_sort_direction_enum();
+    let filter_input = build_filter_input(filter_operator.type_name());
+    let sort_input = build_sort_input(sort_direction.type_name());
+
     let mut builder = DynamicSchema::build("Query", None, None)
         .data(state.clone())
         .register(Scalar::new("JSON"))
+        .register(filter_operator)
+        .register(sort_direction)
+        .register(filter_input)
+        .register(sort_input)
         .register(query);
 
     for object_type in &object_types {
         builder = builder.register(build_object_type(object_type));
+    }
+    for page_type in &page_types {
+        builder = builder.register(build_page_type(page_type));
     }
 
     builder.finish().map_err(|err| err.to_string())
@@ -407,6 +467,9 @@ fn build_root_field(spec: &RootFieldSpec) -> Field {
         RootFieldSpec::CollectionById { resource, graphql_name, row_type_name, primary_key } => {
             build_collection_by_id_field(resource, graphql_name, row_type_name, primary_key)
         }
+        RootFieldSpec::CollectionQuery { resource, graphql_name, page_type_name } => {
+            build_collection_query_field(resource, graphql_name, page_type_name)
+        }
         RootFieldSpec::Object { resource, graphql_name, type_name } => {
             build_object_root_field(resource, graphql_name, type_name)
         }
@@ -414,6 +477,83 @@ fn build_root_field(spec: &RootFieldSpec) -> Field {
             build_json_root_field(resource, graphql_name)
         }
     }
+}
+
+fn build_filter_operator_enum() -> Enum {
+    Enum::new("CollectionFilterOperator")
+        .item(EnumItem::new("EQ"))
+        .item(EnumItem::new("NE"))
+        .item(EnumItem::new("LT"))
+        .item(EnumItem::new("LTE"))
+        .item(EnumItem::new("GT"))
+        .item(EnumItem::new("GTE"))
+        .item(EnumItem::new("IN"))
+        .item(EnumItem::new("CONTAINS"))
+        .item(EnumItem::new("STARTS_WITH"))
+        .item(EnumItem::new("ENDS_WITH"))
+        .item(EnumItem::new("IS_NULL"))
+        .item(EnumItem::new("IS_NOT_NULL"))
+}
+
+fn build_sort_direction_enum() -> Enum {
+    Enum::new("CollectionSortDirection").item(EnumItem::new("ASC")).item(EnumItem::new("DESC"))
+}
+
+fn build_filter_input(filter_operator_type: &str) -> InputObject {
+    InputObject::new("CollectionFilterInput")
+        .field(InputValue::new("field", TypeRef::named_nn(TypeRef::STRING)))
+        .field(InputValue::new("operator", TypeRef::named(filter_operator_type)))
+        .field(InputValue::new("value", TypeRef::named(TypeRef::STRING)))
+}
+
+fn build_sort_input(sort_direction_type: &str) -> InputObject {
+    InputObject::new("CollectionSortInput")
+        .field(InputValue::new("field", TypeRef::named_nn(TypeRef::STRING)))
+        .field(InputValue::new("direction", TypeRef::named(sort_direction_type)))
+}
+
+fn build_page_type(spec: &PageTypeSpec) -> Object {
+    let mut object = Object::new(spec.type_name.clone());
+    for field_name in ["first", "prev", "next", "last", "page", "pages", "items"] {
+        let field = field_name.to_string();
+        object =
+            object.field(Field::new(field.clone(), TypeRef::named_nn(TypeRef::INT), move |ctx| {
+                let field = field.clone();
+                FieldFuture::new(async move {
+                    let parent = parent_page_value(&ctx)?;
+                    let value = parent.object.get(&field).cloned().ok_or_else(|| {
+                        GraphqlError::new(format!("Missing page field '{field}'"))
+                    })?;
+                    Ok(Some(FieldValue::value(json_to_graphql_value(value)?)))
+                })
+            }));
+    }
+    let row_type_name = spec.row_type_name.clone();
+    object.field(Field::new(
+        "data",
+        TypeRef::named_nn_list_nn(spec.row_type_name.clone()),
+        move |ctx| {
+            let row_type_name = row_type_name.clone();
+            FieldFuture::new(async move {
+                let parent = parent_page_value(&ctx)?;
+                let items = parent
+                    .object
+                    .get("data")
+                    .and_then(JsonValue::as_array)
+                    .ok_or_else(|| GraphqlError::new("Missing page field 'data'"))?;
+                let values = items
+                    .iter()
+                    .map(|item| {
+                        item.as_object()
+                            .cloned()
+                            .map(|object| typed_object_value(&row_type_name, object))
+                            .ok_or_else(|| GraphqlError::new("Page data contains a non-object row"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Some(FieldValue::list(values)))
+            })
+        },
+    ))
 }
 
 fn build_collection_root_field(resource: &str, graphql_name: &str, row_type_name: &str) -> Field {
@@ -485,6 +625,51 @@ fn build_collection_by_id_field(
     .argument(InputValue::new("id", TypeRef::named_nn(TypeRef::ID)))
 }
 
+fn build_collection_query_field(resource: &str, graphql_name: &str, page_type_name: &str) -> Field {
+    let resource = resource.to_string();
+    Field::new(graphql_name.to_string(), TypeRef::named_nn(page_type_name), move |ctx| {
+        let state = ctx.data_unchecked::<AppState>().clone();
+        let resource = resource.clone();
+        FieldFuture::new(async move {
+            let args = parse_collection_query_arguments(&ctx)?;
+            let _guard = state.read_lock_for_resource(&resource).await;
+            let data = load_resource(&state, &resource).await.map_err(app_error_to_graphql)?;
+            validate_resource_data(&state, &resource, data.as_ref())
+                .map_err(app_error_to_graphql)?;
+            let table = state.schema_table(&resource);
+            let items = data.as_array().ok_or_else(|| {
+                GraphqlError::new(format!("Resource '{resource}' is not a JSON array"))
+            })?;
+            let mut selected = if args.filters.is_empty() {
+                items.iter().collect::<Vec<_>>()
+            } else {
+                filter_collection_refs(items, &args.filters, table.as_ref())
+            };
+            if !args.sort_columns.is_empty() {
+                sort_collection_refs(selected.as_mut_slice(), &args.sort_columns);
+            }
+            let pagination =
+                args.pagination.unwrap_or(Pagination { page: 1, per_page: selected.len().max(1) });
+            if pagination.per_page > state.config.max_per_page {
+                return Err(GraphqlError::new(format!(
+                    "perPage exceeds configured max of {}",
+                    state.config.max_per_page
+                )));
+            }
+            let page = paginate_collection_refs(&selected, pagination);
+            let object = page
+                .as_object()
+                .cloned()
+                .ok_or_else(|| GraphqlError::new("Invalid paginated result"))?;
+            Ok(Some(FieldValue::owned_any(GraphqlPageValue { object })))
+        })
+    })
+    .argument(InputValue::new("filter", TypeRef::named_list("CollectionFilterInput")))
+    .argument(InputValue::new("sort", TypeRef::named_list("CollectionSortInput")))
+    .argument(InputValue::new("page", TypeRef::named(TypeRef::INT)))
+    .argument(InputValue::new("perPage", TypeRef::named(TypeRef::INT)))
+}
+
 fn build_object_root_field(resource: &str, graphql_name: &str, type_name: &str) -> Field {
     let resource = resource.to_string();
     let type_name = type_name.to_string();
@@ -501,6 +686,81 @@ fn build_object_root_field(resource: &str, graphql_name: &str, type_name: &str) 
             Ok(Some(typed_object_value(&type_name, object)))
         })
     })
+}
+
+#[derive(Debug)]
+struct GraphqlCollectionArgs {
+    filters: Vec<FilterCondition>,
+    sort_columns: Vec<SortColumn>,
+    pagination: Option<Pagination>,
+}
+
+fn parse_collection_query_arguments(
+    ctx: &async_graphql::dynamic::ResolverContext<'_>,
+) -> Result<GraphqlCollectionArgs, GraphqlError> {
+    let mut filters = Vec::new();
+    if let Some(filter_arg) = ctx.args.get("filter") {
+        for item in filter_arg.list()?.iter() {
+            let filter = item.object()?;
+            let field = filter.try_get("field")?.string()?.to_string();
+            let operator = filter
+                .get("operator")
+                .map(|value| parse_filter_operator_enum(value.enum_name()?))
+                .transpose()?
+                .unwrap_or(FilterOperator::Eq);
+            let value = filter
+                .get("value")
+                .map(|value| value.string().map(str::to_string))
+                .transpose()?
+                .unwrap_or_default();
+            filters.push(FilterCondition::new(field, operator, value));
+        }
+    }
+
+    let mut sort_columns = Vec::new();
+    if let Some(sort_arg) = ctx.args.get("sort") {
+        for item in sort_arg.list()?.iter() {
+            let sort = item.object()?;
+            let field = sort.try_get("field")?.string()?.to_string();
+            let descending = sort
+                .get("direction")
+                .map(|value| value.enum_name().map(|name| name == "DESC"))
+                .transpose()?
+                .unwrap_or(false);
+            sort_columns.push(SortColumn { field_path: field, descending });
+        }
+    }
+
+    let page = ctx.args.get("page").map(|value| value.i64()).transpose()?;
+    let per_page = ctx.args.get("perPage").map(|value| value.i64()).transpose()?;
+    let pagination = match (page, per_page) {
+        (None, None) => None,
+        (Some(page), Some(per_page)) => {
+            Some(Pagination { page: page.max(1) as usize, per_page: per_page.max(1) as usize })
+        }
+        (Some(page), None) => Some(Pagination { page: page.max(1) as usize, per_page: 10 }),
+        (None, Some(per_page)) => Some(Pagination { page: 1, per_page: per_page.max(1) as usize }),
+    };
+
+    Ok(GraphqlCollectionArgs { filters, sort_columns, pagination })
+}
+
+fn parse_filter_operator_enum(value: &str) -> Result<FilterOperator, GraphqlError> {
+    match value {
+        "EQ" => Ok(FilterOperator::Eq),
+        "NE" => Ok(FilterOperator::Ne),
+        "LT" => Ok(FilterOperator::Lt),
+        "LTE" => Ok(FilterOperator::Lte),
+        "GT" => Ok(FilterOperator::Gt),
+        "GTE" => Ok(FilterOperator::Gte),
+        "IN" => Ok(FilterOperator::In),
+        "CONTAINS" => Ok(FilterOperator::Contains),
+        "STARTS_WITH" => Ok(FilterOperator::StartsWith),
+        "ENDS_WITH" => Ok(FilterOperator::EndsWith),
+        "IS_NULL" => Ok(FilterOperator::IsNull),
+        "IS_NOT_NULL" => Ok(FilterOperator::IsNotNull),
+        _ => Err(GraphqlError::new(format!("Unsupported filter operator '{value}'"))),
+    }
 }
 
 fn build_json_root_field(resource: &str, graphql_name: &str) -> Field {
@@ -521,6 +781,14 @@ fn parent_object_value<'a>(
 ) -> Result<&'a GraphqlObjectValue, GraphqlError> {
     ctx.parent_value
         .try_downcast_ref::<GraphqlObjectValue>()
+        .map_err(|err| GraphqlError::new(err.message))
+}
+
+fn parent_page_value<'a>(
+    ctx: &'a async_graphql::dynamic::ResolverContext<'a>,
+) -> Result<&'a GraphqlPageValue, GraphqlError> {
+    ctx.parent_value
+        .try_downcast_ref::<GraphqlPageValue>()
         .map_err(|err| GraphqlError::new(err.message))
 }
 
@@ -627,6 +895,10 @@ fn normalize_graphql_name(raw: &str) -> String {
 
 fn collection_type_name(resource: &str) -> String {
     normalize_graphql_type_name(&format!("{}Record", pascalize(resource)))
+}
+
+fn collection_page_type_name(resource: &str) -> String {
+    normalize_graphql_type_name(&format!("{}Page", pascalize(resource)))
 }
 
 fn object_type_name(resource: &str) -> String {

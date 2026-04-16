@@ -7,8 +7,20 @@ on:
   workflow_dispatch:
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  build-binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform_key: linux-x64
+          - os: macos-13
+            platform_key: darwin-x64
+          - os: macos-latest
+            platform_key: darwin-arm64
+          - os: windows-latest
+            platform_key: win32-x64
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: js
@@ -23,13 +35,49 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Build Rust binary
+        run: cargo build --release --manifest-path ../Cargo.toml
+
+      - name: Copy platform binary
+        run: node scripts/copy-rust-binary.mjs
+        env:
+          TARGET_PLATFORM_KEY: ${{ matrix.platform_key }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: folder-server-${{ matrix.platform_key }}
+          path: js/bin/${{ matrix.platform_key }}
+
+  publish:
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: js
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build package
-        run: npm run build
+      - name: Build JavaScript bundle
+        run: npm run build:js
+
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: js/bin
+          pattern: folder-server-*
+          merge-multiple: true
 
       - name: Publish package
         run: npm publish --access public
