@@ -1,4 +1,5 @@
 .work/
+pokeapi/
 results/*.json
 results/*.md
 results/suite-logs-*/

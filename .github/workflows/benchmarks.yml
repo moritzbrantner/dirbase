@@ -11,10 +11,6 @@ on:
         description: "autocannon concurrent connections"
         required: false
         default: "50"
-      amount:
-        description: "number of synthetic posts"
-        required: false
-        default: "10000"
       runs:
         description: "repeated runs per scenario and mode"
         required: false
@@ -50,7 +46,6 @@ jobs:
         env:
           DURATION: ${{ inputs.duration || '10' }}
           CONNECTIONS: ${{ inputs.connections || '50' }}
-          AMOUNT: ${{ inputs.amount || '10000' }}
           RUNS: ${{ inputs.runs || '3' }}
           WARMUP_DURATION: ${{ inputs.warmup_duration || '3' }}
           WARMUP_CONNECTIONS: ${{ inputs.warmup_connections || '1' }}
@@ -59,18 +54,12 @@ jobs:
       - name: Find latest summary file
         id: latest-summary
         run: |
-          latest_summary="$(ls -1t benchmarks/results/summary-*.json | head -n 1)"
-          latest_stamp="${latest_summary##*summary-}"
+          latest_summary="$(ls -1t benchmarks/results/benchmark-summary-*.json | head -n 1)"
+          latest_stamp="${latest_summary##*benchmark-summary-}"
           latest_stamp="${latest_stamp%.json}"
-          report_file="benchmarks/results/report-${latest_stamp}.md"
+          report_file="benchmarks/results/benchmark-report-${latest_stamp}.md"
           echo "summary=${latest_summary}" >> "$GITHUB_OUTPUT"
           echo "report=${report_file}" >> "$GITHUB_OUTPUT"
-
-      - name: Generate markdown report
-        run: |
-          python3 scripts/render_benchmark_report.py \
-            --summary "${{ steps.latest-summary.outputs.summary }}" \
-            --output "${{ steps.latest-summary.outputs.report }}"
 
       - name: Publish report to job summary
         run: cat "${{ steps.latest-summary.outputs.report }}" >> "$GITHUB_STEP_SUMMARY"

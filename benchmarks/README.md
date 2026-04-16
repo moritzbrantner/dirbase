@@ -7,15 +7,24 @@ This benchmark compares request throughput and latency between:
 
 ## What is measured
 
-The script runs two scenarios against both servers:
+The benchmark uses a deterministic synthetic workload instead of the old single-collection `posts` fixture or the removed PokeAPI import. It generates six resources:
 
-1. **Item lookup**: `GET /posts/5000`
-2. **Filtered query**:
-   - `folder-server`: `GET /posts?author:eq=Author%2010`
-   - `json-server`: `GET /posts?author=Author%2010`
+- `organizations`
+- `teams`
+- `members`
+- `projects`
+- `tickets`
+- `deployments`
 
-Data set is synthetic and contains `AMOUNT` rows (default: `10000`) with fields:
-`id`, `title`, `views`, and `author`.
+The default profile contains 92,252 rows across those resources and exercises a broader mix of read paths:
+
+1. Item lookups on `tickets` and `projects`
+2. Equality and range filters on `teams`, `projects`, and `deployments`
+3. Text search on `tickets.summary`
+4. Sorted and paginated collection reads on `members`, `tickets`, and `deployments`
+5. Composite filter + sort + pagination workloads
+
+The script uses equivalent server-specific query syntax where `folder-server` and `json-server` differ.
 
 ## Run
 
@@ -25,36 +34,41 @@ From repo root:
 scripts/benchmark_vs_json_server.sh
 ```
 
+To force a fresh data rebuild:
+
+```bash
+FORCE_REBUILD_DATA=1 scripts/benchmark_vs_json_server.sh
+```
+
 Optional knobs:
 
 ```bash
-DURATION=15 CONNECTIONS=100 AMOUNT=20000 RUNS=5 WARMUP_DURATION=3 WARMUP_CONNECTIONS=1 scripts/benchmark_vs_json_server.sh
+DURATION=15 CONNECTIONS=100 RUNS=5 WARMUP_DURATION=3 WARMUP_CONNECTIONS=1 JSON_SERVER_VERSION=0.17.4 scripts/benchmark_vs_json_server.sh
+```
+
+The generated data cache lives under `benchmarks/.work/benchmark-data/`. You can also rebuild it directly:
+
+```bash
+python3 scripts/build_benchmark_data.py --force
 ```
 
 ## Output
 
-Raw `autocannon` JSON and aggregated summary are written to:
+Raw `autocannon` JSON and aggregated reports are written to:
 
 - `benchmarks/results/<target>-with-warmup-run<run>-<timestamp>.json`
 - `benchmarks/results/<target>-without-warmup-run<run>-<timestamp>.json`
-- `benchmarks/results/summary-<timestamp>.json`
+- `benchmarks/results/benchmark-summary-<timestamp>.json`
+- `benchmarks/results/benchmark-report-<timestamp>.md`
 
-`<target>` is one of `folder-item`, `json-server-item`, `folder-query`, `json-server-query`.
+`<target>` is one of:
+
+- `folder-<scenario>`
+- `json-server-<scenario>`
 
 ## Notes
 
 - `json-server` and `autocannon` are executed via `npx`.
 - The script starts both servers locally and cleans up processes automatically.
-- The script runs each scenario repeatedly (`RUNS`, default `3`) in two modes: with warm-up and without warm-up.
+- The benchmark runs each scenario repeatedly (`RUNS`, default `3`) in two modes: with warm-up and without warm-up.
 - Aggregated metrics include mean/median/min/max; prefer median values for stable comparisons.
-
-## GitHub Actions workflow
-
-You can also run benchmarks from GitHub Actions using the `Benchmarks` workflow (`.github/workflows/benchmarks.yml`).
-
-1. Open **Actions** → **Benchmarks** → **Run workflow**.
-2. Optionally set `duration`, `connections`, and `amount`.
-3. After the run completes:
-   - Read the generated markdown table in the workflow **Summary** tab.
-   - Download `benchmark-results-<run_id>` from **Artifacts** for full JSON + markdown reports.
-

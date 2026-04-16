@@ -28,10 +28,10 @@ class StepResult:
 def parse_args() -> argparse.Namespace:
     root_dir = Path(__file__).resolve().parent.parent
     default_results_dir = root_dir / "benchmarks" / "results"
-    default_data_dir = root_dir / "benchmarks" / ".work" / "pokeapi-json"
+    default_data_dir = root_dir / "benchmarks" / ".work" / "benchmark-data"
 
     parser = argparse.ArgumentParser(
-        description="Run project checks, tests, PokeAPI data generation, and benchmarks in one go."
+        description="Run project checks, tests, benchmark data generation, and benchmarks in one go."
     )
     parser.add_argument(
         "--results-dir",
@@ -43,17 +43,17 @@ def parse_args() -> argparse.Namespace:
         "--data-dir",
         type=Path,
         default=default_data_dir,
-        help=f"Directory for generated PokeAPI JSON benchmark data (default: {default_data_dir})",
+        help=f"Directory for generated benchmark JSON data (default: {default_data_dir})",
     )
     parser.add_argument(
         "--force-rebuild-data",
         action="store_true",
-        help="Force regeneration of the derived PokeAPI benchmark JSON.",
+        help="Force regeneration of the benchmark JSON data.",
     )
     parser.add_argument("--skip-fmt", action="store_true", help="Skip cargo fmt --check.")
     parser.add_argument("--skip-clippy", action="store_true", help="Skip cargo clippy.")
     parser.add_argument("--skip-tests", action="store_true", help="Skip cargo test.")
-    parser.add_argument("--skip-benchmark", action="store_true", help="Skip the PokeAPI benchmark.")
+    parser.add_argument("--skip-benchmark", action="store_true", help="Skip the benchmark.")
     parser.add_argument(
         "--stop-on-failure",
         action="store_true",
@@ -410,13 +410,13 @@ def main() -> int:
 
     generator_command = [
         sys.executable,
-        str(root_dir / "scripts" / "build_pokeapi_json.py"),
+        str(root_dir / "scripts" / "build_benchmark_data.py"),
         "--output-dir",
         str(args.data_dir.resolve()),
     ]
     if args.force_rebuild_data:
         generator_command.append("--force")
-    planned_steps.append(("build-pokeapi-json", generator_command, None))
+    planned_steps.append(("build-benchmark-data", generator_command, None))
 
     if not args.skip_fmt:
         planned_steps.append(("cargo-fmt-check", ["cargo", "fmt", "--all", "--check"], None))
@@ -443,8 +443,8 @@ def main() -> int:
             benchmark_env["FORCE_REBUILD_DATA"] = "1"
         planned_steps.append(
             (
-                "pokeapi-benchmark",
-                ["bash", str(root_dir / "scripts" / "benchmark_pokeapi.sh")],
+                "benchmark-vs-json-server",
+                ["bash", str(root_dir / "scripts" / "benchmark_vs_json_server.sh")],
                 benchmark_env,
             )
         )
@@ -459,9 +459,9 @@ def main() -> int:
         )
         steps.append(step)
 
-        if name == "build-pokeapi-json":
+        if name == "build-benchmark-data":
             generator_payload = parse_generator_payload(Path(step.log_path))
-        elif name == "pokeapi-benchmark" and step.status == "passed":
+        elif name == "benchmark-vs-json-server" and step.status == "passed":
             benchmark_summary_path, benchmark_report_path = parse_benchmark_paths(Path(step.log_path))
             if benchmark_summary_path is not None and benchmark_summary_path.exists():
                 benchmark_summary = json.loads(benchmark_summary_path.read_text(encoding="utf-8"))
