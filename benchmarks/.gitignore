@@ -1,5 +1,6 @@
 .work/
+pokeapi/
 results/*.json
 results/*.md
-results/suite-logs/
+results/suite-logs-*/
 !results/.gitkeep

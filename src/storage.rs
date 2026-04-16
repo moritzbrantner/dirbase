@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
@@ -9,63 +9,54 @@ use std::{
 };
 
 use axum::http::StatusCode;
+use fs2::FileExt;
 use serde_json::Value;
 use tokio::fs;
 
 use crate::{
-    app::{AppState, CachedMetadata, CachedResource, DataSource},
+    app::{AppState, CachedResource, DataSource},
     error::AppError,
-    schema::{ColumnType, TableSchema, is_valid_identifier},
+    schema::{
+        ColumnType, TableSchema, infer_schema_from_data_source, is_valid_identifier,
+        primary_key_name,
+    },
 };
 
 pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value>, AppError> {
     let file = resource_file_path(&state.data_source, resource)?;
-    if !fs::try_exists(&file)
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+
+    if let Some(value) =
+        state.resource_cache.read().await.get(resource).map(|cached| cached.value.clone())
     {
+        return Ok(value);
+    }
+
+    if !state.resources.read().await.contains(resource) {
         return Err(AppError::new(
             StatusCode::NOT_FOUND,
             format!("Resource '{resource}' not found"),
         ));
     }
 
-    let metadata = fs::metadata(&file)
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let current_metadata = CachedMetadata {
-        modified: metadata.modified().map_err(|e| {
-            AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read file metadata: {e}"),
-            )
-        })?,
-        len: metadata.len(),
-    };
-
-    if let Some(value) = state
-        .resource_cache
-        .read()
-        .await
-        .get(resource)
-        .and_then(|cached| (cached.metadata == current_metadata).then(|| cached.value.clone()))
-    {
-        return Ok(value);
-    }
-
     let value = Arc::new(match &*state.data_source {
         DataSource::Folder(_) => {
-            let raw = fs::read_to_string(&file)
-                .await
-                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            let raw = fs::read_to_string(&file).await.map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => {
+                    AppError::new(StatusCode::NOT_FOUND, format!("Resource '{resource}' not found"))
+                }
+                _ => AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            })?;
             serde_json::from_str::<Value>(&raw).map_err(|e| {
                 AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
             })?
         }
         DataSource::File(_) => {
-            let raw = fs::read_to_string(&file)
-                .await
-                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            let raw = fs::read_to_string(&file).await.map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => {
+                    AppError::new(StatusCode::NOT_FOUND, format!("Resource '{resource}' not found"))
+                }
+                _ => AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            })?;
             let root: Value = serde_json::from_str(&raw).map_err(|e| {
                 AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
             })?;
@@ -75,9 +66,14 @@ pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value
         }
     });
 
+    let table = state.schema_table(resource);
     state.resource_cache.write().await.insert(
         resource.to_string(),
-        CachedResource { value: value.clone(), metadata: current_metadata },
+        CachedResource {
+            value: value.clone(),
+            id_index: build_id_index(value.as_ref(), table.as_ref()),
+            primary_key: primary_key_name(table.as_ref()).to_string(),
+        },
     );
     Ok(value)
 }
@@ -95,52 +91,61 @@ pub async fn write_resource(
                 .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             format!("{content}\n")
         }
-        DataSource::File(_) => {
-            let _guard = state.write_lock_for_resource("__db_file__").await;
-            let raw = fs::read_to_string(&file)
-                .await
-                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            let mut root: Value = serde_json::from_str(&raw).map_err(|e| {
-                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
-            })?;
-            let root_obj = root.as_object_mut().ok_or_else(|| {
-                AppError::new(StatusCode::BAD_REQUEST, "Database file must contain a JSON object")
-            })?;
-            root_obj.insert(resource.to_string(), value.clone());
-            let content = serde_json::to_string_pretty(&root)
-                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            format!("{content}\n")
-        }
+        DataSource::File(_) => String::new(),
     };
 
     let file_for_write = file.clone();
-    tokio::task::spawn_blocking(move || write_json_atomically(&file_for_write, payload))
-        .await
-        .map_err(|e| {
-        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Atomic write task failed: {e}"))
-    })??;
+    let resource_name = resource.to_string();
+    let value_for_write = value.clone();
+    match &*state.data_source {
+        DataSource::Folder(_) => {
+            tokio::task::spawn_blocking(move || write_json_atomically(&file_for_write, payload))
+                .await
+                .map_err(|e| {
+                    AppError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Atomic write task failed: {e}"),
+                    )
+                })??;
+        }
+        DataSource::File(_) => {
+            let _guard = state.write_lock_for_resource("__db_file__").await;
+            tokio::task::spawn_blocking(move || {
+                write_resource_in_db_file(&file_for_write, &resource_name, &value_for_write)
+            })
+            .await
+            .map_err(|e| {
+                AppError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Atomic write task failed: {e}"),
+                )
+            })??;
+        }
+    }
 
-    let metadata = fs::metadata(&file)
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let modified = metadata.modified().map_err(|e| {
-        AppError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read file metadata: {e}"),
-        )
-    })?;
-
+    let table = state.schema_table(resource);
     state.resource_cache.write().await.insert(
         resource.to_string(),
         CachedResource {
             value: Arc::new(value.clone()),
-            metadata: CachedMetadata { modified, len: metadata.len() },
+            id_index: build_id_index(value, table.as_ref()),
+            primary_key: primary_key_name(table.as_ref()).to_string(),
         },
     );
+    refresh_inferred_schema(state).await?;
+    state.invalidate_graphql_schema().await;
+    state.emit_event("resource_changed", Some(resource.to_string()));
+    state.emit_event("schema_changed", None);
+    state.emit_event("overview_changed", None);
+    state.health.mark_ready();
     Ok(())
 }
 
 fn write_json_atomically(file: &Path, payload: String) -> Result<(), AppError> {
+    with_exclusive_file_lock(file, || write_json_atomically_unlocked(file, &payload))
+}
+
+fn write_json_atomically_unlocked(file: &Path, payload: &str) -> Result<(), AppError> {
     let temp_file = temp_file_path(file);
     let mut handle = OpenOptions::new()
         .create_new(true)
@@ -163,6 +168,47 @@ fn write_json_atomically(file: &Path, payload: String) -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+fn write_resource_in_db_file(file: &Path, resource: &str, value: &Value) -> Result<(), AppError> {
+    with_exclusive_file_lock(file, || {
+        let raw = std::fs::read_to_string(file)
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let mut root: Value = serde_json::from_str(&raw).map_err(|e| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
+        })?;
+        let root_obj = root.as_object_mut().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Database file must contain a JSON object")
+        })?;
+        root_obj.insert(resource.to_string(), value.clone());
+        let content = serde_json::to_string_pretty(&root)
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        write_json_atomically_unlocked(file, &format!("{content}\n"))
+    })
+}
+
+fn with_exclusive_file_lock<T>(
+    file: &Path,
+    f: impl FnOnce() -> Result<T, AppError>,
+) -> Result<T, AppError> {
+    let lock_path = lock_file_path(file);
+    let lock_handle = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    lock_handle
+        .lock_exclusive()
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let result = f();
+    let _ = lock_handle.unlock();
+    result
+}
+
+fn lock_file_path(file: &Path) -> PathBuf {
+    let file_name = file.file_name().and_then(|name| name.to_str()).unwrap_or("resource");
+    file.with_file_name(format!("{file_name}.lock"))
 }
 
 fn temp_file_path(file: &Path) -> PathBuf {
@@ -205,7 +251,7 @@ fn scan_resources_folder(folder: &Path) -> Result<BTreeSet<String>, std::io::Err
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        if is_valid_resource_name(stem) {
+        if is_valid_resource_name(stem) && !is_reserved_resource_name(stem) {
             resources.insert(stem.to_owned());
         }
     }
@@ -221,7 +267,7 @@ fn scan_resources_file(file: &Path) -> Result<BTreeSet<String>, std::io::Error> 
     let parsed: Value = serde_json::from_str(&raw).map_err(std::io::Error::other)?;
     if let Some(root) = parsed.as_object() {
         for key in root.keys() {
-            if is_valid_resource_name(key) {
+            if is_valid_resource_name(key) && !is_reserved_resource_name(key) {
                 resources.insert(key.to_string());
             }
         }
@@ -238,7 +284,7 @@ pub fn validate_resource_data(
     resource: &str,
     data: &Value,
 ) -> Result<(), AppError> {
-    let Some(table) = state.schema_table(resource)? else {
+    let Some(table) = state.validation_schema_table(resource) else {
         return Ok(());
     };
     let array = data
@@ -252,14 +298,6 @@ pub fn validate_resource_data(
                 format!("Row {index} in resource '{resource}' is not an object"),
             )
         })?;
-        for key in object.keys() {
-            if !table.columns.contains_key(key) {
-                return Err(AppError::new(
-                    StatusCode::BAD_REQUEST,
-                    format!("Row {index} in resource '{resource}' contains unknown column '{key}'"),
-                ));
-            }
-        }
         for (column_name, column) in &table.columns {
             match object.get(column_name) {
                 Some(Value::Null) if !column.nullable => {
@@ -323,31 +361,70 @@ pub fn is_valid_resource_name(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-pub fn find_item<'a>(items: &'a [Value], id: &str) -> Option<&'a Value> {
-    items.iter().find(|item| id_matches(item, id))
+pub fn is_reserved_resource_name(name: &str) -> bool {
+    matches!(name, "schema" | "graphql" | "sql" | "events" | "healthz" | "readyz" | "metrics")
 }
-pub fn find_item_index(items: &[Value], id: &str) -> Option<usize> {
-    items.iter().position(|item| id_matches(item, id))
+
+pub fn find_item_by_key<'a>(items: &'a [Value], key_name: &str, id: &str) -> Option<&'a Value> {
+    items.iter().find(|item| id_matches(item, key_name, id))
 }
-fn id_matches(item: &Value, expected: &str) -> bool {
-    item.as_object().and_then(|obj| obj.get("id")).is_some_and(|id| match id {
+pub fn find_item_index_by_key(items: &[Value], key_name: &str, id: &str) -> Option<usize> {
+    items.iter().position(|item| id_matches(item, key_name, id))
+}
+fn id_matches(item: &Value, key_name: &str, expected: &str) -> bool {
+    item.as_object().and_then(|obj| obj.get(key_name)).is_some_and(|id| match id {
         Value::Number(n) => n.to_string() == expected,
         Value::String(s) => s == expected,
+        Value::Bool(value) => value.to_string() == expected,
         _ => false,
     })
 }
 
-pub fn next_numeric_id(items: &[Value]) -> i64 {
+pub fn build_id_index(
+    value: &Value,
+    table: Option<&TableSchema>,
+) -> Option<HashMap<String, usize>> {
+    let items = value.as_array()?;
+    let key_name = primary_key_name(table);
+    let mut index = HashMap::with_capacity(items.len());
+    let mut has_any_id = false;
+
+    for (position, item) in items.iter().enumerate() {
+        let Some(id_value) = item.as_object().and_then(|obj| obj.get(key_name)) else {
+            continue;
+        };
+        match id_value {
+            Value::Number(number) => {
+                index.insert(number.to_string(), position);
+                has_any_id = true;
+            }
+            Value::String(text) => {
+                index.insert(text.clone(), position);
+                has_any_id = true;
+            }
+            Value::Bool(value) => {
+                index.insert(value.to_string(), position);
+                has_any_id = true;
+            }
+            _ => {}
+        }
+    }
+
+    has_any_id.then_some(index)
+}
+
+pub fn next_numeric_id(items: &[Value], key_name: &str) -> i64 {
     items
         .iter()
-        .filter_map(|item| item.as_object().and_then(|obj| obj.get("id")))
+        .filter_map(|item| item.as_object().and_then(|obj| obj.get(key_name)))
         .filter_map(|id| id.as_i64())
         .max()
         .map_or(1, |max| max + 1)
 }
 
 pub fn coerce_id_value(id: &str, table: Option<&TableSchema>) -> Value {
-    match table.and_then(|table| table.columns.get("id")) {
+    let key_name = primary_key_name(table);
+    match table.and_then(|table| table.columns.get(key_name)) {
         Some(column) if matches!(column.column_type, ColumnType::String) => {
             Value::String(id.to_string())
         }
@@ -365,6 +442,27 @@ pub fn validate_sql_identifier(identifier: &str, kind: &str) -> Result<(), AppEr
     Ok(())
 }
 
+async fn refresh_inferred_schema(state: &AppState) -> Result<(), AppError> {
+    let resources = state.resources.read().await.clone();
+    let data_source = state.data_source.clone();
+    let inferred = tokio::task::spawn_blocking(move || {
+        infer_schema_from_data_source(&data_source, &resources)
+    })
+    .await
+    .map_err(|err| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Schema refresh task failed: {err}"),
+        )
+    })?
+    .map_err(|err| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, err))?;
+    state
+        .update_inferred_schema(inferred)
+        .map_err(|err| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, err))?;
+    state.health.mark_ready();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeSet, HashMap};
@@ -377,10 +475,24 @@ mod tests {
     fn test_state(folder: PathBuf) -> AppState {
         AppState {
             data_source: Arc::new(DataSource::Folder(folder)),
+            config: Arc::new(crate::app::AppConfig {
+                readonly: false,
+                enable_log: false,
+                auth_token: None,
+                cors_origin: None,
+                max_body_bytes: 1024 * 1024,
+                max_per_page: 100,
+                max_sql_scan_rows: 50_000,
+                max_sql_selected_rows: 1_000,
+            }),
             resources: Arc::new(RwLock::new(BTreeSet::new())),
             resource_cache: Arc::new(RwLock::new(HashMap::new())),
             resource_locks: Arc::new(RwLock::new(HashMap::new())),
-            schema: Arc::new(None),
+            schema_store: Arc::new(std::sync::RwLock::new(crate::app::SchemaStore::default())),
+            graphql_store: Arc::new(RwLock::new(crate::app::GraphqlStore::default())),
+            metrics: Arc::new(crate::app::MetricsStore::default()),
+            health: Arc::new(crate::app::HealthState::new(true, None)),
+            event_bus: tokio::sync::broadcast::channel(16).0,
         }
     }
 

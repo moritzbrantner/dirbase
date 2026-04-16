@@ -113,7 +113,7 @@ fn supports_all_object_resource_routes() {
 }
 
 #[test]
-fn graphql_endpoint_is_not_available() {
+fn graphql_endpoint_serves_graphiql() {
     let temp = tempfile::tempdir().expect("create temp directory");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
@@ -129,8 +129,16 @@ fn graphql_endpoint_is_not_available() {
 
     wait_for_server("127.0.0.1:3013", Duration::from_secs(5));
 
-    let graphql = http_request("127.0.0.1:3013", "GET", "/graphql", None);
-    assert!(graphql.starts_with("HTTP/1.1 404 Not Found\r\n"));
+    let graphql = http_request_with_headers(
+        "127.0.0.1:3013",
+        "GET",
+        "/graphql",
+        Some("Accept: text/html,application/xhtml+xml\r\n"),
+        None,
+    );
+    assert!(graphql.starts_with("HTTP/1.1 200 OK\r\n"), "{graphql}");
+    assert!(graphql.contains("content-type: text/html; charset=utf-8"), "{graphql}");
+    assert!(graphql.contains("GraphiQL"), "{graphql}");
 }
 
 #[test]
@@ -200,6 +208,114 @@ fn logging_writes_each_request_when_enabled() {
     assert!(log_contents.contains("GET /export.sql 200 query_hash="), "{log_contents}");
 }
 
+#[test]
+fn auth_and_ops_endpoints_respect_bearer_token_and_cors() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
+        .expect("write users");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:34110")
+        .arg("--auth-token")
+        .arg("secret")
+        .arg("--cors-origin")
+        .arg("http://example.com")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:34110", Duration::from_secs(5));
+
+    let unauthorized = http_request("127.0.0.1:34110", "GET", "/users", None);
+    assert!(unauthorized.starts_with("HTTP/1.1 401 Unauthorized\r\n"), "{unauthorized}");
+
+    let authorized = http_request_with_headers(
+        "127.0.0.1:34110",
+        "GET",
+        "/users",
+        Some("Authorization: Bearer secret\r\nOrigin: http://example.com\r\n"),
+        None,
+    );
+    assert!(authorized.starts_with("HTTP/1.1 200 OK\r\n"), "{authorized}");
+    assert!(authorized.contains("access-control-allow-origin: http://example.com"), "{authorized}");
+
+    let health = http_request("127.0.0.1:34110", "GET", "/healthz", None);
+    assert!(health.starts_with("HTTP/1.1 200 OK\r\n"), "{health}");
+
+    let ready = http_request("127.0.0.1:34110", "GET", "/readyz", None);
+    assert!(ready.starts_with("HTTP/1.1 200 OK\r\n"), "{ready}");
+
+    let metrics = http_request("127.0.0.1:34110", "GET", "/metrics", None);
+    assert!(metrics.starts_with("HTTP/1.1 200 OK\r\n"), "{metrics}");
+    assert!(metrics.contains("folder_server_requests_total"), "{metrics}");
+    assert!(metrics.contains("folder_server_auth_failures_total"), "{metrics}");
+}
+
+#[test]
+fn events_endpoint_streams_resource_and_schema_changes() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
+        .expect("write users");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:34111")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:34111", Duration::from_secs(5));
+
+    let mut stream = TcpStream::connect("127.0.0.1:34111").expect("connect to events");
+    stream
+        .write_all(
+            b"GET /events HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n",
+        )
+        .expect("write events request");
+    stream.set_read_timeout(Some(Duration::from_millis(200))).expect("set timeout");
+
+    let create = http_request("127.0.0.1:34111", "POST", "/users", Some(r#"{"name":"Grace"}"#));
+    assert!(create.starts_with("HTTP/1.1 201 Created\r\n"), "{create}");
+
+    let payload = read_stream_until(&mut stream, "event: schema_changed", Duration::from_secs(5));
+    assert!(payload.contains("event: resource_changed"), "{payload}");
+    assert!(payload.contains("event: overview_changed"), "{payload}");
+}
+
+fn read_stream_until(stream: &mut TcpStream, needle: &str, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    let mut buffer = String::new();
+    let mut chunk = [0u8; 4096];
+    while Instant::now() < deadline {
+        match stream.read(&mut chunk) {
+            Ok(0) => thread::sleep(Duration::from_millis(25)),
+            Ok(read) => {
+                buffer.push_str(&String::from_utf8_lossy(&chunk[..read]));
+                if buffer.contains(needle) {
+                    return buffer;
+                }
+            }
+            Err(err)
+                if err.kind() == std::io::ErrorKind::WouldBlock
+                    || err.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(err) => panic!("failed to read stream: {err}"),
+        }
+    }
+    panic!("stream did not contain '{needle}': {buffer}");
+}
+
 fn wait_for_server(addr: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
 
@@ -213,16 +329,30 @@ fn wait_for_server(addr: &str, timeout: Duration) {
 }
 
 fn http_request(addr: &str, method: &str, path: &str, body: Option<&str>) -> String {
+    http_request_with_headers(addr, method, path, None, body)
+}
+
+fn http_request_with_headers(
+    addr: &str,
+    method: &str,
+    path: &str,
+    extra_headers: Option<&str>,
+    body: Option<&str>,
+) -> String {
     let mut stream = TcpStream::connect(addr).expect("connect to server");
     let payload = body.unwrap_or("");
 
     let request = if body.is_some() {
         format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}",
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}",
+            extra_headers.unwrap_or(""),
             payload.len()
         )
     } else {
-        format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{}\r\n",
+            extra_headers.unwrap_or("")
+        )
     };
 
     stream.write_all(request.as_bytes()).expect("write request");

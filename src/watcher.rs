@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeSet, HashMap},
     fs,
-    sync::Arc,
+    sync::{Arc, RwLock as StdRwLock},
 };
 
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
@@ -9,14 +9,19 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 
 use crate::{
-    app::{CachedMetadata, CachedResource, DataSource},
-    storage::{is_valid_resource_name, scan_resources},
+    app::{AppState, CachedResource, DataSource, GraphqlStore, HealthState, SchemaStore},
+    schema::{infer_schema_from_data_source, load_schema, primary_key_name},
+    storage::{build_id_index, is_reserved_resource_name, is_valid_resource_name, scan_resources},
 };
 
 pub fn start_resource_watcher(
     data_source: Arc<DataSource>,
     resources: Arc<RwLock<BTreeSet<String>>>,
     resource_cache: Arc<RwLock<HashMap<String, CachedResource>>>,
+    schema_store: Arc<StdRwLock<SchemaStore>>,
+    graphql_store: Arc<RwLock<GraphqlStore>>,
+    health: Arc<HealthState>,
+    app_state: AppState,
 ) {
     std::thread::spawn(move || {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -37,6 +42,13 @@ pub fn start_resource_watcher(
             DataSource::Folder(folder) => folder.clone(),
             DataSource::File(file) => file.clone(),
         };
+        let schema_root = match &*data_source {
+            DataSource::Folder(folder) => folder.clone(),
+            DataSource::File(file) => file
+                .parent()
+                .map(|parent| parent.to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from(".")),
+        };
 
         if let Err(err) = watcher.watch(&watch_path, RecursiveMode::NonRecursive) {
             tracing::error!("Failed to watch path {}: {err}", watch_path.display());
@@ -47,9 +59,33 @@ pub fn start_resource_watcher(
             match event {
                 Ok(event) => match scan_resources(&data_source) {
                     Ok(new_resources) => {
+                        match load_schema(&schema_root, None) {
+                            Ok(declared) => {
+                                if let Err(err) = schema_store
+                                    .write()
+                                    .expect("schema store")
+                                    .replace_declared(declared)
+                                {
+                                    health.mark_not_ready(err.clone());
+                                    tracing::error!(
+                                        "Failed to apply declared schema for {}: {err}",
+                                        schema_root.display()
+                                    );
+                                    continue;
+                                }
+                            }
+                            Err(err) => {
+                                health.mark_not_ready(err.clone());
+                                tracing::error!(
+                                    "Failed to load schema for {}: {err}",
+                                    schema_root.display()
+                                );
+                                continue;
+                            }
+                        }
                         {
                             let mut cache = resources.blocking_write();
-                            *cache = new_resources;
+                            *cache = new_resources.clone();
                         }
                         {
                             let mut cache = resource_cache.blocking_write();
@@ -65,7 +101,9 @@ pub fn start_resource_watcher(
                                         else {
                                             continue;
                                         };
-                                        if !is_valid_resource_name(stem) {
+                                        if !is_valid_resource_name(stem)
+                                            || is_reserved_resource_name(stem)
+                                        {
                                             continue;
                                         }
 
@@ -74,24 +112,27 @@ pub fn start_resource_watcher(
                                                 serde_json::from_str::<Value>(&raw).ok()
                                             }) {
                                                 Some(value) => {
-                                                    if let Ok(metadata) = fs::metadata(path) {
-                                                        if let Ok(modified) = metadata.modified() {
-                                                            cache.insert(
-                                                                stem.to_string(),
-                                                                CachedResource {
-                                                                    value: Arc::new(value),
-                                                                    metadata: CachedMetadata {
-                                                                        modified,
-                                                                        len: metadata.len(),
-                                                                    },
-                                                                },
-                                                            );
-                                                        } else {
-                                                            cache.remove(stem);
-                                                        }
-                                                    } else {
-                                                        cache.remove(stem);
-                                                    }
+                                                    let table = schema_store
+                                                        .read()
+                                                        .expect("schema store")
+                                                        .merged
+                                                        .tables
+                                                        .get(stem)
+                                                        .cloned();
+                                                    cache.insert(
+                                                        stem.to_string(),
+                                                        CachedResource {
+                                                            id_index: build_id_index(
+                                                                &value,
+                                                                table.as_ref(),
+                                                            ),
+                                                            primary_key: primary_key_name(
+                                                                table.as_ref(),
+                                                            )
+                                                            .to_string(),
+                                                            value: Arc::new(value),
+                                                        },
+                                                    );
                                                 }
                                                 None => {
                                                     cache.remove(stem);
@@ -107,8 +148,44 @@ pub fn start_resource_watcher(
                                 }
                             }
                         }
+                        match infer_schema_from_data_source(&data_source, &new_resources) {
+                            Ok(schema) => {
+                                if let Err(err) = schema_store
+                                    .write()
+                                    .expect("schema store")
+                                    .replace_inferred(schema)
+                                {
+                                    tracing::error!(
+                                        "Failed to merge schema for {}: {err}",
+                                        watch_path.display()
+                                    );
+                                    health.mark_not_ready(err);
+                                } else {
+                                    *graphql_store.blocking_write() = GraphqlStore::default();
+                                    health.mark_ready();
+                                    app_state.emit_event("schema_changed", None);
+                                }
+                            }
+                            Err(err) => {
+                                health.mark_not_ready(err.clone());
+                                tracing::error!(
+                                    "Failed to infer schema for {}: {err}",
+                                    watch_path.display()
+                                );
+                            }
+                        }
+                        app_state.emit_event("overview_changed", None);
+                        for path in &event.paths {
+                            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                                continue;
+                            };
+                            if is_valid_resource_name(stem) && !is_reserved_resource_name(stem) {
+                                app_state.emit_event("resource_changed", Some(stem.to_string()));
+                            }
+                        }
                     }
                     Err(err) => {
+                        health.mark_not_ready(err.to_string());
                         tracing::error!(
                             "Failed to refresh resources for {}: {err}",
                             watch_path.display()

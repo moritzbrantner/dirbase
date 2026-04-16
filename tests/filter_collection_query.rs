@@ -50,16 +50,16 @@ fn collection_supports_filtering_with_multiple_query_parameters() {
         .arg("--folder")
         .arg(temp.path())
         .arg("--bind")
-        .arg("127.0.0.1:3001")
+        .arg("127.0.0.1:3211")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("start folder-server");
     let _child = ChildGuard { child };
 
-    wait_for_server("127.0.0.1:3001", Duration::from_secs(5));
+    wait_for_server("127.0.0.1:3211", Duration::from_secs(5));
 
-    let response = http_get("127.0.0.1:3001", "/users?role=admin&active=true");
+    let response = http_get("127.0.0.1:3211", "/users?role=admin&active=true");
 
     assert!(
         response.starts_with("HTTP/1.1 200 OK\r\n"),
@@ -91,16 +91,16 @@ fn collection_supports_sorting_by_multiple_columns() {
         .arg("--folder")
         .arg(temp.path())
         .arg("--bind")
-        .arg("127.0.0.1:3004")
+        .arg("127.0.0.1:34004")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("start folder-server");
     let _child = ChildGuard { child };
 
-    wait_for_server("127.0.0.1:3004", Duration::from_secs(5));
+    wait_for_server("127.0.0.1:34004", Duration::from_secs(5));
 
-    let response = http_get("127.0.0.1:3004", "/users?sort=role,name");
+    let response = http_get("127.0.0.1:34004", "/users?sort=role,name");
 
     assert!(
         response.starts_with("HTTP/1.1 200 OK\r\n"),
@@ -138,17 +138,17 @@ fn collection_supports_operator_filters_nested_fields_desc_sort_and_pagination_k
         .arg("--folder")
         .arg(temp.path())
         .arg("--bind")
-        .arg("127.0.0.1:3005")
+        .arg("127.0.0.1:34005")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("start folder-server");
     let _child = ChildGuard { child };
 
-    wait_for_server("127.0.0.1:3005", Duration::from_secs(5));
+    wait_for_server("127.0.0.1:34005", Duration::from_secs(5));
 
     let response = http_get(
-        "127.0.0.1:3005",
+        "127.0.0.1:34005",
         "/posts?views:gte=100&title:contains=hello&author.name:eq=Typicode&_sort=-views&_page=1&_per_page=2",
     );
 
@@ -192,22 +192,22 @@ fn collection_rejects_invalid_filter_operator_and_invalid_pagination_values() {
         .arg("--folder")
         .arg(temp.path())
         .arg("--bind")
-        .arg("127.0.0.1:3006")
+        .arg("127.0.0.1:34006")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("start folder-server");
     let _child = ChildGuard { child };
 
-    wait_for_server("127.0.0.1:3006", Duration::from_secs(5));
+    wait_for_server("127.0.0.1:34006", Duration::from_secs(5));
 
-    let invalid_operator = http_get("127.0.0.1:3006", "/users?role:badop=admin");
+    let invalid_operator = http_get("127.0.0.1:34006", "/users?role:badop=admin");
     assert!(
         invalid_operator.starts_with("HTTP/1.1 400 Bad Request\r\n"),
         "expected 400 Bad Request response, got: {invalid_operator}"
     );
 
-    let invalid_page = http_get("127.0.0.1:3006", "/users?_page=0&_per_page=2");
+    let invalid_page = http_get("127.0.0.1:34006", "/users?_page=0&_per_page=2");
     assert!(
         invalid_page.starts_with("HTTP/1.1 400 Bad Request\r\n"),
         "expected 400 Bad Request response, got: {invalid_page}"
@@ -232,16 +232,16 @@ fn collection_clamps_pagination_page_to_last_page() {
         .arg("--folder")
         .arg(temp.path())
         .arg("--bind")
-        .arg("127.0.0.1:3007")
+        .arg("127.0.0.1:34007")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("start folder-server");
     let _child = ChildGuard { child };
 
-    wait_for_server("127.0.0.1:3007", Duration::from_secs(5));
+    wait_for_server("127.0.0.1:34007", Duration::from_secs(5));
 
-    let response = http_get("127.0.0.1:3007", "/users?_page=99&_per_page=2");
+    let response = http_get("127.0.0.1:34007", "/users?_page=99&_per_page=2");
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
 
     let body = parse_http_body(&response);
@@ -257,6 +257,43 @@ fn collection_clamps_pagination_page_to_last_page() {
         .map(|item| item["id"].as_i64().expect("numeric id"))
         .collect::<Vec<_>>();
     assert_eq!(ids, vec![3]);
+}
+
+#[test]
+fn collection_supports_null_filter_operators() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let users_path = temp.path().join("users.json");
+
+    let users = serde_json::json!([
+        {"id": 1, "name": "Ada", "deleted_at": null},
+        {"id": 2, "name": "Grace", "deleted_at": "2026-01-01"}
+    ]);
+
+    std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
+        .expect("write users json");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:34008")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:34008", Duration::from_secs(5));
+
+    let is_null = http_get("127.0.0.1:34008", "/users?deleted_at:isNull=true");
+    assert!(is_null.starts_with("HTTP/1.1 200 OK\r\n"), "{is_null}");
+    assert!(is_null.contains("\"id\":1"), "{is_null}");
+    assert!(!is_null.contains("\"id\":2"), "{is_null}");
+
+    let is_not_null = http_get("127.0.0.1:34008", "/users?deleted_at:isNotNull=true");
+    assert!(is_not_null.starts_with("HTTP/1.1 200 OK\r\n"), "{is_not_null}");
+    assert!(is_not_null.contains("\"id\":2"), "{is_not_null}");
+    assert!(!is_not_null.contains("\"id\":1"), "{is_not_null}");
 }
 
 fn wait_for_server(addr: &str, timeout: Duration) {
