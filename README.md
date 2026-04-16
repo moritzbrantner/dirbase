@@ -30,11 +30,14 @@ you get:
 - `GET /{resource}` returns the whole JSON document from `{resource}.json` (array or object).
 - `GET /{resource}?field=value&other=...` filters array resources (default operator is `eq`).
 - Advanced filters use `field:operator=value` and support: `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `contains`, `startsWith`, and `endsWith` (for example `views:gt=100`, `author.name:eq=typicode`, `title:contains=hello`).
+- Null filters support `field:isNull=true` and `field:isNotNull=true`.
 - Sorting supports `sort` and `_sort` keywords; use `-column` for descending and comma-separated multi-sort (for example `_sort=author.name,-views`).
 - Pagination supports `page`/`_page` and `per_page`/`_per_page`. Array responses become an object containing `{ first, prev, next, last, pages, items, data }`.
 - Embedding supports `embed` and `_embed` keywords to replace foreign key fields with the related object from another table when schema foreign keys are defined (for example `embed=author_id`).
+- `GET /events` streams `overview_changed`, `resource_changed`, and `schema_changed` SSE notifications for live UIs.
 - `GET /schema` returns the current schema metadata inferred from JSON tables and merged with any declared schema.
 - `POST /schema` saves the full effective schema as `schema.json` next to the served folder or database file.
+- `PUT /schema` validates and saves a declared schema overlay to `schema.json`.
 - `POST /schema/infer` re-infers schema metadata from the current data and writes that inferred snapshot to `schema.json`.
 - `GET /graphql` serves GraphiQL for browser requests and executes GraphQL queries for API requests.
 - `POST /graphql` accepts standard GraphQL JSON bodies with `query`, `variables`, and `operationName`.
@@ -46,13 +49,25 @@ you get:
 - If the positional path does not exist yet, it is treated as a folder unless it ends in `.json`.
 - `--log` enables request logging and `--logname <path>` selects the log output file (default `requests.log`).
 - `--readonly` disables mutation routes and only serves `GET` endpoints.
-- GraphQL is not supported; use REST endpoints (`/{resource}`, `/{resource}/{id}`) and `/sql` for query-style access.
+- `--auth-token <token>` enables bearer-token auth for application routes.
+- `--cors-origin <origin>` enables explicit CORS for a single allowed origin.
+- `--max-body-bytes`, `--max-per-page`, `--max-sql-scan-rows`, and `--max-sql-selected-rows` configure request and query limits.
+- `GET /healthz`, `GET /readyz`, and `GET /metrics` expose operational status and counters.
 - Schema metadata is inferred automatically for array-of-object resources. Object tables prefer `id` as the primary key and also detect `<table>_id` or `<singular_table>_id` when those columns are unique and present on every row. Foreign keys are inferred conservatively from `*_id` columns.
 - Declared schema overlays are enabled automatically when `{folder}/schema.json` or `{folder}/schema.dbml` exists.
 - Use `--schema <path>` to load a custom `.dbml` or `.json` schema file.
 - Schema auto-discovery prefers `schema.json` over `schema.dbml`.
 - Declared schema overlays are permissive: undeclared resources and undeclared columns are still allowed, while declared columns, primary keys, and foreign keys override inferred metadata.
-- GraphQL v1 is read-only: it supports basic queries, introspection, and foreign-key traversal, but not filtering, sorting, pagination args, or mutations yet.
+- GraphQL remains read-only, but now also exposes query-capable collection fields such as `usersQuery(filter:, sort:, page:, perPage:)`.
+
+## Capabilities by interface
+
+| Interface | Read | Write | Filtering / sorting / pagination | Relations | Notes |
+| --- | --- | --- | --- | --- | --- |
+| REST | Yes | Yes unless `--readonly` | Yes | `embed` plus item routes | Primary API surface |
+| GraphQL | Yes | No | `*Query` fields support filter / sort / pagination | Foreign-key traversal | GraphiQL at `GET /graphql` |
+| SQL | Yes | No | `SELECT`, projection, `WHERE`, `ORDER BY`, `LIMIT/OFFSET` | Schema-backed `INNER JOIN` | Query endpoint at `/sql` |
+| Overview UI | Yes | Schema editor only | Explorer drives REST params | Live-updating relation map | Root HTML at `GET /` |
 
 ## Quick start
 
@@ -82,6 +97,9 @@ cargo run -- ./data --bind 127.0.0.1:4444
 # Read-only mode (only GET routes)
 cargo run -- ./data --bind 127.0.0.1:4444 --readonly
 
+# Auth + explicit CORS
+cargo run -- ./data --auth-token secret --cors-origin http://localhost:3000
+
 # Explicit schema file (if not using ./data/schema.dbml)
 cargo run -- ./data --schema ./schema.dbml
 
@@ -99,6 +117,9 @@ curl http://127.0.0.1:4444/users/1
 curl -H 'content-type: application/json' \
   -d '{"query":"{ users { id name } }"}' \
   http://127.0.0.1:4444/graphql
+curl -H 'content-type: application/json' \
+  -d '{"query":"{ usersQuery(sort:[{field:\"id\",direction:DESC}], page:1, perPage:1) { items data { id name } } }"}' \
+  http://127.0.0.1:4444/graphql
 curl -X POST http://127.0.0.1:4444/users \
   -H 'content-type: application/json' \
   -d '{"name":"Grace"}'
@@ -113,6 +134,7 @@ curl -X POST http://127.0.0.1:4444/users \
 - If both files exist next to the data source, `schema.json` wins.
 - `GET /schema` always shows the merged effective schema.
 - `POST /schema` writes the merged effective schema back to `schema.json`.
+- `PUT /schema` writes a declared schema overlay to `schema.json`.
 - `POST /schema/infer` writes a fresh inferred schema snapshot to `schema.json`.
 
 Manual schema files act as overlays on top of inference:
@@ -194,7 +216,7 @@ A GitHub Actions workflow is provided at `.github/workflows/rust-to-npm.yml`.
 
 - Trigger: pushing tags matching `npm-v*` (or manual `workflow_dispatch`).
 - Toolchain: Rust stable + Node 20.
-- Steps: `npm ci` → `npm run build` → `npm publish`.
+- Steps: build native binaries on Linux, macOS, and Windows, bundle the JS launcher, then publish one npm package containing all prebuilt binaries.
 - Secret required: `NPM_TOKEN`.
 
 Once published, users can run:

@@ -10,7 +10,9 @@ export type FilterOperator =
   | 'in'
   | 'contains'
   | 'startsWith'
-  | 'endsWith';
+  | 'endsWith'
+  | 'isNull'
+  | 'isNotNull';
 
 export interface OverviewPageData {
   schema_enabled: boolean;
@@ -116,4 +118,9 @@ export interface ResourceResponse {
   url: string;
   rawText: string;
   parsed: unknown;
+}
+
+export interface SchemaResponse {
+  tables?: Record<string, unknown>;
+  [key: string]: unknown;
 }

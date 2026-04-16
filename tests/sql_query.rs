@@ -64,13 +64,19 @@ fn sql_get_works_in_readonly_mode() {
 fn sql_post_rejects_non_select_and_unsupported_constructs() {
     let temp = tempfile::tempdir().expect("create temp directory");
     let users_path = temp.path().join("users.json");
+    let teams_path = temp.path().join("teams.json");
 
     let users = serde_json::json!([
         {"id": 1, "name": "Ada", "role": "admin"}
     ]);
+    let teams = serde_json::json!([
+        {"id": 1, "user_id": 1, "name": "Core"}
+    ]);
 
     std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
         .expect("write users json");
+    std::fs::write(teams_path, serde_json::to_string_pretty(&teams).expect("serialize teams"))
+        .expect("write teams json");
 
     let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
         .arg("--folder")
@@ -95,7 +101,7 @@ fn sql_post_rejects_non_select_and_unsupported_constructs() {
     let join_response = http_post_json(
         "127.0.0.1:3011",
         "/sql",
-        serde_json::json!({"query": "SELECT * FROM users u JOIN teams t ON u.id=t.user_id"}),
+        serde_json::json!({"query": "SELECT * FROM users u LEFT JOIN teams t ON u.id=t.user_id"}),
     );
     assert!(join_response.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{join_response}");
     let join_payload: serde_json::Value =

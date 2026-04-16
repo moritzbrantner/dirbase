@@ -17,7 +17,9 @@ export const FILTER_OPERATORS: FilterOperator[] = [
   'in',
   'contains',
   'startsWith',
-  'endsWith'
+  'endsWith',
+  'isNull',
+  'isNotNull'
 ];
 
 const RESERVED_KEYS = new Set(['resource', 'view', 'sort', '_sort', 'page', '_page', 'per_page', '_per_page', 'embed', '_embed']);
@@ -93,11 +95,12 @@ export function buildResourceSearchParams(state: Pick<OverviewUrlState, 'page' |
   }
 
   for (const filter of state.filters) {
-    if (!filter.field.trim() || !filter.value.trim()) {
+    const requiresValue = filter.operator !== 'isNull' && filter.operator !== 'isNotNull';
+    if (!filter.field.trim() || (requiresValue && !filter.value.trim())) {
       continue;
     }
     const key = filter.operator === 'eq' ? filter.field : `${filter.field}:${filter.operator}`;
-    params.append(key, filter.value);
+    params.append(key, requiresValue ? filter.value : 'true');
   }
 
   return params;

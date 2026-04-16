@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use axum::{
     Json,
@@ -7,9 +7,12 @@ use axum::{
     response::IntoResponse,
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use sqlparser::{
-    ast::{BinaryOperator, Expr, Select, SelectItem, SetExpr, Statement, Value as SqlValue},
+    ast::{
+        BinaryOperator, Expr, Join, JoinConstraint, JoinOperator, Select, SelectItem, SetExpr,
+        Statement, TableFactor, Value as SqlValue,
+    },
     dialect::GenericDialect,
     parser::Parser as SqlParser,
 };
@@ -26,8 +29,6 @@ use crate::{
 };
 
 const MAX_SQL_QUERY_LENGTH: usize = 16_384;
-const MAX_SQL_SELECTED_ROWS: usize = 1_000;
-const MAX_SQL_SCANNED_ROWS: usize = 50_000;
 
 #[derive(Deserialize)]
 pub struct SqlGetParams {
@@ -74,10 +75,21 @@ impl SqlExportDialect {
 #[derive(Debug)]
 struct ParsedSqlQuery {
     resource: String,
+    resource_alias: String,
     selected_columns: Option<Vec<String>>,
     filters: Vec<FilterCondition>,
     sort_columns: Vec<SortColumn>,
     pagination: Option<Pagination>,
+    joins: Vec<ParsedSqlJoin>,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedSqlJoin {
+    resource: String,
+    alias: String,
+    left_alias: String,
+    left_column: String,
+    right_column: String,
 }
 
 pub async fn sql_query(
@@ -106,30 +118,25 @@ pub async fn export_sql(
 
 async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, AppError> {
     let parsed = parse_sql_query(&query, &state).await?;
-    let _guard = state.read_lock_for_resource(&parsed.resource).await;
-    let data = load_resource(&state, &parsed.resource).await?;
-    let data = data.as_ref().clone();
-    validate_resource_data(&state, &parsed.resource, &data)?;
-
-    let table = state.schema_table(&parsed.resource);
-    let scanned_rows = data
-        .as_array()
-        .map(|rows| rows.len())
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
-    if scanned_rows > MAX_SQL_SCANNED_ROWS {
+    let lock_resources = sql_lock_resources(&parsed);
+    let _guards = state.read_locks_for_resources(&lock_resources).await;
+    let rows = materialize_sql_rows(&state, &parsed).await?;
+    let scanned_rows = rows.len();
+    if scanned_rows > state.config.max_sql_scan_rows {
         return Err(AppError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             format!(
-                "Query exceeds scan guard: {scanned_rows} rows scanned (max {MAX_SQL_SCANNED_ROWS})"
+                "Query exceeds scan guard: {scanned_rows} rows scanned (max {})",
+                state.config.max_sql_scan_rows
             ),
         )
         .with_code("unsupported_feature"));
     }
 
     let filtered = if parsed.filters.is_empty() {
-        data
+        Value::Array(rows.clone())
     } else {
-        filter_collection_data(data, &parsed.filters, table.as_ref())?
+        filter_collection_data(Value::Array(rows.clone()), &parsed.filters, None)?
     };
     let sorted = if parsed.sort_columns.is_empty() {
         filtered
@@ -153,13 +160,129 @@ async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, Ap
 
     let rows = apply_column_selection(paginated_rows, parsed.selected_columns)?;
     let row_count = rows.len();
-    if row_count > MAX_SQL_SELECTED_ROWS {
-        return Err(AppError::new(StatusCode::BAD_REQUEST, format!("Query returned {row_count} rows; maximum allowed is {MAX_SQL_SELECTED_ROWS}. Use LIMIT to reduce the result set")).with_code("unsupported_feature"));
+    if row_count > state.config.max_sql_selected_rows {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Query returned {row_count} rows; maximum allowed is {}. Use LIMIT to reduce the result set",
+                state.config.max_sql_selected_rows
+            ),
+        )
+        .with_code("unsupported_feature"));
     }
 
     Ok(Json(
         serde_json::json!({ "dialect": "generic", "query": query, "row_count": row_count, "rows": rows }),
     ))
+}
+
+fn sql_lock_resources(parsed: &ParsedSqlQuery) -> Vec<String> {
+    let mut resources = vec![parsed.resource.clone()];
+    for join in &parsed.joins {
+        if !resources.contains(&join.resource) {
+            resources.push(join.resource.clone());
+        }
+    }
+    resources
+}
+
+async fn materialize_sql_rows(
+    state: &AppState,
+    parsed: &ParsedSqlQuery,
+) -> Result<Vec<Value>, AppError> {
+    let base = load_resource(state, &parsed.resource).await?;
+    let base_value = base.as_ref().clone();
+    validate_resource_data(state, &parsed.resource, &base_value)?;
+    let base_rows = base_value
+        .as_array()
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
+    let mut joined_rows = base_rows
+        .iter()
+        .map(|row| {
+            let object = row.as_object().ok_or_else(|| {
+                AppError::new(StatusCode::BAD_REQUEST, "Resource row is not a JSON object")
+            })?;
+            Ok(build_base_sql_row(&parsed.resource, &parsed.resource_alias, object.clone()))
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+
+    if parsed.joins.is_empty() {
+        return Ok(joined_rows);
+    }
+
+    let mut join_data = HashMap::<String, Vec<Map<String, Value>>>::new();
+    for join in &parsed.joins {
+        if join_data.contains_key(&join.alias) {
+            continue;
+        }
+        let resource = load_resource(state, &join.resource).await?;
+        let data = resource.as_ref().clone();
+        validate_resource_data(state, &join.resource, &data)?;
+        let rows = data
+            .as_array()
+            .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?
+            .iter()
+            .map(|row| {
+                row.as_object().cloned().ok_or_else(|| {
+                    AppError::new(StatusCode::BAD_REQUEST, "Resource row is not a JSON object")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        join_data.insert(join.alias.clone(), rows);
+    }
+
+    for join in &parsed.joins {
+        let Some(target_rows) = join_data.get(&join.alias) else {
+            continue;
+        };
+        let lookup = target_rows.iter().fold(HashMap::new(), |mut acc, row| {
+            if let Some(value) = row.get(&join.right_column) {
+                acc.entry(value_to_lookup_key(value)).or_insert_with(Vec::new).push(row.clone());
+            }
+            acc
+        });
+        let mut next_rows = Vec::new();
+        for row in &joined_rows {
+            let Some(actual) =
+                get_value_at_path(row, &format!("{}.{}", join.left_alias, join.left_column))
+            else {
+                continue;
+            };
+            if let Some(matches) = lookup.get(&value_to_lookup_key(actual)) {
+                for matched in matches {
+                    next_rows.push(extend_joined_row(row, &join.alias, matched.clone()));
+                }
+            }
+        }
+        joined_rows = next_rows;
+    }
+
+    Ok(joined_rows)
+}
+
+fn build_base_sql_row(resource: &str, alias: &str, object: Map<String, Value>) -> Value {
+    let mut root = object.clone();
+    root.insert(resource.to_string(), Value::Object(object.clone()));
+    if alias != resource {
+        root.insert(alias.to_string(), Value::Object(object));
+    }
+    Value::Object(root)
+}
+
+fn extend_joined_row(row: &Value, alias: &str, object: Map<String, Value>) -> Value {
+    let mut root = row.as_object().cloned().unwrap_or_default();
+    root.insert(alias.to_string(), Value::Object(object));
+    Value::Object(root)
+}
+
+fn value_to_lookup_key(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(boolean) => boolean.to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => text.clone(),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
+    }
 }
 
 async fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery, AppError> {
@@ -202,10 +325,14 @@ async fn parse_sql_query(query: &str, state: &AppState) -> Result<ParsedSqlQuery
                         .with_code("invalid_sql"));
                 }
             };
-            if matches!(pagination.as_ref(), Some(p) if p.per_page > MAX_SQL_SELECTED_ROWS) {
+            if matches!(pagination.as_ref(), Some(p) if p.per_page > state.config.max_sql_selected_rows)
+            {
                 return Err(AppError::new(
                     StatusCode::BAD_REQUEST,
-                    format!("LIMIT exceeds max selected rows ({MAX_SQL_SELECTED_ROWS})"),
+                    format!(
+                        "LIMIT exceeds max selected rows ({})",
+                        state.config.max_sql_selected_rows
+                    ),
                 )
                 .with_code("unsupported_feature"));
             }
@@ -252,27 +379,9 @@ async fn parse_sql_select(
         .with_code("invalid_sql"));
     }
     let from = &select.from[0];
-    if !from.joins.is_empty() {
-        return Err(AppError::new(StatusCode::BAD_REQUEST, "JOIN is not supported")
-            .with_code("unsupported_feature"));
-    }
-    let resource = match &from.relation {
-        sqlparser::ast::TableFactor::Table { name, .. } => name
-            .0
-            .last()
-            .ok_or_else(|| {
-                AppError::new(StatusCode::BAD_REQUEST, "Missing table/resource name")
-                    .with_code("invalid_sql")
-            })?
-            .value
-            .clone(),
-        _ => {
-            return Err(AppError::new(StatusCode::BAD_REQUEST, "Unsupported FROM clause")
-                .with_code("unsupported_feature"));
-        }
-    };
-
+    let (resource, resource_alias) = parse_sql_table_factor(&from.relation)?;
     validate_sql_identifier(&resource, "resource")?;
+    validate_sql_identifier(&resource_alias, "resource alias")?;
     if !resource_exists(state, &resource).await? {
         return Err(AppError::new(
             StatusCode::NOT_FOUND,
@@ -280,6 +389,7 @@ async fn parse_sql_select(
         )
         .with_code("unknown_table"));
     }
+    let joins = parse_sql_joins(&resource, &resource_alias, &from.joins, state).await?;
 
     let selected_columns = parse_sql_projection(&select.projection)?;
     let filters = if let Some(selection) = select.selection {
@@ -290,11 +400,191 @@ async fn parse_sql_select(
     validate_sql_query_fields(
         state,
         &resource,
+        &resource_alias,
+        &joins,
         selected_columns.as_deref(),
         &filters,
         &sort_columns,
     )?;
-    Ok(ParsedSqlQuery { resource, selected_columns, filters, sort_columns, pagination })
+    Ok(ParsedSqlQuery {
+        resource,
+        resource_alias,
+        selected_columns,
+        filters,
+        sort_columns,
+        pagination,
+        joins,
+    })
+}
+
+fn parse_sql_table_factor(relation: &TableFactor) -> Result<(String, String), AppError> {
+    match relation {
+        TableFactor::Table { name, alias, .. } => {
+            let resource = name
+                .0
+                .last()
+                .ok_or_else(|| {
+                    AppError::new(StatusCode::BAD_REQUEST, "Missing table/resource name")
+                        .with_code("invalid_sql")
+                })?
+                .value
+                .clone();
+            let alias = alias
+                .as_ref()
+                .map(|alias| alias.name.value.clone())
+                .unwrap_or_else(|| resource.clone());
+            Ok((resource, alias))
+        }
+        _ => Err(AppError::new(StatusCode::BAD_REQUEST, "Unsupported FROM clause")
+            .with_code("unsupported_feature")),
+    }
+}
+
+async fn parse_sql_joins(
+    base_resource: &str,
+    base_alias: &str,
+    joins: &[Join],
+    state: &AppState,
+) -> Result<Vec<ParsedSqlJoin>, AppError> {
+    let mut parsed = Vec::new();
+    let mut aliases = HashMap::from([(base_alias.to_string(), base_resource.to_string())]);
+    for join in joins {
+        let (resource, alias) = parse_sql_table_factor(&join.relation)?;
+        validate_sql_identifier(&resource, "resource")?;
+        validate_sql_identifier(&alias, "resource alias")?;
+        if !resource_exists(state, &resource).await? {
+            return Err(AppError::new(
+                StatusCode::NOT_FOUND,
+                format!("Unknown table/resource '{resource}'"),
+            )
+            .with_code("unknown_table"));
+        }
+        if aliases.contains_key(&alias) {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                format!("Duplicate table alias '{alias}'"),
+            )
+            .with_code("invalid_sql"));
+        }
+        let (left_alias, left_column, right_alias, right_column) = match &join.join_operator {
+            JoinOperator::Inner(JoinConstraint::On(expr)) => parse_sql_join_on(expr)?,
+            JoinOperator::Inner(_) => {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "INNER JOIN requires an ON clause",
+                )
+                .with_code("unsupported_feature"));
+            }
+            _ => {
+                return Err(AppError::new(StatusCode::BAD_REQUEST, "Only INNER JOIN is supported")
+                    .with_code("unsupported_feature"));
+            }
+        };
+        if right_alias != alias && left_alias != alias {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "JOIN ON clause must reference the joined table alias",
+            )
+            .with_code("invalid_sql"));
+        }
+        let existing_alias = if left_alias == alias { &right_alias } else { &left_alias };
+        if !aliases.contains_key(existing_alias) {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                format!("JOIN references unknown alias '{existing_alias}'"),
+            )
+            .with_code("invalid_sql"));
+        }
+        let existing_resource = aliases.get(existing_alias).expect("existing alias");
+        validate_join_relation(
+            state,
+            existing_resource,
+            &resource,
+            if left_alias == alias { &right_column } else { &left_column },
+            if left_alias == alias { &left_column } else { &right_column },
+        )?;
+        parsed.push(ParsedSqlJoin {
+            resource: resource.clone(),
+            alias: alias.clone(),
+            left_alias: if left_alias == alias { right_alias.clone() } else { left_alias.clone() },
+            left_column: if left_alias == alias {
+                right_column.clone()
+            } else {
+                left_column.clone()
+            },
+            right_column: if right_alias == alias {
+                right_column.clone()
+            } else {
+                left_column.clone()
+            },
+        });
+        aliases.insert(alias, resource);
+    }
+    Ok(parsed)
+}
+
+fn parse_sql_join_on(expr: &Expr) -> Result<(String, String, String, String), AppError> {
+    let Expr::BinaryOp { left, op, right } = expr else {
+        return Err(AppError::new(StatusCode::BAD_REQUEST, "JOIN ON must be a simple equality")
+            .with_code("unsupported_feature"));
+    };
+    if *op != BinaryOperator::Eq {
+        return Err(AppError::new(StatusCode::BAD_REQUEST, "JOIN ON only supports equality")
+            .with_code("unsupported_feature"));
+    }
+    let left = parse_sql_qualified_column_expr(left)?;
+    let right = parse_sql_qualified_column_expr(right)?;
+    Ok((left.0, left.1, right.0, right.1))
+}
+
+fn parse_sql_qualified_column_expr(expr: &Expr) -> Result<(String, String), AppError> {
+    match expr {
+        Expr::CompoundIdentifier(parts) if parts.len() >= 2 => {
+            let prefix = parts.first().ok_or_else(|| {
+                AppError::new(StatusCode::BAD_REQUEST, "Invalid column reference")
+            })?;
+            let column = parts.last().ok_or_else(|| {
+                AppError::new(StatusCode::BAD_REQUEST, "Invalid column reference")
+            })?;
+            validate_sql_identifier(&prefix.value, "resource alias")?;
+            validate_sql_identifier(&column.value, "column")?;
+            Ok((prefix.value.clone(), column.value.clone()))
+        }
+        _ => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "JOIN columns must use qualified references like table.column",
+        )
+        .with_code("invalid_sql")),
+    }
+}
+
+fn validate_join_relation(
+    state: &AppState,
+    left_resource: &str,
+    right_resource: &str,
+    left_column: &str,
+    right_column: &str,
+) -> Result<(), AppError> {
+    let left = state.schema_table(left_resource);
+    let right = state.schema_table(right_resource);
+    let left_matches = left
+        .as_ref()
+        .and_then(|table| table.foreign_keys.get(left_column))
+        .is_some_and(|fk| fk.target_table == right_resource && fk.target_column == right_column);
+    let right_matches = right
+        .as_ref()
+        .and_then(|table| table.foreign_keys.get(right_column))
+        .is_some_and(|fk| fk.target_table == left_resource && fk.target_column == left_column);
+    if left_matches || right_matches {
+        return Ok(());
+    }
+    Err(AppError::new(
+        StatusCode::BAD_REQUEST,
+        format!(
+            "JOIN between '{left_resource}.{left_column}' and '{right_resource}.{right_column}' is not backed by schema metadata"
+        ),
+    )
+    .with_code("unsupported_feature"))
 }
 
 fn parse_sql_projection(projection: &[SelectItem]) -> Result<Option<Vec<String>>, AppError> {
@@ -312,8 +602,13 @@ fn parse_sql_projection(projection: &[SelectItem]) -> Result<Option<Vec<String>>
                 let column = parts.last().ok_or_else(|| {
                     AppError::new(StatusCode::BAD_REQUEST, "Invalid column reference")
                 })?;
+                for part in parts {
+                    validate_sql_identifier(&part.value, "column")?;
+                }
                 validate_sql_identifier(&column.value, "column")?;
-                columns.push(column.value.clone());
+                columns.push(
+                    parts.iter().map(|part| part.value.clone()).collect::<Vec<_>>().join("."),
+                );
             }
             _ => {
                 return Err(AppError::new(
@@ -393,8 +688,11 @@ fn parse_sql_column_expr(expr: &Expr) -> Result<String, AppError> {
             let column = parts.last().ok_or_else(|| {
                 AppError::new(StatusCode::BAD_REQUEST, "Expected a column identifier")
             })?;
+            for part in parts {
+                validate_sql_identifier(&part.value, "column")?;
+            }
             validate_sql_identifier(&column.value, "column")?;
-            Ok(column.value.clone())
+            Ok(parts.iter().map(|part| part.value.clone()).collect::<Vec<_>>().join("."))
         }
         _ => Err(AppError::new(StatusCode::BAD_REQUEST, "Expected a column identifier")),
     }
@@ -674,53 +972,94 @@ fn serialize_sql_value(
 fn validate_sql_query_fields(
     state: &AppState,
     resource: &str,
+    resource_alias: &str,
+    joins: &[ParsedSqlJoin],
     selected_columns: Option<&[String]>,
     filters: &[FilterCondition],
     sort_columns: &[SortColumn],
 ) -> Result<(), AppError> {
-    let Some(table) = state.validation_schema_table(resource) else {
-        return Ok(());
-    };
-    if table.columns.is_empty() {
-        return Ok(());
-    }
-
     if let Some(selected_columns) = selected_columns {
         for column in selected_columns {
-            if !table.columns.contains_key(column) {
-                return Err(AppError::new(
-                    StatusCode::BAD_REQUEST,
-                    format!("Unknown column '{column}' for resource '{resource}'"),
-                ));
-            }
+            validate_sql_field(
+                state,
+                resource,
+                resource_alias,
+                joins,
+                column,
+                "SELECT projection",
+            )?;
         }
     }
 
     for filter in filters {
-        if !table.columns.contains_key(&filter.field_path) {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "Unknown column '{}' in WHERE clause for resource '{}'",
-                    filter.field_path, resource
-                ),
-            ));
-        }
+        validate_sql_field(
+            state,
+            resource,
+            resource_alias,
+            joins,
+            &filter.field_path,
+            "WHERE clause",
+        )?;
     }
 
     for sort in sort_columns {
-        if !table.columns.contains_key(&sort.field_path) {
-            return Err(AppError::new(
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "Unknown column '{}' in ORDER BY clause for resource '{}'",
-                    sort.field_path, resource
-                ),
-            ));
-        }
+        validate_sql_field(
+            state,
+            resource,
+            resource_alias,
+            joins,
+            &sort.field_path,
+            "ORDER BY clause",
+        )?;
     }
 
     Ok(())
+}
+
+fn validate_sql_field(
+    state: &AppState,
+    resource: &str,
+    resource_alias: &str,
+    joins: &[ParsedSqlJoin],
+    field: &str,
+    context: &str,
+) -> Result<(), AppError> {
+    let (target_resource, column_name) =
+        resolve_sql_field_target(resource, resource_alias, joins, field)?;
+    let Some(table) = state.schema_table(&target_resource) else {
+        return Ok(());
+    };
+    if !table.columns.is_empty() && !table.columns.contains_key(&column_name) {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Unknown column '{field}' in {context}"),
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_sql_field_target(
+    resource: &str,
+    resource_alias: &str,
+    joins: &[ParsedSqlJoin],
+    field: &str,
+) -> Result<(String, String), AppError> {
+    if let Some((prefix, column)) = field.split_once('.') {
+        let mut aliases = HashMap::from([(resource_alias.to_string(), resource.to_string())]);
+        aliases.insert(resource.to_string(), resource.to_string());
+        for join in joins {
+            aliases.insert(join.alias.clone(), join.resource.clone());
+            aliases.insert(join.resource.clone(), join.resource.clone());
+        }
+        let Some(target_resource) = aliases.get(prefix) else {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                format!("Unknown table alias '{prefix}' in column reference '{field}'"),
+            ));
+        };
+        return Ok((target_resource.clone(), column.to_string()));
+    }
+    Ok((resource.to_string(), field.to_string()))
 }
 
 fn quote_sql_string(input: &str) -> String {
@@ -741,11 +1080,24 @@ mod tests {
     fn parses_select_projection() {
         let state = AppState {
             data_source: Arc::new(crate::app::DataSource::Folder(PathBuf::from("."))),
+            config: Arc::new(crate::app::AppConfig {
+                readonly: false,
+                enable_log: false,
+                auth_token: None,
+                cors_origin: None,
+                max_body_bytes: 1024 * 1024,
+                max_per_page: 100,
+                max_sql_scan_rows: 50_000,
+                max_sql_selected_rows: 1_000,
+            }),
             resources: Arc::new(RwLock::new(BTreeSet::from(["users".to_string()]))),
             resource_cache: Arc::new(RwLock::new(HashMap::new())),
             resource_locks: Arc::new(RwLock::new(HashMap::new())),
             schema_store: Arc::new(std::sync::RwLock::new(crate::app::SchemaStore::default())),
             graphql_store: Arc::new(RwLock::new(crate::app::GraphqlStore::default())),
+            metrics: Arc::new(crate::app::MetricsStore::default()),
+            health: Arc::new(crate::app::HealthState::new(true, None)),
+            event_bus: tokio::sync::broadcast::channel(16).0,
         };
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
         let parsed =

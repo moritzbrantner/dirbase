@@ -1,18 +1,31 @@
 use std::{
     collections::{BTreeSet, HashMap},
+    convert::Infallible,
     hash::{Hash, Hasher},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
     Json, Router,
+    body::Body,
+    extract::DefaultBodyLimit,
     extract::{Path as AxumPath, Query, State},
-    http::{HeaderMap, Request, StatusCode},
+    http::{
+        HeaderMap, Method, Request, StatusCode,
+        header::{
+            ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+            ACCESS_CONTROL_ALLOW_ORIGIN, AUTHORIZATION, CONTENT_TYPE, ORIGIN,
+        },
+    },
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::get,
 };
 use serde_json::Value;
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
 use crate::{
     app::AppState,
@@ -25,8 +38,8 @@ use crate::{
     },
     relations::{build_relation_lookup, resolve_related_row_in_lookup},
     schema::{
-        TableSchema, default_schema_output_path, infer_schema_from_data_source, primary_key_name,
-        save_schema as save_schema_file,
+        DeclaredSchema, TableSchema, default_schema_output_path, infer_schema_from_data_source,
+        primary_key_name, save_schema as save_schema_file,
     },
     sql::{export_sql, sql_query, sql_query_post},
     storage::{
@@ -35,10 +48,14 @@ use crate::{
     },
 };
 
-pub fn build_router(state: AppState, readonly: bool, enable_log: bool) -> Router {
-    let app = if readonly {
+pub fn build_router(state: AppState) -> Router {
+    let app = if state.config.readonly {
         Router::new()
             .route("/", get(list_resources))
+            .route("/events", get(get_events))
+            .route("/healthz", get(healthz))
+            .route("/readyz", get(readyz))
+            .route("/metrics", get(metrics))
             .route("/overview.json", get(get_overview))
             .route("/assets/overview.css", get(get_overview_css))
             .route("/assets/overview.js", get(get_overview_js))
@@ -53,11 +70,15 @@ pub fn build_router(state: AppState, readonly: bool, enable_log: bool) -> Router
     } else {
         Router::new()
             .route("/", get(list_resources))
+            .route("/events", get(get_events))
+            .route("/healthz", get(healthz))
+            .route("/readyz", get(readyz))
+            .route("/metrics", get(metrics))
             .route("/overview.json", get(get_overview))
             .route("/assets/overview.css", get(get_overview_css))
             .route("/assets/overview.js", get(get_overview_js))
             .route("/graphql", get(graphql_get).post(graphql_post))
-            .route("/schema", get(get_schema).post(save_schema))
+            .route("/schema", get(get_schema).post(save_schema).put(save_declared_schema))
             .route("/schema/infer", axum::routing::post(infer_and_save_schema))
             .route("/sql", get(sql_query).post(sql_query_post))
             .route("/export.sql", get(export_sql))
@@ -76,16 +97,60 @@ pub fn build_router(state: AppState, readonly: bool, enable_log: bool) -> Router
             .with_state(state.clone())
     };
 
-    if enable_log {
-        app.layer(middleware::from_fn_with_state(state, log_requests_middleware))
-    } else {
-        app
+    let mut app = app.layer(DefaultBodyLimit::max(state.config.max_body_bytes));
+    app = app.layer(middleware::from_fn_with_state(state.clone(), metrics_middleware));
+    app = app.layer(middleware::from_fn_with_state(state.clone(), cors_middleware));
+    app = app.layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
+    if state.config.enable_log {
+        app = app.layer(middleware::from_fn_with_state(state.clone(), log_requests_middleware));
     }
+    app
+}
+
+pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [(CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        state.metrics.render_prometheus(),
+    )
+}
+
+pub async fn healthz(State(state): State<AppState>) -> Json<Value> {
+    Json(serde_json::json!({
+        "ok": true,
+        "ready": state.health.is_ready(),
+        "last_error": state.health.last_error(),
+    }))
+}
+
+pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
+    let status =
+        if state.health.is_ready() { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    (
+        status,
+        Json(serde_json::json!({
+            "ready": state.health.is_ready(),
+            "last_error": state.health.last_error(),
+        })),
+    )
+}
+
+pub async fn get_events(
+    State(state): State<AppState>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let stream =
+        BroadcastStream::new(state.subscribe_events()).filter_map(|message| match message {
+            Ok(event) => {
+                let payload = serde_json::to_string(&event).unwrap_or_else(|_| "{}".to_string());
+                Some(Ok(Event::default().event(event.kind).data(payload)))
+            }
+            Err(_) => None,
+        });
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 pub async fn log_requests_middleware(
     State(_state): State<AppState>,
-    request: Request<axum::body::Body>,
+    request: Request<Body>,
     next: Next,
 ) -> Response {
     let method = request.method().clone();
@@ -99,6 +164,96 @@ pub async fn log_requests_middleware(
     let suffix = query_hash.map(|hash| format!(" query_hash={hash}")).unwrap_or_default();
     let line = format!("{timestamp} {method} {path} {}{suffix}", status.as_u16());
     tracing::info!(target: "folder_server::request", "{line}");
+    response
+}
+
+pub async fn metrics_middleware(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    state.metrics.record_request();
+    let response = next.run(request).await;
+    state.metrics.record_response(
+        response.status().is_client_error() || response.status().is_server_error(),
+    );
+    response
+}
+
+pub async fn auth_middleware(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if request.method() == Method::OPTIONS {
+        return next.run(request).await;
+    }
+    let path = request.uri().path();
+    if matches!(path, "/healthz" | "/readyz" | "/metrics") {
+        return next.run(request).await;
+    }
+    let Some(expected) = state.config.auth_token.as_deref() else {
+        return next.run(request).await;
+    };
+    let authorized = request
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| token == expected);
+    if authorized {
+        return next.run(request).await;
+    }
+    state.metrics.record_auth_failure();
+    AppError::new(StatusCode::UNAUTHORIZED, "Missing or invalid bearer token")
+        .with_code("unauthorized")
+        .into_response()
+}
+
+pub async fn cors_middleware(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let origin =
+        request.headers().get(ORIGIN).and_then(|value| value.to_str().ok()).map(str::to_string);
+    let allow_origin = state
+        .config
+        .cors_origin
+        .as_deref()
+        .zip(origin.as_deref())
+        .and_then(|(expected, actual)| (expected == actual).then_some(actual.to_string()));
+
+    if request.method() == Method::OPTIONS {
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        if let Some(origin) = allow_origin {
+            let headers = response.headers_mut();
+            headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, origin.parse().expect("valid origin"));
+            headers.insert(
+                ACCESS_CONTROL_ALLOW_METHODS,
+                "GET,POST,PUT,PATCH,DELETE,OPTIONS".parse().expect("allow methods"),
+            );
+            headers.insert(
+                ACCESS_CONTROL_ALLOW_HEADERS,
+                "content-type,authorization".parse().expect("allow headers"),
+            );
+        }
+        return response;
+    }
+
+    let mut response = next.run(request).await;
+    if let Some(origin) = allow_origin {
+        let headers = response.headers_mut();
+        headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, origin.parse().expect("valid origin"));
+        headers.insert(
+            ACCESS_CONTROL_ALLOW_METHODS,
+            "GET,POST,PUT,PATCH,DELETE,OPTIONS".parse().expect("allow methods"),
+        );
+        headers.insert(
+            ACCESS_CONTROL_ALLOW_HEADERS,
+            "content-type,authorization".parse().expect("allow headers"),
+        );
+    }
     response
 }
 
@@ -145,8 +300,48 @@ pub async fn save_schema(State(state): State<AppState>) -> Result<Json<Value>, A
         })?
         .map_err(|err| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, err))?;
 
+    state.emit_event("schema_changed", None);
+
     Ok(Json(serde_json::json!({
         "saved": true,
+        "path": path.display().to_string(),
+    })))
+}
+
+pub async fn save_declared_schema(
+    State(state): State<AppState>,
+    Json(declared): Json<DeclaredSchema>,
+) -> Result<Json<Value>, AppError> {
+    let inferred = state.schema_store.read().expect("schema store").inferred.clone();
+    crate::schema::merge_schemas(Some(&declared), &inferred)
+        .map_err(|err| AppError::new(StatusCode::BAD_REQUEST, err))?;
+
+    let path = default_schema_output_path(&state.data_source);
+    let path_for_write = path.clone();
+    let declared_for_write = declared.clone();
+    tokio::task::spawn_blocking(move || {
+        let payload = serde_json::to_string_pretty(&declared_for_write)
+            .map_err(|err| format!("{}: {err}", path_for_write.display()))?;
+        std::fs::write(&path_for_write, format!("{payload}\n"))
+            .map_err(|err| format!("{}: {err}", path_for_write.display()))
+    })
+    .await
+    .map_err(|err| {
+        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Schema save task failed: {err}"))
+    })?
+    .map_err(|err| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, err))?;
+
+    state
+        .update_declared_schema(Some(declared))
+        .map_err(|err| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, err))?;
+    state.invalidate_graphql_schema().await;
+    state.emit_event("schema_changed", None);
+    state.emit_event("overview_changed", None);
+    state.health.mark_ready();
+
+    Ok(Json(serde_json::json!({
+        "saved": true,
+        "declared": true,
         "path": path.display().to_string(),
     })))
 }
@@ -180,6 +375,9 @@ pub async fn infer_and_save_schema(State(state): State<AppState>) -> Result<Json
         .update_inferred_schema(inferred)
         .map_err(|err| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, err))?;
     state.invalidate_graphql_schema().await;
+    state.emit_event("schema_changed", None);
+    state.emit_event("overview_changed", None);
+    state.health.mark_ready();
 
     Ok(Json(serde_json::json!({
         "saved": true,
@@ -194,6 +392,7 @@ pub async fn get_collection(
     Query(query_params): Query<Vec<(String, String)>>,
 ) -> Result<Json<Value>, AppError> {
     let parsed = parse_collection_query_params(query_params)?;
+    enforce_per_page_limit(&state, parsed.pagination)?;
     let lock_resources = embed_lock_resources(&state, &resource, &parsed.embeds)?;
     let _guards = state.read_locks_for_resources(&lock_resources).await;
 
@@ -251,6 +450,22 @@ pub async fn get_collection(
     };
 
     Ok(Json(materialized))
+}
+
+fn enforce_per_page_limit(
+    state: &AppState,
+    pagination: Option<crate::query::filters::Pagination>,
+) -> Result<(), AppError> {
+    if let Some(pagination) = pagination
+        && pagination.per_page > state.config.max_per_page
+    {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!("per_page exceeds configured max of {}", state.config.max_per_page),
+        )
+        .with_code("limit_exceeded"));
+    }
+    Ok(())
 }
 
 pub async fn create_item(

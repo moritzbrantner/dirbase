@@ -7,6 +7,6 @@ export default defineConfig({
     setupFiles: ['./src/setupTests.ts'],
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     exclude: ['e2e/**', '**/node_modules/**'],
-    pool: 'threads'
+    pool: 'forks'
   }
 });

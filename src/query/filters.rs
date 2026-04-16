@@ -208,6 +208,8 @@ fn parse_operator(operator: &str) -> Option<FilterOperator> {
         "contains" => Some(FilterOperator::Contains),
         "startsWith" => Some(FilterOperator::StartsWith),
         "endsWith" => Some(FilterOperator::EndsWith),
+        "isNull" | "is_null" => Some(FilterOperator::IsNull),
+        "isNotNull" | "is_not_null" => Some(FilterOperator::IsNotNull),
         _ => None,
     }
 }

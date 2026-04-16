@@ -329,6 +329,86 @@ fn schema_infer_endpoint_writes_fresh_inferred_schema_json() {
     assert_eq!(saved_payload["tables"]["posts"]["columns"]["author_ref"]["column_type"], "integer");
 }
 
+#[test]
+fn schema_put_validates_and_persists_declared_schema() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
+        .expect("write users");
+    fs::write(temp.path().join("posts.json"), "[{\"id\":1,\"author_id\":1,\"title\":\"Hello\"}]\n")
+        .expect("write posts");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3030")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3030", Duration::from_secs(5));
+
+    let invalid = http_request(
+        "127.0.0.1:3030",
+        "PUT",
+        "/schema",
+        Some(
+            r#"{
+  "tables": {
+    "posts": {
+      "foreign_keys": {
+        "author_id": {
+          "target_table": "missing",
+          "target_column": "id"
+        }
+      }
+    }
+  }
+}"#,
+        ),
+    );
+    assert!(invalid.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{invalid}");
+
+    let valid = http_request(
+        "127.0.0.1:3030",
+        "PUT",
+        "/schema",
+        Some(
+            r#"{
+  "tables": {
+    "posts": {
+      "foreign_keys": {
+        "author_id": {
+          "target_table": "users",
+          "target_column": "id"
+        }
+      }
+    }
+  }
+}"#,
+        ),
+    );
+    assert!(valid.starts_with("HTTP/1.1 200 OK\r\n"), "{valid}");
+
+    let saved = fs::read_to_string(temp.path().join("schema.json")).expect("read schema");
+    let saved_payload: serde_json::Value = serde_json::from_str(&saved).expect("schema json");
+    assert_eq!(
+        saved_payload["tables"]["posts"]["foreign_keys"]["author_id"]["target_table"],
+        "users"
+    );
+
+    let schema_response = http_request("127.0.0.1:3030", "GET", "/schema", None);
+    assert!(schema_response.starts_with("HTTP/1.1 200 OK\r\n"), "{schema_response}");
+    let schema_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&schema_response)).expect("schema json");
+    assert_eq!(
+        schema_payload["tables"]["posts"]["foreign_keys"]["author_id"]["target_table"],
+        "users"
+    );
+}
+
 fn wait_for_server(addr: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
 

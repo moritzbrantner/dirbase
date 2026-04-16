@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useMutation, useQuery } from '@tanstack/react-query';
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef, type VisibilityState } from '@tanstack/react-table';
 import {
   Background,
@@ -13,12 +13,11 @@ import {
   startTransition,
   useDeferredValue,
   useEffect,
-  useMemo,
   useState,
   type MouseEvent
 } from 'react';
 
-import { fetchOverview, fetchResource } from './api';
+import { fetchOverview, fetchResource, fetchSchema, saveSchemaDocument } from './api';
 import {
   coerceRelationValue,
   formatJson,
@@ -75,10 +74,28 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
   const [selectedRow, setSelectedRow] = useState<Record<string, unknown> | null>(null);
   const [mobilePanel, setMobilePanel] = useState<'map' | 'data' | 'details'>('data');
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [schemaDraft, setSchemaDraft] = useState('{}');
+  const [schemaStatus, setSchemaStatus] = useState<string | null>(null);
 
   const overviewQuery = useQuery({
     queryKey: ['overview', overviewEndpoint],
     queryFn: () => fetchOverview(overviewEndpoint)
+  });
+  const schemaQuery = useQuery({
+    queryKey: ['schema'],
+    queryFn: () => fetchSchema()
+  });
+  const saveSchemaMutation = useMutation({
+    mutationFn: saveSchemaDocument,
+    onSuccess: async () => {
+      setSchemaStatus('Schema saved.');
+      await queryClient.invalidateQueries({ queryKey: ['schema'] });
+      await queryClient.invalidateQueries({ queryKey: ['overview'] });
+      await queryClient.invalidateQueries({ queryKey: ['resource'] });
+    },
+    onError: (error) => {
+      setSchemaStatus(error instanceof Error ? error.message : 'Schema save failed.');
+    }
   });
 
   useEffect(() => {
@@ -91,6 +108,29 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  useEffect(() => {
+    const source = new EventSource('/events');
+    const invalidate = () => {
+      void queryClient.invalidateQueries({ queryKey: ['overview'] });
+      void queryClient.invalidateQueries({ queryKey: ['resource'] });
+      void queryClient.invalidateQueries({ queryKey: ['schema'] });
+    };
+    source.addEventListener('overview_changed', invalidate);
+    source.addEventListener('resource_changed', invalidate);
+    source.addEventListener('schema_changed', invalidate);
+    source.onerror = () => {
+      source.close();
+    };
+    return () => source.close();
+  }, []);
+
+  useEffect(() => {
+    if (!schemaQuery.data) {
+      return;
+    }
+    setSchemaDraft(formatJson(schemaQuery.data));
+  }, [schemaQuery.data]);
 
   const resources = overviewQuery.data?.resources ?? [];
   const selectedResource =
@@ -399,6 +439,40 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
               )}
             </div>
           )}
+
+          <section>
+            <h3>Schema editor</h3>
+            <p className="overview-copy">
+              Edit the declared `schema.json` overlay directly and save it through `PUT /schema`.
+            </p>
+            <textarea
+              className="schema-editor"
+              value={schemaDraft}
+              onChange={(event) => {
+                setSchemaDraft(event.target.value);
+                setSchemaStatus(null);
+              }}
+              spellCheck={false}
+            />
+            <div className="schema-editor-actions">
+              <button
+                type="button"
+                className="overview-secondary-button"
+                onClick={() => void queryClient.invalidateQueries({ queryKey: ['schema'] })}
+              >
+                Reload schema
+              </button>
+              <button
+                type="button"
+                className="overview-secondary-button"
+                onClick={() => saveSchemaMutation.mutate(schemaDraft)}
+                disabled={saveSchemaMutation.isPending}
+              >
+                {saveSchemaMutation.isPending ? 'Saving…' : 'Save schema'}
+              </button>
+            </div>
+            {schemaStatus && <p className="copy-status">{schemaStatus}</p>}
+          </section>
 
           {selectedResource?.kind === 'table' && selectedRow ? (
             <div className="details-stack">
@@ -890,7 +964,13 @@ function FilterBuilder({
               className="overview-select"
               value={filter.operator}
               onChange={(event) =>
-                onChangeFilter(filter.id, { operator: event.target.value as FilterOperator })
+                onChangeFilter(filter.id, {
+                  operator: event.target.value as FilterOperator,
+                  value:
+                    event.target.value === 'isNull' || event.target.value === 'isNotNull'
+                      ? ''
+                      : filter.value
+                })
               }
             >
               {FILTER_OPERATORS.map((operator) => (
@@ -899,12 +979,16 @@ function FilterBuilder({
                 </option>
               ))}
             </select>
-            <input
-              className="overview-input"
-              value={filter.value}
-              onChange={(event) => onChangeFilter(filter.id, { value: event.target.value })}
-              placeholder="value"
-            />
+            {filter.operator === 'isNull' || filter.operator === 'isNotNull' ? (
+              <span className="filter-implicit-value">No value</span>
+            ) : (
+              <input
+                className="overview-input"
+                value={filter.value}
+                onChange={(event) => onChangeFilter(filter.id, { value: event.target.value })}
+                placeholder="value"
+              />
+            )}
             <button
               type="button"
               className="overview-icon-button"

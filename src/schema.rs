@@ -45,18 +45,13 @@ pub struct DeclaredTableSchema {
     pub foreign_keys: BTreeMap<String, ForeignKey>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TableKind {
     Object,
     Relation,
+    #[default]
     Unknown,
-}
-
-impl Default for TableKind {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
