@@ -83,26 +83,18 @@ Table posts {
     assert_eq!(payload["stats"]["resource_count"], 2);
     assert_eq!(payload["stats"]["relation_count"], 1);
     assert_eq!(payload["stats"]["total_rows"], 3);
-    assert!(
-        payload["resources"]
-            .as_array()
-            .expect("resources array")
-            .iter()
-            .any(|resource| resource["name"] == "posts"
-                && resource["query_capabilities"]["pagination"] == true
-                && resource["mutation_capabilities"]["create_item"] == true
-                && resource["mutation_capabilities"]["update_item"] == true
-                && resource["mutation_capabilities"]["delete_item"] == true)
-    );
-    assert!(
-        payload["resources"]
-            .as_array()
-            .expect("resources array")
-            .iter()
-            .any(|resource| resource["name"] == "users"
-                && resource["sample_item_id"] == "1"
-                && resource["mutation_capabilities"]["replace_object"] == false)
-    );
+    assert!(payload["resources"].as_array().expect("resources array").iter().any(
+        |resource| resource["name"] == "posts"
+            && resource["query_capabilities"]["pagination"] == true
+            && resource["mutation_capabilities"]["create_item"] == true
+            && resource["mutation_capabilities"]["update_item"] == true
+            && resource["mutation_capabilities"]["delete_item"] == true
+    ));
+    assert!(payload["resources"].as_array().expect("resources array").iter().any(
+        |resource| resource["name"] == "users"
+            && resource["sample_item_id"] == "1"
+            && resource["mutation_capabilities"]["replace_object"] == false
+    ));
     assert_eq!(payload["edges"][0]["source_table"], "posts");
     assert_eq!(payload["edges"][0]["target_table"], "users");
 }
@@ -148,16 +140,12 @@ fn overview_json_describes_file_mode_and_assets_are_served() {
         payload["source_rule"],
         "Each valid top-level key in the JSON file becomes `/{resource}`."
     );
-    assert!(
-        payload["resources"]
-            .as_array()
-            .expect("resources array")
-            .iter()
-            .any(|resource| resource["name"] == "settings"
-                && resource["kind"] == "object"
-                && resource["mutation_capabilities"]["patch_object"] == true
-                && resource["mutation_capabilities"]["replace_object"] == true)
-    );
+    assert!(payload["resources"].as_array().expect("resources array").iter().any(
+        |resource| resource["name"] == "settings"
+            && resource["kind"] == "object"
+            && resource["mutation_capabilities"]["patch_object"] == true
+            && resource["mutation_capabilities"]["replace_object"] == true
+    ));
 
     let css_response = http_request("GET", &bind_addr, "/assets/overview.css", None);
     assert!(css_response.starts_with("HTTP/1.1 200 OK\r\n"), "{css_response}");

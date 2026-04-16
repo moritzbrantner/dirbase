@@ -28,7 +28,7 @@ use crate::{
         paginate_collection_refs, sort_collection_refs,
     },
     relations::resolve_related_row,
-    schema::{ColumnSchema, ColumnType, TableSchema, primary_key_name},
+    schema::{ColumnSchema, ColumnType, DeclaredTableSchema, TableSchema, primary_key_name},
     storage::{find_item_by_key, load_resource, validate_resource_data},
 };
 
@@ -98,6 +98,14 @@ struct GraphqlPageValue {
     object: JsonMap<String, JsonValue>,
 }
 
+#[derive(Clone, Debug)]
+struct LoadedResourceSchema {
+    resource: String,
+    value: JsonValue,
+    table: Option<TableSchema>,
+    declared_table: Option<DeclaredTableSchema>,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ScalarKind {
     Int,
@@ -117,40 +125,65 @@ pub async fn build_schema(state: &AppState) -> Result<DynamicSchema, String> {
     let mut root_field_registry = BTreeMap::new();
     let mut collection_type_names = BTreeMap::new();
     let mut page_type_names = BTreeMap::new();
+    let mut object_type_names = BTreeMap::new();
+    let mut loaded_resources = Vec::with_capacity(resources.len());
 
     for resource in &resources {
-        let Some(table) = schema.tables.get(resource) else {
-            continue;
-        };
-        if table.columns.is_empty() {
-            continue;
+        let value = load_resource(state, resource).await.map_err(|err| {
+            format!("GraphQL schema build failed for resource '{resource}': {}", err.message)
+        })?;
+        let value = value.as_ref().clone();
+        let table = schema.tables.get(resource).cloned();
+        let declared_table = state.validation_schema_table(resource);
+
+        if matches!(&value, JsonValue::Array(_))
+            && table.as_ref().is_some_and(|table| !table.columns.is_empty())
+        {
+            let type_name = register_graphql_name(
+                &mut type_name_registry,
+                collection_type_name(resource),
+                format!("collection type for resource '{resource}'"),
+                "GraphQL type names",
+            )?;
+            let page_type_name = register_graphql_name(
+                &mut type_name_registry,
+                collection_page_type_name(resource),
+                format!("collection page type for resource '{resource}'"),
+                "GraphQL type names",
+            )?;
+            collection_type_names.insert(resource.clone(), type_name);
+            page_type_names.insert(resource.clone(), page_type_name);
+        } else if let JsonValue::Object(object) = &value
+            && !object.is_empty()
+        {
+            let type_name = register_graphql_name(
+                &mut type_name_registry,
+                object_type_name(resource),
+                format!("object type for resource '{resource}'"),
+                "GraphQL type names",
+            )?;
+            object_type_names.insert(resource.clone(), type_name);
         }
-        let type_name = register_graphql_name(
-            &mut type_name_registry,
-            collection_type_name(resource),
-            format!("collection type for resource '{resource}'"),
-            "GraphQL type names",
-        )?;
-        let page_type_name = register_graphql_name(
-            &mut type_name_registry,
-            collection_page_type_name(resource),
-            format!("collection page type for resource '{resource}'"),
-            "GraphQL type names",
-        )?;
-        collection_type_names.insert(resource.clone(), type_name);
-        page_type_names.insert(resource.clone(), page_type_name);
+
+        loaded_resources.push(LoadedResourceSchema {
+            resource: resource.clone(),
+            value,
+            table,
+            declared_table,
+        });
     }
 
     let mut object_types = Vec::new();
     let mut page_types = Vec::new();
     let mut root_fields = Vec::new();
 
-    for resource in &resources {
-        if let Some(table) = schema.tables.get(resource)
-            && let Some(row_type_name) = collection_type_names.get(resource).cloned()
+    for loaded in &loaded_resources {
+        if let JsonValue::Array(_) = &loaded.value
+            && let Some(table) = loaded.table.as_ref()
+            && let Some(row_type_name) = collection_type_names.get(&loaded.resource).cloned()
         {
             let fields = build_collection_object_fields(
-                resource,
+                &loaded.resource,
                 table,
                 &collection_type_names,
                 &resource_set,
@@ -158,27 +191,27 @@ pub async fn build_schema(state: &AppState) -> Result<DynamicSchema, String> {
             if !fields.is_empty() {
                 let collection_field_name = register_graphql_name(
                     &mut root_field_registry,
-                    normalize_graphql_name(resource),
-                    format!("resource '{resource}'"),
+                    normalize_graphql_name(&loaded.resource),
+                    format!("resource '{}'", loaded.resource),
                     "GraphQL root fields",
                 )?;
                 root_fields.push(RootFieldSpec::Collection {
-                    resource: resource.clone(),
+                    resource: loaded.resource.clone(),
                     graphql_name: collection_field_name,
                     row_type_name: row_type_name.clone(),
                 });
                 let query_field_name = register_graphql_name(
                     &mut root_field_registry,
-                    normalize_graphql_name(&format!("{resource}Query")),
-                    format!("query field for resource '{resource}'"),
+                    normalize_graphql_name(&format!("{}Query", loaded.resource)),
+                    format!("query field for resource '{}'", loaded.resource),
                     "GraphQL root fields",
                 )?;
-                let page_type_name = page_type_names
-                    .get(resource)
-                    .cloned()
-                    .ok_or_else(|| format!("Missing page type for resource '{resource}'"))?;
+                let page_type_name =
+                    page_type_names.get(&loaded.resource).cloned().ok_or_else(|| {
+                        format!("Missing page type for resource '{}'", loaded.resource)
+                    })?;
                 root_fields.push(RootFieldSpec::CollectionQuery {
-                    resource: resource.clone(),
+                    resource: loaded.resource.clone(),
                     graphql_name: query_field_name,
                     page_type_name: page_type_name.clone(),
                 });
@@ -186,12 +219,12 @@ pub async fn build_schema(state: &AppState) -> Result<DynamicSchema, String> {
                 if table.primary_key.is_some() {
                     let by_id_name = register_graphql_name(
                         &mut root_field_registry,
-                        normalize_graphql_name(&format!("{resource}ById")),
-                        format!("single-item field for resource '{resource}'"),
+                        normalize_graphql_name(&format!("{}ById", loaded.resource)),
+                        format!("single-item field for resource '{}'", loaded.resource),
                         "GraphQL root fields",
                     )?;
                     root_fields.push(RootFieldSpec::CollectionById {
-                        resource: resource.clone(),
+                        resource: loaded.resource.clone(),
                         graphql_name: by_id_name,
                         row_type_name: row_type_name.clone(),
                         primary_key: primary_key_name(Some(table)).to_string(),
@@ -199,56 +232,59 @@ pub async fn build_schema(state: &AppState) -> Result<DynamicSchema, String> {
                 }
 
                 object_types.push(ObjectTypeSpec {
-                    source_resource: resource.clone(),
+                    source_resource: loaded.resource.clone(),
                     type_name: row_type_name,
                     fields,
                 });
                 page_types.push(PageTypeSpec {
                     type_name: page_type_name,
-                    row_type_name: collection_type_names.get(resource).cloned().expect("row type"),
+                    row_type_name: collection_type_names
+                        .get(&loaded.resource)
+                        .cloned()
+                        .expect("row type"),
                 });
                 continue;
             }
         }
 
-        let value = load_resource(state, resource).await.map_err(|err| {
-            format!("GraphQL schema build failed for resource '{resource}': {}", err.message)
-        })?;
-
-        match value.as_ref() {
+        match &loaded.value {
             JsonValue::Object(object) if !object.is_empty() => {
-                let type_name = register_graphql_name(
-                    &mut type_name_registry,
-                    object_type_name(resource),
-                    format!("object type for resource '{resource}'"),
-                    "GraphQL type names",
+                let type_name =
+                    object_type_names.get(&loaded.resource).cloned().ok_or_else(|| {
+                        format!("Missing object type for resource '{}'", loaded.resource)
+                    })?;
+                let fields = build_object_resource_fields(
+                    &loaded.resource,
+                    object,
+                    loaded.declared_table.as_ref(),
                 )?;
-                let fields = build_object_resource_fields(resource, object)?;
                 if fields.is_empty() {
                     let graphql_name = register_graphql_name(
                         &mut root_field_registry,
-                        normalize_graphql_name(resource),
-                        format!("resource '{resource}'"),
+                        normalize_graphql_name(&loaded.resource),
+                        format!("resource '{}'", loaded.resource),
                         "GraphQL root fields",
                     )?;
-                    root_fields
-                        .push(RootFieldSpec::Json { resource: resource.clone(), graphql_name });
+                    root_fields.push(RootFieldSpec::Json {
+                        resource: loaded.resource.clone(),
+                        graphql_name,
+                    });
                     continue;
                 }
 
                 let graphql_name = register_graphql_name(
                     &mut root_field_registry,
-                    normalize_graphql_name(resource),
-                    format!("resource '{resource}'"),
+                    normalize_graphql_name(&loaded.resource),
+                    format!("resource '{}'", loaded.resource),
                     "GraphQL root fields",
                 )?;
                 root_fields.push(RootFieldSpec::Object {
-                    resource: resource.clone(),
+                    resource: loaded.resource.clone(),
                     graphql_name,
                     type_name: type_name.clone(),
                 });
                 object_types.push(ObjectTypeSpec {
-                    source_resource: resource.clone(),
+                    source_resource: loaded.resource.clone(),
                     type_name,
                     fields,
                 });
@@ -256,11 +292,12 @@ pub async fn build_schema(state: &AppState) -> Result<DynamicSchema, String> {
             _ => {
                 let graphql_name = register_graphql_name(
                     &mut root_field_registry,
-                    normalize_graphql_name(resource),
-                    format!("resource '{resource}'"),
+                    normalize_graphql_name(&loaded.resource),
+                    format!("resource '{}'", loaded.resource),
                     "GraphQL root fields",
                 )?;
-                root_fields.push(RootFieldSpec::Json { resource: resource.clone(), graphql_name });
+                root_fields
+                    .push(RootFieldSpec::Json { resource: loaded.resource.clone(), graphql_name });
             }
         }
     }
@@ -371,6 +408,7 @@ fn build_collection_object_fields(
 fn build_object_resource_fields(
     resource: &str,
     object: &JsonMap<String, JsonValue>,
+    declared_table: Option<&DeclaredTableSchema>,
 ) -> Result<Vec<ObjectFieldSpec>, String> {
     let mut seen = BTreeMap::new();
     let mut fields = Vec::new();
@@ -385,8 +423,14 @@ fn build_object_resource_fields(
         fields.push(ObjectFieldSpec {
             graphql_name,
             json_key: json_key.clone(),
-            output: ObjectFieldOutput::Scalar(scalar_kind_from_json_value(value)),
-            nullable: true,
+            output: ObjectFieldOutput::Scalar(
+                declared_table
+                    .and_then(|table| table.columns.get(json_key))
+                    .map_or_else(|| scalar_kind_from_json_value(value), scalar_kind_from_column),
+            ),
+            nullable: declared_table
+                .and_then(|table| table.columns.get(json_key))
+                .is_none_or(|column| column.nullable),
         });
     }
 
@@ -680,6 +724,8 @@ fn build_object_root_field(resource: &str, graphql_name: &str, type_name: &str) 
         FieldFuture::new(async move {
             let _guard = state.read_lock_for_resource(&resource).await;
             let data = load_resource(&state, &resource).await.map_err(app_error_to_graphql)?;
+            validate_resource_data(&state, &resource, data.as_ref())
+                .map_err(app_error_to_graphql)?;
             let object = data.as_object().cloned().ok_or_else(|| {
                 GraphqlError::new(format!("Resource '{resource}' is not a JSON object"))
             })?;

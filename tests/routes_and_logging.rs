@@ -113,6 +113,84 @@ fn supports_all_object_resource_routes() {
 }
 
 #[test]
+fn schema_aware_object_resources_validate_get_put_and_patch_routes() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("schema.json"),
+        r#"{
+  "tables": {
+    "profile": {
+      "kind": "object",
+      "columns": {
+        "name": {"column_type": "string", "nullable": false},
+        "age": {"column_type": "integer", "nullable": true}
+      }
+    }
+  }
+}
+"#,
+    )
+    .expect("write schema");
+    fs::write(
+        temp.path().join("profile.json"),
+        r#"{"name":"Ada","age":37,"nickname":"Byte"}
+"#,
+    )
+    .expect("write profile");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg("127.0.0.1:3015")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start folder-server");
+    let _child = ChildGuard { child };
+
+    wait_for_server("127.0.0.1:3015", Duration::from_secs(5));
+
+    let get_profile = http_request("127.0.0.1:3015", "GET", "/profile", None);
+    assert!(get_profile.starts_with("HTTP/1.1 200 OK\r\n"), "{get_profile}");
+    assert!(get_profile.contains("\"name\":\"Ada\""), "{get_profile}");
+
+    let misuse = http_request("127.0.0.1:3015", "GET", "/profile?page=1", None);
+    assert!(misuse.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{misuse}");
+    assert!(
+        misuse.contains(
+            "Filtering, sorting, pagination, and embedding require a JSON array resource"
+        ),
+        "{misuse}"
+    );
+
+    let invalid_put =
+        http_request("127.0.0.1:3015", "PUT", "/profile", Some(r#"{"name":"Grace","age":"old"}"#));
+    assert!(invalid_put.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{invalid_put}");
+    assert!(invalid_put.contains("Resource 'profile' has invalid type for 'age'"), "{invalid_put}");
+
+    let missing_put = http_request("127.0.0.1:3015", "PUT", "/profile", Some(r#"{"age":41}"#));
+    assert!(missing_put.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{missing_put}");
+    assert!(
+        missing_put.contains("Resource 'profile' is missing non-null column 'name'"),
+        "{missing_put}"
+    );
+
+    let invalid_patch =
+        http_request("127.0.0.1:3015", "PATCH", "/profile", Some(r#"{"age":"old"}"#));
+    assert!(invalid_patch.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{invalid_patch}");
+    assert!(
+        invalid_patch.contains("Resource 'profile' has invalid type for 'age'"),
+        "{invalid_patch}"
+    );
+
+    let valid_patch = http_request("127.0.0.1:3015", "PATCH", "/profile", Some(r#"{"age":38}"#));
+    assert!(valid_patch.starts_with("HTTP/1.1 200 OK\r\n"), "{valid_patch}");
+    assert!(valid_patch.contains("\"age\":38"), "{valid_patch}");
+    assert!(valid_patch.contains("\"nickname\":\"Byte\""), "{valid_patch}");
+}
+
+#[test]
 fn graphql_endpoint_serves_graphiql() {
     let temp = tempfile::tempdir().expect("create temp directory");
 
