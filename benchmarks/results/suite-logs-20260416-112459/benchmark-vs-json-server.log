@@ -1,0 +1,16 @@
+command: bash /home/moenarch/moritzbrantner/folder-server/scripts/benchmark_vs_json_server.sh
+cwd: /home/moenarch/moritzbrantner/folder-server
+
+=== stdout ===
+{"status": "cached", "output_dir": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/benchmark-data", "db_path": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/benchmark-data/db.json", "folder_dir": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/benchmark-data/folder", "resource_count": 6, "total_rows": 92252}
+
+
+=== stderr ===
+    Finished `release` profile [optimized] target(s) in 0.08s
+Servers did not become ready in time.
+--- folder-server log ---
+
+thread 'main' (754610) panicked at src/main.rs:118:66:
+binding server listener: Os { code: 98, kind: AddrInUse, message: "Address already in use" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+--- json-server log ---

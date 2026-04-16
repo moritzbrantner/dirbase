@@ -1,0 +1,8 @@
+command: /home/moenarch/miniconda3/bin/python3 /home/moenarch/moritzbrantner/folder-server/scripts/build_pokeapi_json.py --output-dir /home/moenarch/moritzbrantner/folder-server/benchmarks/.work/pokeapi-json
+cwd: /home/moenarch/moritzbrantner/folder-server
+
+=== stdout ===
+{"status": "cached", "output_dir": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/pokeapi-json", "db_path": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/pokeapi-json/db.json", "folder_dir": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/pokeapi-json/folder", "resource_count": 177, "total_rows": 1067154}
+
+
+=== stderr ===

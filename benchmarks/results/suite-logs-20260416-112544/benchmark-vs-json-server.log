@@ -1,0 +1,12 @@
+command: bash /home/moenarch/moritzbrantner/folder-server/scripts/benchmark_vs_json_server.sh
+cwd: /home/moenarch/moritzbrantner/folder-server
+
+=== stdout ===
+{"status": "cached", "output_dir": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/benchmark-data", "db_path": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/benchmark-data/db.json", "folder_dir": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/benchmark-data/folder", "resource_count": 6, "total_rows": 92252}
+/home/moenarch/moritzbrantner/folder-server/benchmarks/results/benchmark-summary-20260416-132545.json
+Summary: /home/moenarch/moritzbrantner/folder-server/benchmarks/results/benchmark-summary-20260416-132545.json
+Report: /home/moenarch/moritzbrantner/folder-server/benchmarks/results/benchmark-report-20260416-132545.md
+
+
+=== stderr ===
+    Finished `release` profile [optimized] target(s) in 0.08s

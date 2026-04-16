@@ -1,0 +1,7 @@
+command: cargo fmt --all --check
+cwd: /home/moenarch/moritzbrantner/folder-server
+
+=== stdout ===
+
+
+=== stderr ===
