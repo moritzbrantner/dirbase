@@ -399,14 +399,13 @@ pub async fn get_collection(
     let data = load_resource(&state, &resource).await?;
     validate_resource_data(&state, &resource, data.as_ref())?;
     if !data.is_array() {
-        if parsed.filters.is_empty()
-            && parsed.sort_columns.is_empty()
-            && parsed.pagination.is_none()
-            && parsed.embeds.is_empty()
-        {
+        if !collection_query_operators_present(&parsed) {
             return Ok(Json(data.as_ref().clone()));
         }
-        return Err(AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"));
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "Filtering, sorting, pagination, and embedding require a JSON array resource",
+        ));
     }
     let items = data
         .as_array()
@@ -617,6 +616,7 @@ pub async fn replace_resource_object(
         ));
     }
     data = payload;
+    validate_resource_data(&state, &resource, &data)?;
     write_resource(&state, &resource, &data).await?;
     Ok(Json(data))
 }
@@ -638,6 +638,7 @@ pub async fn patch_resource_object(
         current.insert(key.clone(), value.clone());
     }
     let updated = Value::Object(current.clone());
+    validate_resource_data(&state, &resource, &data)?;
     write_resource(&state, &resource, &data).await?;
     Ok(Json(updated))
 }
@@ -659,6 +660,15 @@ fn maybe_fill_missing_id(
     };
     item.insert(item_key.to_string(), id_value);
     Ok(())
+}
+
+fn collection_query_operators_present(
+    parsed: &crate::query::filters::ParsedCollectionQuery,
+) -> bool {
+    !parsed.filters.is_empty()
+        || !parsed.sort_columns.is_empty()
+        || parsed.pagination.is_some()
+        || !parsed.embeds.is_empty()
 }
 
 fn embed_lock_resources(

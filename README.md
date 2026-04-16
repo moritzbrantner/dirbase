@@ -71,6 +71,8 @@ you get:
 
 ## Quick start
 
+Local Rust builds embed the overview UI. Install Bun first so `cargo build`, `cargo run`, and `cargo test` can auto-generate `ui/dist/overview.css` and `ui/dist/overview.js`.
+
 ### 1) Create data files
 
 ```bash
@@ -252,12 +254,16 @@ If your editor uses different settings, configure it to run `cargo fmt --all` on
 
 ## Development checks
 
+Prerequisite: Bun must be installed locally because Rust builds invoke `bun run build` to refresh the embedded overview assets automatically.
+
 Before committing or opening a PR, always run linting and tests:
 
 ```bash
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
+
+`cargo build` and `cargo test` both regenerate the overview assets when `ui/src/` or the UI build configuration changes. No separate `cd ui && bun run build` step is required.
 ```
 
 ## Benchmarking against typicode/json-server

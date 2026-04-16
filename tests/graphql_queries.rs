@@ -279,6 +279,67 @@ fn graphql_types_top_level_object_resources() {
 }
 
 #[test]
+fn graphql_treats_schema_aware_object_resources_as_objects() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("schema.json"),
+        r#"{
+  "tables": {
+    "profile": {
+      "kind": "object",
+      "columns": {
+        "name": {"column_type": "string", "nullable": false},
+        "age": {"column_type": "integer", "nullable": true}
+      }
+    }
+  }
+}
+"#,
+    )
+    .expect("write schema");
+    fs::write(
+        temp.path().join("profile.json"),
+        r#"{
+  "name": "Ada",
+  "age": 37,
+  "nickname": "Byte",
+  "settings": {"compact": true}
+}
+"#,
+    )
+    .expect("write profile");
+
+    let bind_addr = "127.0.0.1:3041".to_string();
+    let child = spawn_server(temp.path(), &bind_addr, false);
+    let _child = ChildGuard { child };
+    wait_for_server(&bind_addr, Duration::from_secs(5));
+
+    let payload = graphql_json(
+        &bind_addr,
+        r#"{ profile { name age nickname settings } __schema { queryType { fields { name } } } __type(name: "ProfileObject") { fields { name type { kind name ofType { kind name } } } } }"#,
+    );
+    assert_eq!(payload["data"]["profile"]["name"], "Ada");
+    assert_eq!(payload["data"]["profile"]["age"], 37);
+    assert_eq!(payload["data"]["profile"]["nickname"], "Byte");
+    assert_eq!(payload["data"]["profile"]["settings"]["compact"], true);
+
+    let query_fields =
+        payload["data"]["__schema"]["queryType"]["fields"].as_array().expect("query fields");
+    assert!(query_fields.iter().any(|field| field["name"] == "profile"));
+    assert!(!query_fields.iter().any(|field| field["name"] == "profileQuery"));
+    assert!(!query_fields.iter().any(|field| field["name"] == "profileById"));
+
+    let type_fields = payload["data"]["__type"]["fields"].as_array().expect("type fields");
+    let name_field = type_fields.iter().find(|field| field["name"] == "name").expect("name field");
+    assert_eq!(name_field["type"]["kind"], "NON_NULL");
+    assert_eq!(name_field["type"]["ofType"]["name"], "String");
+
+    let age_field = type_fields.iter().find(|field| field["name"] == "age").expect("age field");
+    assert_eq!(age_field["type"]["kind"], "SCALAR");
+    assert_eq!(age_field["type"]["name"], "Int");
+}
+
+#[test]
 fn graphql_sanitizes_resource_and_field_names() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(

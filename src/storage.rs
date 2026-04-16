@@ -17,8 +17,8 @@ use crate::{
     app::{AppState, CachedResource, DataSource},
     error::AppError,
     schema::{
-        ColumnType, TableSchema, infer_schema_from_data_source, is_valid_identifier,
-        primary_key_name,
+        ColumnType, DeclaredTableSchema, TableSchema, infer_schema_from_data_source,
+        is_valid_identifier, primary_key_name,
     },
 };
 
@@ -287,10 +287,25 @@ pub fn validate_resource_data(
     let Some(table) = state.validation_schema_table(resource) else {
         return Ok(());
     };
-    let array = data
-        .as_array()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
+    match data {
+        Value::Array(array) => validate_array_resource_data(resource, array, &table),
+        Value::Object(object) => validate_object_resource_data(resource, object, &table),
+        _ if declared_schema_expects_object(&table) => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Resource '{resource}' is not a JSON object"),
+        )),
+        _ => Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Resource '{resource}' is not a JSON array"),
+        )),
+    }
+}
 
+pub fn validate_array_resource_data(
+    resource: &str,
+    array: &[Value],
+    table: &DeclaredTableSchema,
+) -> Result<(), AppError> {
     for (index, item) in array.iter().enumerate() {
         let object = item.as_object().ok_or_else(|| {
             AppError::new(
@@ -298,37 +313,69 @@ pub fn validate_resource_data(
                 format!("Row {index} in resource '{resource}' is not an object"),
             )
         })?;
-        for (column_name, column) in &table.columns {
-            match object.get(column_name) {
-                Some(Value::Null) if !column.nullable => {
-                    return Err(AppError::new(
-                        StatusCode::BAD_REQUEST,
-                        format!(
-                            "Row {index} in resource '{resource}' has null for non-null column '{column_name}'"
-                        ),
-                    ));
-                }
-                Some(value) if !value_matches_type(value, &column.column_type) => {
-                    return Err(AppError::new(
-                        StatusCode::BAD_REQUEST,
-                        format!(
-                            "Row {index} in resource '{resource}' has invalid type for '{column_name}'"
-                        ),
-                    ));
-                }
-                None if !column.nullable => {
-                    return Err(AppError::new(
-                        StatusCode::BAD_REQUEST,
-                        format!(
-                            "Row {index} in resource '{resource}' is missing non-null column '{column_name}'"
-                        ),
-                    ));
-                }
-                _ => {}
+        validate_declared_columns(
+            table,
+            |column_name| object.get(column_name),
+            |column_name| {
+                format!(
+                    "Row {index} in resource '{resource}' is missing non-null column '{column_name}'"
+                )
+            },
+            |column_name| {
+                format!(
+                    "Row {index} in resource '{resource}' has null for non-null column '{column_name}'"
+                )
+            },
+            |column_name| {
+                format!("Row {index} in resource '{resource}' has invalid type for '{column_name}'")
+            },
+        )?;
+    }
+
+    Ok(())
+}
+
+pub fn validate_object_resource_data(
+    resource: &str,
+    object: &serde_json::Map<String, Value>,
+    table: &DeclaredTableSchema,
+) -> Result<(), AppError> {
+    validate_declared_columns(
+        table,
+        |column_name| object.get(column_name),
+        |column_name| format!("Resource '{resource}' is missing non-null column '{column_name}'"),
+        |column_name| format!("Resource '{resource}' has null for non-null column '{column_name}'"),
+        |column_name| format!("Resource '{resource}' has invalid type for '{column_name}'"),
+    )
+}
+
+fn validate_declared_columns<'a>(
+    table: &DeclaredTableSchema,
+    lookup: impl Fn(&str) -> Option<&'a Value>,
+    missing_message: impl Fn(&str) -> String,
+    null_message: impl Fn(&str) -> String,
+    type_message: impl Fn(&str) -> String,
+) -> Result<(), AppError> {
+    for (column_name, column) in &table.columns {
+        match lookup(column_name) {
+            Some(Value::Null) if !column.nullable => {
+                return Err(AppError::new(StatusCode::BAD_REQUEST, null_message(column_name)));
             }
+            Some(value) if !value_matches_type(value, &column.column_type) => {
+                return Err(AppError::new(StatusCode::BAD_REQUEST, type_message(column_name)));
+            }
+            None if !column.nullable => {
+                return Err(AppError::new(StatusCode::BAD_REQUEST, missing_message(column_name)));
+            }
+            _ => {}
         }
     }
+
     Ok(())
+}
+
+fn declared_schema_expects_object(table: &DeclaredTableSchema) -> bool {
+    matches!(table.kind, Some(crate::schema::TableKind::Object))
 }
 
 fn value_matches_type(value: &Value, column_type: &ColumnType) -> bool {
