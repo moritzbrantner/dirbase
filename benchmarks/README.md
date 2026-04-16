@@ -7,7 +7,7 @@ This benchmark compares request throughput and latency between:
 
 ## What is measured
 
-The benchmark uses a deterministic synthetic workload instead of the old single-collection `posts` fixture or the removed PokeAPI import. It generates six resources:
+The benchmark uses a deterministic synthetic workload across six resources:
 
 - `organizations`
 - `teams`
