@@ -1,0 +1,83 @@
+command: cargo test -- --list
+cwd: /home/moenarch/moritzbrantner/folder-server
+
+=== stdout ===
+query::filters::tests::ignores_unknown_underscore_suffix_as_plain_field: test
+query::filters::tests::matches_where_like_operators: test
+query::filters::tests::paginates_like_json_server_boundaries: test
+query::filters::tests::parses_where_like_json_server_cases: test
+schema::tests::parses_dbml_schema: test
+schema::tests::parses_inline_and_top_level_refs: test
+schema::tests::rejects_invalid_identifiers: test
+sql::tests::parses_select_projection: test
+storage::tests::write_resource_survives_interrupted_temp_file_and_keeps_output_intact: test
+
+9 tests, 0 benchmarks
+prints_help_when_no_arguments_are_provided: test
+
+1 test, 0 benchmarks
+school_examples_support_students_crud_end_to_end: test
+
+1 test, 0 benchmarks
+empty_folder_returns_empty_overview_on_root: test
+
+1 test, 0 benchmarks
+html_overview_explains_top_level_keys_in_file_mode: test
+serves_json_server_style_single_file_input: test
+
+2 tests, 0 benchmarks
+collection_clamps_pagination_page_to_last_page: test
+collection_rejects_invalid_filter_operator_and_invalid_pagination_values: test
+collection_supports_filtering_with_multiple_query_parameters: test
+collection_supports_operator_filters_nested_fields_desc_sort_and_pagination_keywords: test
+collection_supports_sorting_by_multiple_columns: test
+
+5 tests, 0 benchmarks
+query_parameters_return_clear_400_errors_for_invalid_values: test
+query_parameters_support_embed_for_foreign_keys: test
+query_parameters_support_pagination_defaults_when_page_or_size_is_missing: test
+query_parameters_support_unprefixed_pagination_aliases: test
+retrieval_returns_400_for_invalid_resource_name: test
+retrieval_supports_string_ids_and_returns_404_for_missing_item: test
+
+6 tests, 0 benchmarks
+root_serves_html_overview_for_browser_requests: test
+
+1 test, 0 benchmarks
+graphql_endpoint_is_not_available: test
+logging_writes_each_request_when_enabled: test
+readonly_mode_rejects_post_for_sql: test
+supports_all_array_resource_routes: test
+supports_all_object_resource_routes: test
+
+5 tests, 0 benchmarks
+export_sql_is_stable_and_escapes_and_handles_nulls_without_schema: test
+export_sql_respects_schema_when_present: test
+readonly_mode_allows_sql_and_export_and_rejects_post_sql: test
+sql_error_paths_cover_non_select_unsupported_and_unknowns: test
+sql_happy_paths_cover_select_projection_and_pagination: test
+
+5 tests, 0 benchmarks
+sql_enforces_limit_guards: test
+sql_get_works_in_readonly_mode: test
+sql_post_rejects_non_select_and_unsupported_constructs: test
+sql_rejects_ambiguous_null_and_invalid_identifiers: test
+sql_returns_structured_codes_for_invalid_and_unknown_table: test
+sql_supports_is_null_and_projection_and_coercion: test
+
+6 tests, 0 benchmarks
+
+
+=== stderr ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/main.rs (target/debug/deps/folder_server-7de891ea59c3a900)
+     Running tests/cli_help.rs (target/debug/deps/cli_help-7aca9e262ece0ce1)
+     Running tests/crud_operations.rs (target/debug/deps/crud_operations-d20a472408908d5c)
+     Running tests/empty_folder_overview.rs (target/debug/deps/empty_folder_overview-ac666553ab2bbded)
+     Running tests/file_input_mode.rs (target/debug/deps/file_input_mode-acf0ace65decf8a9)
+     Running tests/filter_collection_query.rs (target/debug/deps/filter_collection_query-a8ee4711702d8dbc)
+     Running tests/retrieval_and_query_params.rs (target/debug/deps/retrieval_and_query_params-0e6f7945e3047b51)
+     Running tests/root_html_overview.rs (target/debug/deps/root_html_overview-0ccea8d90f774f06)
+     Running tests/routes_and_logging.rs (target/debug/deps/routes_and_logging-0be91c3a064d1782)
+     Running tests/sql_and_export_endpoints.rs (target/debug/deps/sql_and_export_endpoints-fd17edaff6cad7e4)
+     Running tests/sql_query.rs (target/debug/deps/sql_query-e84e7cccc6f3943c)

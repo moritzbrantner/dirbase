@@ -1,0 +1,8 @@
+command: /home/moenarch/miniconda3/bin/python3 /home/moenarch/moritzbrantner/folder-server/scripts/build_benchmark_data.py --output-dir /home/moenarch/moritzbrantner/folder-server/benchmarks/.work/benchmark-data
+cwd: /home/moenarch/moritzbrantner/folder-server
+
+=== stdout ===
+{"status": "cached", "output_dir": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/benchmark-data", "db_path": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/benchmark-data/db.json", "folder_dir": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/benchmark-data/folder", "resource_count": 6, "total_rows": 92252}
+
+
+=== stderr ===

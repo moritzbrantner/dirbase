@@ -1,0 +1,12 @@
+command: bash /home/moenarch/moritzbrantner/folder-server/scripts/benchmark_pokeapi.sh
+cwd: /home/moenarch/moritzbrantner/folder-server
+
+=== stdout ===
+{"status": "cached", "output_dir": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/pokeapi-json", "db_path": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/pokeapi-json/db.json", "folder_dir": "/home/moenarch/moritzbrantner/folder-server/benchmarks/.work/pokeapi-json/folder", "resource_count": 177, "total_rows": 1067154}
+/home/moenarch/moritzbrantner/folder-server/benchmarks/results/pokeapi-summary-20260318-092447.json
+Summary: /home/moenarch/moritzbrantner/folder-server/benchmarks/results/pokeapi-summary-20260318-092447.json
+Report: /home/moenarch/moritzbrantner/folder-server/benchmarks/results/pokeapi-report-20260318-092447.md
+
+
+=== stderr ===
+    Finished `release` profile [optimized] target(s) in 0.07s

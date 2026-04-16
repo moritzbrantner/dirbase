@@ -1,0 +1,116 @@
+command: cargo test
+cwd: /home/moenarch/moritzbrantner/folder-server
+
+=== stdout ===
+
+running 9 tests
+test query::filters::tests::parses_where_like_json_server_cases ... ok
+test query::filters::tests::ignores_unknown_underscore_suffix_as_plain_field ... ok
+test schema::tests::rejects_invalid_identifiers ... ok
+test schema::tests::parses_dbml_schema ... ok
+test schema::tests::parses_inline_and_top_level_refs ... ok
+test query::filters::tests::paginates_like_json_server_boundaries ... ok
+test query::filters::tests::matches_where_like_operators ... ok
+test storage::tests::write_resource_survives_interrupted_temp_file_and_keeps_output_intact ... ok
+test sql::tests::parses_select_projection ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 1 test
+test prints_help_when_no_arguments_are_provided ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 1 test
+test school_examples_support_students_crud_end_to_end ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+
+running 1 test
+test empty_folder_returns_empty_overview_on_root ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+
+running 2 tests
+test html_overview_explains_top_level_keys_in_file_mode ... ok
+test serves_json_server_style_single_file_input ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+
+running 5 tests
+test collection_supports_operator_filters_nested_fields_desc_sort_and_pagination_keywords ... ok
+test collection_supports_sorting_by_multiple_columns ... ok
+test collection_rejects_invalid_filter_operator_and_invalid_pagination_values ... ok
+test collection_clamps_pagination_page_to_last_page ... ok
+test collection_supports_filtering_with_multiple_query_parameters ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+
+running 6 tests
+test retrieval_returns_400_for_invalid_resource_name ... ok
+test query_parameters_support_pagination_defaults_when_page_or_size_is_missing ... ok
+test query_parameters_support_unprefixed_pagination_aliases ... ok
+test retrieval_supports_string_ids_and_returns_404_for_missing_item ... ok
+test query_parameters_return_clear_400_errors_for_invalid_values ... ok
+test query_parameters_support_embed_for_foreign_keys ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+
+running 1 test
+test root_serves_html_overview_for_browser_requests ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+
+running 5 tests
+test graphql_endpoint_is_not_available ... ok
+test readonly_mode_rejects_post_for_sql ... ok
+test supports_all_object_resource_routes ... ok
+test supports_all_array_resource_routes ... ok
+test logging_writes_each_request_when_enabled ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+
+running 5 tests
+test export_sql_respects_schema_when_present ... ok
+test export_sql_is_stable_and_escapes_and_handles_nulls_without_schema ... ok
+test readonly_mode_allows_sql_and_export_and_rejects_post_sql ... ok
+test sql_happy_paths_cover_select_projection_and_pagination ... ok
+test sql_error_paths_cover_non_select_unsupported_and_unknowns ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 6 tests
+test sql_rejects_ambiguous_null_and_invalid_identifiers ... ok
+test sql_returns_structured_codes_for_invalid_and_unknown_table ... ok
+test sql_get_works_in_readonly_mode ... ok
+test sql_supports_is_null_and_projection_and_coercion ... ok
+test sql_post_rejects_non_select_and_unsupported_constructs ... ok
+test sql_enforces_limit_guards ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+
+=== stderr ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/main.rs (target/debug/deps/folder_server-7de891ea59c3a900)
+     Running tests/cli_help.rs (target/debug/deps/cli_help-7aca9e262ece0ce1)
+     Running tests/crud_operations.rs (target/debug/deps/crud_operations-d20a472408908d5c)
+     Running tests/empty_folder_overview.rs (target/debug/deps/empty_folder_overview-ac666553ab2bbded)
+     Running tests/file_input_mode.rs (target/debug/deps/file_input_mode-acf0ace65decf8a9)
+     Running tests/filter_collection_query.rs (target/debug/deps/filter_collection_query-a8ee4711702d8dbc)
+     Running tests/retrieval_and_query_params.rs (target/debug/deps/retrieval_and_query_params-0e6f7945e3047b51)
+     Running tests/root_html_overview.rs (target/debug/deps/root_html_overview-0ccea8d90f774f06)
+     Running tests/routes_and_logging.rs (target/debug/deps/routes_and_logging-0be91c3a064d1782)
+     Running tests/sql_and_export_endpoints.rs (target/debug/deps/sql_and_export_endpoints-fd17edaff6cad7e4)
+     Running tests/sql_query.rs (target/debug/deps/sql_query-e84e7cccc6f3943c)
