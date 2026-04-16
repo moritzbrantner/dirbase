@@ -15,9 +15,9 @@ await Promise.all([
     bundle: true,
     platform: 'node',
     format: 'esm',
-    target: 'node20',
+    target: 'es2022',
     banner: {
-      js: '#!/usr/bin/env node'
+      js: '#!/usr/bin/env bun'
     }
   })
 ]);

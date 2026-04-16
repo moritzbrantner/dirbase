@@ -16,6 +16,7 @@ export type FilterOperator =
 
 export interface OverviewPageData {
   schema_enabled: boolean;
+  server_capabilities: ServerCapabilities;
   data_source_kind: 'folder' | 'file';
   source_label: string;
   source_rule: string;
@@ -31,6 +32,13 @@ export interface OverviewStats {
   total_rows: number;
 }
 
+export interface ServerCapabilities {
+  readonly: boolean;
+  resource_write: boolean;
+  schema_write: boolean;
+  schema_infer: boolean;
+}
+
 export interface ResourceOverview {
   name: string;
   kind: ResourceKind;
@@ -44,6 +52,7 @@ export interface ResourceOverview {
   incoming_relations: OverviewRelation[];
   sample_item_id: string | null;
   query_capabilities: QueryCapabilities;
+  mutation_capabilities: MutationCapabilities;
 }
 
 export interface OverviewColumn {
@@ -75,6 +84,14 @@ export interface QueryCapabilities {
   pagination: boolean;
   embed: boolean;
   item_route: boolean;
+}
+
+export interface MutationCapabilities {
+  create_item: boolean;
+  update_item: boolean;
+  delete_item: boolean;
+  replace_object: boolean;
+  patch_object: boolean;
 }
 
 export interface FilterDescriptor {
@@ -142,4 +159,48 @@ export interface SchemaTable {
 export interface SchemaResponse {
   tables?: Record<string, SchemaTable>;
   [key: string]: unknown;
+}
+
+export type InspectorTab = 'request' | 'selection' | 'schema';
+
+export type LiveUpdateStatus = 'connecting' | 'live' | 'reconnecting' | 'paused';
+
+export type MobileSurface = 'explorer' | 'resources' | 'map' | 'inspector';
+
+export type MutationMode = 'create' | 'edit' | 'delete' | 'editObject';
+
+export interface MutationDialogState {
+  open: boolean;
+  mode: MutationMode | null;
+}
+
+export interface OverviewUiState {
+  selectedResource: string | null;
+  selectedRow: Record<string, unknown> | null;
+  inspectorTab: InspectorTab;
+  liveUpdates: LiveUpdateStatus;
+  mutationDialog: MutationDialogState;
+  readonly: boolean;
+}
+
+export interface OverviewPreferences {
+  columnVisibility: Record<string, Record<string, boolean>>;
+  lastInspectorTab: InspectorTab;
+  mobileSurface: MobileSurface;
+}
+
+export interface QuerySummaryChip {
+  id: string;
+  label: string;
+  value: string;
+  kind: 'filter' | 'sort' | 'embed';
+  removeLabel: string;
+}
+
+export interface MutationPlan {
+  method: 'POST' | 'PATCH' | 'PUT' | 'DELETE';
+  path: string;
+  body: string | null;
+  changedKeys: string[];
+  requiresConfirmation: boolean;
 }

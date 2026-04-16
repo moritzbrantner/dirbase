@@ -27,6 +27,7 @@ const OVERVIEW_JS: &str = include_str!("../../ui/dist/overview.js");
 #[derive(Clone, Debug, Serialize)]
 pub struct OverviewPageData {
     pub schema_enabled: bool,
+    pub server_capabilities: ServerCapabilities,
     pub data_source_kind: &'static str,
     pub source_label: String,
     pub source_rule: String,
@@ -34,6 +35,14 @@ pub struct OverviewPageData {
     pub stats: OverviewStats,
     pub resources: Vec<ResourceOverview>,
     pub edges: Vec<OverviewEdge>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ServerCapabilities {
+    pub readonly: bool,
+    pub resource_write: bool,
+    pub schema_write: bool,
+    pub schema_infer: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -57,6 +66,7 @@ pub struct ResourceOverview {
     pub incoming_relations: Vec<OverviewRelation>,
     pub sample_item_id: Option<String>,
     pub query_capabilities: QueryCapabilities,
+    pub mutation_capabilities: MutationCapabilities,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -92,6 +102,15 @@ pub struct QueryCapabilities {
     pub pagination: bool,
     pub embed: bool,
     pub item_route: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MutationCapabilities {
+    pub create_item: bool,
+    pub update_item: bool,
+    pub delete_item: bool,
+    pub replace_object: bool,
+    pub patch_object: bool,
 }
 
 pub fn request_prefers_html(headers: &HeaderMap) -> bool {
@@ -209,11 +228,18 @@ async fn build_overview_page_data(
             incoming_relations: incoming_relations.remove(resource).unwrap_or_default(),
             sample_item_id: summary.sample_item_id,
             query_capabilities: summary.query_capabilities,
+            mutation_capabilities: summary.mutation_capabilities,
         });
     }
 
     Ok(OverviewPageData {
         schema_enabled: !schema.tables.is_empty(),
+        server_capabilities: ServerCapabilities {
+            readonly: state.config.readonly,
+            resource_write: !state.config.readonly,
+            schema_write: !state.config.readonly,
+            schema_infer: !state.config.readonly,
+        },
         data_source_kind,
         source_label,
         source_rule,
@@ -238,6 +264,7 @@ struct ResourceSummary {
     columns: Vec<OverviewColumn>,
     sample_item_id: Option<String>,
     query_capabilities: QueryCapabilities,
+    mutation_capabilities: MutationCapabilities,
 }
 
 fn summarize_resource_value(value: &Value, table: Option<&TableSchema>) -> ResourceSummary {
@@ -294,6 +321,13 @@ fn summarize_resource_value(value: &Value, table: Option<&TableSchema>) -> Resou
                     embed: table.is_some_and(|schema| !schema.foreign_keys.is_empty()),
                     item_route: sample_item_id.is_some(),
                 },
+                mutation_capabilities: MutationCapabilities {
+                    create_item: true,
+                    update_item: sample_item_id.is_some(),
+                    delete_item: sample_item_id.is_some(),
+                    replace_object: false,
+                    patch_object: false,
+                },
             }
         }
         Value::Object(object) => ResourceSummary {
@@ -312,6 +346,13 @@ fn summarize_resource_value(value: &Value, table: Option<&TableSchema>) -> Resou
                 embed: false,
                 item_route: false,
             },
+            mutation_capabilities: MutationCapabilities {
+                create_item: false,
+                update_item: false,
+                delete_item: false,
+                replace_object: true,
+                patch_object: true,
+            },
         },
         _ => ResourceSummary {
             kind: "value",
@@ -328,6 +369,13 @@ fn summarize_resource_value(value: &Value, table: Option<&TableSchema>) -> Resou
                 pagination: false,
                 embed: false,
                 item_route: false,
+            },
+            mutation_capabilities: MutationCapabilities {
+                create_item: false,
+                update_item: false,
+                delete_item: false,
+                replace_object: false,
+                patch_object: false,
             },
         },
     }

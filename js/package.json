@@ -1,8 +1,9 @@
 {
   "name": "folder-server",
   "version": "0.1.0",
-  "description": "npm wrapper around the folder-server Rust binary",
+  "description": "JavaScript wrapper around the folder-server Rust binary",
   "type": "module",
+  "packageManager": "bun@1.3.12",
   "bin": {
     "folder-server": "dist/cli.js"
   },
@@ -15,12 +16,12 @@
     "bin"
   ],
   "scripts": {
-    "clean": "node scripts/clean-package-output.mjs",
-    "build:js": "node esbuild.config.mjs",
+    "clean": "bun scripts/clean-package-output.mjs",
+    "build:js": "bun esbuild.config.mjs",
     "build:rust": "cargo build --release --manifest-path ../Cargo.toml",
-    "copy:binary": "node scripts/copy-rust-binary.mjs",
-    "build": "npm run clean && npm run build:js && npm run build:rust && npm run copy:binary",
-    "prepack": "npm run build"
+    "copy:binary": "bun scripts/copy-rust-binary.mjs",
+    "build": "bun run clean && bun run build:js && bun run build:rust && bun run copy:binary",
+    "prepack": "bun run build"
   },
   "keywords": [
     "rust",

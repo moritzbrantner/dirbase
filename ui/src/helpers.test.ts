@@ -19,6 +19,13 @@ const tableResource: ResourceOverview = {
     pagination: true,
     embed: false,
     item_route: true
+  },
+  mutation_capabilities: {
+    create_item: true,
+    update_item: true,
+    delete_item: true,
+    replace_object: false,
+    patch_object: false
   }
 };
 
@@ -36,6 +43,13 @@ const objectResource: ResourceOverview = {
     pagination: false,
     embed: false,
     item_route: false
+  },
+  mutation_capabilities: {
+    create_item: false,
+    update_item: false,
+    delete_item: false,
+    replace_object: true,
+    patch_object: true
   }
 };
 

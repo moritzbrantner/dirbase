@@ -191,38 +191,38 @@ With either format:
 - `GET /users/1` resolves against `user_id` when that is the declared primary key
 - `POST /schema` exports a complete `schema.json` snapshot with inferred columns plus declared PK/FK overrides
 
-## npm package pipeline (Rust + esbuild)
+## Bun package pipeline (Rust + esbuild)
 
-This repository now contains a Node package wrapper in [`js/`](./js) that bundles a tiny CLI launcher with **esbuild** and ships the compiled Rust binary.
+This repository now contains a Bun-powered package wrapper in [`js/`](./js) that bundles a tiny CLI launcher with **esbuild** and ships the compiled Rust binary.
 
-### Build the npm package locally
+### Build the package locally
 
 ```bash
 cd js
-npm install
-npm run build
-npm pack
+bun install
+bun run build
+bun pm pack
 ```
 
-`npm run build` performs three steps:
+`bun run build` performs three steps:
 
 1. bundle `src/index.ts` and `src/cli.ts` using esbuild,
 2. compile Rust in release mode,
-3. copy the resulting `folder-server` binary into `js/bin/` so the npm package can execute it.
+3. copy the resulting `folder-server` binary into `js/bin/` so the package can execute it.
 
 ### Publish pipeline
 
-A GitHub Actions workflow is provided at `.github/workflows/rust-to-npm.yml`.
+A GitHub Actions workflow is provided at `.github/workflows/rust-to-bun.yml`.
 
-- Trigger: pushing tags matching `npm-v*` (or manual `workflow_dispatch`).
-- Toolchain: Rust stable + Node 20.
-- Steps: build native binaries on Linux, macOS, and Windows, bundle the JS launcher, then publish one npm package containing all prebuilt binaries.
+- Trigger: pushing tags matching `bun-v*` (or manual `workflow_dispatch`).
+- Toolchain: Rust stable + Bun 1.3.12.
+- Steps: build native binaries on Linux, macOS, and Windows, bundle the JS launcher, then publish one package containing all prebuilt binaries with Bun.
 - Secret required: `NPM_TOKEN`.
 
 Once published, users can run:
 
 ```bash
-npx folder-server ./data --bind 127.0.0.1:4444
+bunx --bun folder-server ./data --bind 127.0.0.1:4444
 ```
 
 ## Notes

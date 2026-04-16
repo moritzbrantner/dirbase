@@ -68,7 +68,7 @@ Raw `autocannon` JSON and aggregated reports are written to:
 
 ## Notes
 
-- `json-server` and `autocannon` are executed via `npx`.
+- `json-server` and `autocannon` are executed via `bunx --bun`.
 - The script starts both servers locally and cleans up processes automatically.
 - The benchmark runs each scenario repeatedly (`RUNS`, default `3`) in two modes: with warm-up and without warm-up.
 - Aggregated metrics include mean/median/min/max; prefer median values for stable comparisons.

@@ -162,7 +162,7 @@ popd >/dev/null
   >"${WORK_DIR}/folder-server.log" 2>&1 &
 FOLDER_PID=$!
 
-npx --yes "json-server@${JSON_SERVER_VERSION}" \
+bunx --bun "json-server@${JSON_SERVER_VERSION}" \
   --host 127.0.0.1 \
   --port "${JSON_SERVER_PORT}" \
   --quiet \
@@ -198,7 +198,7 @@ run_autocannon() {
   local target="$3"
   local url="$4"
   local out="${RESULTS_DIR}/${target}-${mode}-run${run}-${STAMP}.json"
-  local -a cmd=(npx --yes autocannon@7.15.0 -n -c "${CONNECTIONS}" -d "${DURATION}" -j)
+  local -a cmd=(bunx --bun autocannon@7.15.0 -n -c "${CONNECTIONS}" -d "${DURATION}" -j)
 
   if [[ "${mode}" == "with-warmup" ]]; then
     cmd+=(-W --warmup "[" -c "${WARMUP_CONNECTIONS}" -d "${WARMUP_DURATION}" "]")

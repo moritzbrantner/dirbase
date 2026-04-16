@@ -42,6 +42,13 @@ const postsResource: ResourceOverview = {
     pagination: true,
     embed: true,
     item_route: true
+  },
+  mutation_capabilities: {
+    create_item: true,
+    update_item: true,
+    delete_item: true,
+    replace_object: false,
+    patch_object: false
   }
 };
 
