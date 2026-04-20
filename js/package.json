@@ -1,11 +1,11 @@
 {
-  "name": "folder-server",
+  "name": "dirbase",
   "version": "0.1.0",
-  "description": "JavaScript wrapper around the folder-server Rust binary",
+  "description": "JavaScript wrapper around the dirbase Rust binary",
   "type": "module",
   "packageManager": "bun@1.3.12",
   "bin": {
-    "folder-server": "dist/cli.js"
+    "dirbase": "dist/cli.js"
   },
   "main": "dist/index.js",
   "exports": {
@@ -21,6 +21,7 @@
     "build:rust": "cargo build --release --manifest-path ../Cargo.toml",
     "copy:binary": "bun scripts/copy-rust-binary.mjs",
     "build": "bun run clean && bun run build:js && bun run build:rust && bun run copy:binary",
+    "test": "bun test",
     "prepack": "bun run build"
   },
   "keywords": [

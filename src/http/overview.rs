@@ -453,11 +453,11 @@ fn render_overview_html(page: &OverviewPageData) -> String {
     html.push_str(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
     );
-    html.push_str("<title>folder-server overview</title>");
+    html.push_str("<title>dirbase overview</title>");
     html.push_str("<link rel=\"stylesheet\" href=\"/assets/overview.css\">");
     html.push_str("</head><body><main class=\"overview-page\">");
     html.push_str("<section class=\"overview-hero shell-card\">");
-    html.push_str("<p class=\"overview-eyebrow\">folder-server</p>");
+    html.push_str("<p class=\"overview-eyebrow\">dirbase</p>");
     html.push_str("<h1>Visual overview of your data</h1>");
     html.push_str("<p class=\"overview-lede\">Use this page as both a route guide and a data explorer. The interactive UI below speaks the same REST query language as the server, so filtering, sorting, paging, and relation drill-down always resolve to copyable request URLs.</p>");
     let _ = write!(
@@ -474,7 +474,7 @@ fn render_overview_html(page: &OverviewPageData) -> String {
     html.push_str("<section class=\"overview-guide-grid\">");
     html.push_str("<article class=\"overview-guide shell-card\">");
     html.push_str("<p class=\"section-title\">Rules of paths</p>");
-    html.push_str("<h2>How folder-server derives routes</h2>");
+    html.push_str("<h2>How dirbase derives routes</h2>");
     let _ = write!(
         html,
         "<p class=\"overview-copy\">{}</p><code class=\"overview-inline-code overview-source-line\">{}</code><p class=\"overview-copy\">{}</p>",

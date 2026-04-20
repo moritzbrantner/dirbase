@@ -1,21 +1,6 @@
-use std::{
-    io::{Read, Write},
-    net::TcpStream,
-    process::{Child, Command, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
+mod support;
 
-struct ChildGuard {
-    child: Child,
-}
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
+use support::{ChildGuard, http_get, http_post_json, parse_http_body};
 
 #[test]
 fn sql_happy_paths_cover_select_projection_and_pagination() {
@@ -32,10 +17,10 @@ fn sql_happy_paths_cover_select_projection_and_pagination() {
     )
     .expect("write users");
 
-    let _child = start_server(temp.path(), 3020, false);
+    let (_child, bind_addr) = start_server(temp.path(), false);
 
     let select_all = http_get(
-        "127.0.0.1:3020",
+        &bind_addr,
         "/sql?q=SELECT%20*%20FROM%20users%20ORDER%20BY%20id%20ASC%20LIMIT%204",
     );
     assert!(select_all.starts_with("HTTP/1.1 200 OK\r\n"), "{select_all}");
@@ -46,7 +31,7 @@ fn sql_happy_paths_cover_select_projection_and_pagination() {
     assert_eq!(all_payload["rows"][3]["name"], "Drew");
 
     let projected = http_get(
-        "127.0.0.1:3020",
+        &bind_addr,
         "/sql?q=SELECT%20id,name%20FROM%20users%20WHERE%20role%20=%20'admin'%20ORDER%20BY%20id%20DESC%20LIMIT%202%20OFFSET%202",
     );
     assert!(projected.starts_with("HTTP/1.1 200 OK\r\n"), "{projected}");
@@ -72,30 +57,29 @@ fn sql_error_paths_cover_non_select_unsupported_and_unknowns() {
     )
     .expect("write schema");
 
-    let _child = start_server(temp.path(), 3021, false);
+    let (_child, bind_addr) = start_server(temp.path(), false);
 
     let non_select =
-        http_post_json("127.0.0.1:3021", "/sql", serde_json::json!({"query": "DELETE FROM users"}));
+        http_post_json(&bind_addr, "/sql", serde_json::json!({"query": "DELETE FROM users"}));
     assert!(non_select.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{non_select}");
     let non_select_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&non_select)).expect("non-select payload");
     assert_eq!(non_select_payload["code"], "unsupported_feature");
 
     let unsupported =
-        http_get("127.0.0.1:3021", "/sql?q=SELECT%20DISTINCT%20name%20FROM%20users%20LIMIT%201");
+        http_get(&bind_addr, "/sql?q=SELECT%20DISTINCT%20name%20FROM%20users%20LIMIT%201");
     assert!(unsupported.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{unsupported}");
     let unsupported_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&unsupported)).expect("unsupported payload");
     assert_eq!(unsupported_payload["code"], "unsupported_feature");
 
-    let unknown_table = http_get("127.0.0.1:3021", "/sql?q=SELECT%20*%20FROM%20missing");
+    let unknown_table = http_get(&bind_addr, "/sql?q=SELECT%20*%20FROM%20missing");
     assert!(unknown_table.starts_with("HTTP/1.1 404 Not Found\r\n"), "{unknown_table}");
     let unknown_table_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&unknown_table)).expect("unknown table payload");
     assert_eq!(unknown_table_payload["code"], "unknown_table");
 
-    let unknown_column =
-        http_get("127.0.0.1:3021", "/sql?q=SELECT%20email%20FROM%20users%20LIMIT%201");
+    let unknown_column = http_get(&bind_addr, "/sql?q=SELECT%20email%20FROM%20users%20LIMIT%201");
     assert!(unknown_column.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{unknown_column}");
     let unknown_column_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&unknown_column)).expect("unknown column payload");
@@ -129,9 +113,9 @@ fn export_sql_is_stable_and_escapes_and_handles_nulls_without_schema() {
     )
     .expect("write projects");
 
-    let _child = start_server(temp.path(), 3022, false);
+    let (_child, bind_addr) = start_server(temp.path(), false);
 
-    let response = http_get("127.0.0.1:3022", "/export.sql");
+    let response = http_get(&bind_addr, "/export.sql");
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     let body = parse_http_body(&response);
 
@@ -174,9 +158,9 @@ fn export_sql_respects_schema_when_present() {
     )
     .expect("write schema");
 
-    let _child = start_server(temp.path(), 3023, false);
+    let (_child, bind_addr) = start_server(temp.path(), false);
 
-    let response = http_get("127.0.0.1:3023", "/export.sql");
+    let response = http_get(&bind_addr, "/export.sql");
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     let body = parse_http_body(&response);
 
@@ -198,17 +182,17 @@ fn readonly_mode_allows_sql_and_export_and_rejects_post_sql() {
     std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
         .expect("write users");
 
-    let _child = start_server(temp.path(), 3024, true);
+    let (_child, bind_addr) = start_server(temp.path(), true);
 
-    let sql_get = http_get("127.0.0.1:3024", "/sql?q=SELECT%20*%20FROM%20users%20LIMIT%201");
+    let sql_get = http_get(&bind_addr, "/sql?q=SELECT%20*%20FROM%20users%20LIMIT%201");
     assert!(sql_get.starts_with("HTTP/1.1 200 OK\r\n"), "{sql_get}");
 
-    let export = http_get("127.0.0.1:3024", "/export.sql");
+    let export = http_get(&bind_addr, "/export.sql");
     assert!(export.starts_with("HTTP/1.1 200 OK\r\n"), "{export}");
     assert!(parse_http_body(&export).contains("INSERT INTO \"users\""), "{export}");
 
     let post_sql = http_post_json(
-        "127.0.0.1:3024",
+        &bind_addr,
         "/sql",
         serde_json::json!({"query": "SELECT * FROM users LIMIT 1"}),
     );
@@ -253,10 +237,10 @@ fn sql_inner_join_supports_schema_backed_relations() {
     )
     .expect("write schema");
 
-    let _child = start_server(temp.path(), 3026, false);
+    let (_child, bind_addr) = start_server(temp.path(), false);
 
     let response = http_get(
-        "127.0.0.1:3026",
+        &bind_addr,
         "/sql?q=SELECT%20u.name,t.name%20FROM%20users%20u%20JOIN%20teams%20t%20ON%20u.id%20=%20t.user_id%20ORDER%20BY%20u.id%20ASC%20LIMIT%202",
     );
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
@@ -271,62 +255,83 @@ fn sql_inner_join_supports_schema_backed_relations() {
     );
 }
 
-fn start_server(folder: &std::path::Path, port: u16, readonly: bool) -> ChildGuard {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_folder-server"));
-    cmd.arg("--folder").arg(folder).arg("--bind").arg(format!("127.0.0.1:{port}"));
-
-    if readonly {
-        cmd.arg("--readonly");
-    }
-
-    let child =
-        cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("start folder-server");
-
-    wait_for_server(&format!("127.0.0.1:{port}"), Duration::from_secs(5));
-
-    ChildGuard { child }
-}
-
-fn wait_for_server(addr: &str, timeout: Duration) {
-    let start = Instant::now();
-    loop {
-        if TcpStream::connect(addr).is_ok() {
-            return;
+#[test]
+fn sql_alias_projection_filter_order_and_invalid_join_paths_are_reported() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"id": 1, "name": "Ada"},
+  {"id": 2, "name": "Grace"}
+]
+"#,
+    )
+    .expect("write users");
+    std::fs::write(
+        temp.path().join("posts.json"),
+        r#"[
+  {"id": 10, "author_id": 1, "title": "First"},
+  {"id": 11, "author_id": 2, "title": "Second"}
+]
+"#,
+    )
+    .expect("write posts");
+    std::fs::write(
+        temp.path().join("schema.dbml"),
+        r#"
+        Table users {
+          id int [pk]
+          name varchar
         }
-        if start.elapsed() >= timeout {
-            panic!("server did not start in time at {addr}");
+
+        Table posts {
+          id int [pk]
+          author_id int [ref: > users.id]
+          title varchar
         }
-        thread::sleep(Duration::from_millis(25));
-    }
-}
+        "#,
+    )
+    .expect("write schema");
 
-fn http_get(addr: &str, path: &str) -> String {
-    let mut stream = TcpStream::connect(addr).expect("connect to test server");
-    let request = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).expect("write GET request");
+    let (_child, bind_addr) = start_server(temp.path(), false);
 
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read GET response");
-    response
-}
-
-fn http_post_json(addr: &str, path: &str, payload: serde_json::Value) -> String {
-    let mut stream = TcpStream::connect(addr).expect("connect to test server");
-    let body = payload.to_string();
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
+    let aliased = http_get(
+        &bind_addr,
+        "/sql?q=SELECT%20p.title,u.name%20FROM%20posts%20p%20JOIN%20users%20u%20ON%20p.author_id%20=%20u.id%20WHERE%20u.name%20=%20'Grace'%20ORDER%20BY%20p.id%20DESC%20LIMIT%201",
     );
-    stream.write_all(request.as_bytes()).expect("write POST request");
+    assert!(aliased.starts_with("HTTP/1.1 200 OK\r\n"), "{aliased}");
+    let aliased_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&aliased)).expect("aliased payload");
+    assert_eq!(
+        aliased_payload["rows"],
+        serde_json::json!([{"p.title": "Second", "u.name": "Grace"}])
+    );
 
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read POST response");
-    response
+    let unknown_alias = http_get(
+        &bind_addr,
+        "/sql?q=SELECT%20x.name%20FROM%20posts%20p%20JOIN%20users%20u%20ON%20p.author_id%20=%20u.id%20LIMIT%201",
+    );
+    assert!(unknown_alias.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{unknown_alias}");
+    assert!(unknown_alias.contains("Unknown table alias 'x'"), "{unknown_alias}");
+
+    let invalid_join = http_get(
+        &bind_addr,
+        "/sql?q=SELECT%20p.title,u.name%20FROM%20posts%20p%20JOIN%20users%20u%20ON%20p.id%20=%20u.id%20LIMIT%201",
+    );
+    assert!(invalid_join.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{invalid_join}");
+    let invalid_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&invalid_join)).expect("invalid join payload");
+    assert_eq!(invalid_payload["code"], "unsupported_feature");
+    assert!(
+        invalid_payload["error"].as_str().expect("error").contains("not backed by schema metadata"),
+        "{invalid_join}"
+    );
 }
 
-fn parse_http_body(response: &str) -> &str {
-    response
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body)
-        .expect("response should contain header/body separator")
+fn start_server(folder: &std::path::Path, readonly: bool) -> (ChildGuard, String) {
+    if readonly {
+        support::spawn_folder_server(folder, true)
+    } else {
+        support::spawn_folder_server(folder, false)
+    }
 }

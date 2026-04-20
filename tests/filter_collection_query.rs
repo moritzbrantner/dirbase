@@ -1,23 +1,8 @@
-use std::{
-    io::{Read, Write},
-    net::TcpStream,
-    process::{Child, Command, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
-
 use fake::{Fake, faker::name::en::Name};
 
-struct ChildGuard {
-    child: Child,
-}
+mod support;
 
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
+use support::{ChildGuard, http_get, parse_http_body};
 
 #[test]
 fn collection_supports_filtering_with_multiple_query_parameters() {
@@ -46,20 +31,8 @@ fn collection_supports_filtering_with_multiple_query_parameters() {
     std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize fake users"))
         .expect("write users json");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3211")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
-
-    wait_for_server("127.0.0.1:3211", Duration::from_secs(5));
-
-    let response = http_get("127.0.0.1:3211", "/users?role=admin&active=true");
+    let (_child, bind_addr) = spawn_server(temp.path());
+    let response = http_get(&bind_addr, "/users?role=admin&active=true");
 
     assert!(
         response.starts_with("HTTP/1.1 200 OK\r\n"),
@@ -87,20 +60,8 @@ fn collection_supports_sorting_by_multiple_columns() {
     std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
         .expect("write users json");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:34004")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
-
-    wait_for_server("127.0.0.1:34004", Duration::from_secs(5));
-
-    let response = http_get("127.0.0.1:34004", "/users?sort=role,name");
+    let (_child, bind_addr) = spawn_server(temp.path());
+    let response = http_get(&bind_addr, "/users?sort=role,name");
 
     assert!(
         response.starts_with("HTTP/1.1 200 OK\r\n"),
@@ -134,21 +95,9 @@ fn collection_supports_operator_filters_nested_fields_desc_sort_and_pagination_k
     std::fs::write(posts_path, serde_json::to_string_pretty(&posts).expect("serialize posts"))
         .expect("write posts json");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:34005")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
-
-    wait_for_server("127.0.0.1:34005", Duration::from_secs(5));
-
+    let (_child, bind_addr) = spawn_server(temp.path());
     let response = http_get(
-        "127.0.0.1:34005",
+        &bind_addr,
         "/posts?views:gte=100&title:contains=hello&author.name:eq=Typicode&_sort=-views&_page=1&_per_page=2",
     );
 
@@ -188,26 +137,15 @@ fn collection_rejects_invalid_filter_operator_and_invalid_pagination_values() {
     std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
         .expect("write users json");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:34006")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_server(temp.path());
 
-    wait_for_server("127.0.0.1:34006", Duration::from_secs(5));
-
-    let invalid_operator = http_get("127.0.0.1:34006", "/users?role:badop=admin");
+    let invalid_operator = http_get(&bind_addr, "/users?role:badop=admin");
     assert!(
         invalid_operator.starts_with("HTTP/1.1 400 Bad Request\r\n"),
         "expected 400 Bad Request response, got: {invalid_operator}"
     );
 
-    let invalid_page = http_get("127.0.0.1:34006", "/users?_page=0&_per_page=2");
+    let invalid_page = http_get(&bind_addr, "/users?_page=0&_per_page=2");
     assert!(
         invalid_page.starts_with("HTTP/1.1 400 Bad Request\r\n"),
         "expected 400 Bad Request response, got: {invalid_page}"
@@ -228,20 +166,8 @@ fn collection_clamps_pagination_page_to_last_page() {
     std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
         .expect("write users json");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:34007")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
-
-    wait_for_server("127.0.0.1:34007", Duration::from_secs(5));
-
-    let response = http_get("127.0.0.1:34007", "/users?_page=99&_per_page=2");
+    let (_child, bind_addr) = spawn_server(temp.path());
+    let response = http_get(&bind_addr, "/users?_page=99&_per_page=2");
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
 
     let body = parse_http_body(&response);
@@ -272,58 +198,19 @@ fn collection_supports_null_filter_operators() {
     std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
         .expect("write users json");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:34008")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_server(temp.path());
 
-    wait_for_server("127.0.0.1:34008", Duration::from_secs(5));
-
-    let is_null = http_get("127.0.0.1:34008", "/users?deleted_at:isNull=true");
+    let is_null = http_get(&bind_addr, "/users?deleted_at:isNull=true");
     assert!(is_null.starts_with("HTTP/1.1 200 OK\r\n"), "{is_null}");
     assert!(is_null.contains("\"id\":1"), "{is_null}");
     assert!(!is_null.contains("\"id\":2"), "{is_null}");
 
-    let is_not_null = http_get("127.0.0.1:34008", "/users?deleted_at:isNotNull=true");
+    let is_not_null = http_get(&bind_addr, "/users?deleted_at:isNotNull=true");
     assert!(is_not_null.starts_with("HTTP/1.1 200 OK\r\n"), "{is_not_null}");
     assert!(is_not_null.contains("\"id\":2"), "{is_not_null}");
     assert!(!is_not_null.contains("\"id\":1"), "{is_not_null}");
 }
 
-fn wait_for_server(addr: &str, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        match TcpStream::connect(addr) {
-            Ok(_) => return,
-            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
-            Err(err) => panic!("server at {addr} did not start in time: {err}"),
-        }
-    }
-}
-
-fn parse_http_body(response: &str) -> &str {
-    response
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body)
-        .or_else(|| response.split_once("\n\n").map(|(_, body)| body))
-        .expect("response should have body")
-}
-
-fn http_get(addr: &str, path: &str) -> String {
-    let mut stream = TcpStream::connect(addr).expect("connect to server");
-    let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-
-    stream.write_all(request.as_bytes()).expect("write request");
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-
-    response
+fn spawn_server(folder: &std::path::Path) -> (ChildGuard, String) {
+    support::spawn_folder_server(folder, false)
 }

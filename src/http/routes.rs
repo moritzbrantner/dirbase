@@ -32,20 +32,18 @@ use crate::{
     error::AppError,
     graphql::{graphql_get, graphql_post},
     http::overview,
+    mutation_service,
     query::filters::{
         filter_collection_refs, paginate_collection_refs, parse_collection_query_params,
         sort_collection_refs,
     },
     relations::{build_relation_lookup, resolve_related_row_in_lookup},
     schema::{
-        DeclaredSchema, TableSchema, default_schema_output_path, infer_schema_from_data_source,
+        DeclaredSchema, default_schema_output_path, infer_schema_from_data_source,
         primary_key_name, save_schema as save_schema_file,
     },
     sql::{export_sql, sql_query, sql_query_post},
-    storage::{
-        coerce_id_value, find_item_by_key, find_item_index_by_key, load_resource, next_numeric_id,
-        validate_resource_data, write_resource,
-    },
+    storage::{find_item_by_key, load_resource, validate_resource_data},
 };
 
 pub fn build_router(state: AppState) -> Router {
@@ -163,7 +161,7 @@ pub async fn log_requests_middleware(
         SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default();
     let suffix = query_hash.map(|hash| format!(" query_hash={hash}")).unwrap_or_default();
     let line = format!("{timestamp} {method} {path} {}{suffix}", status.as_u16());
-    tracing::info!(target: "folder_server::request", "{line}");
+    tracing::info!(target: "dirbase::request", "{line}");
     response
 }
 
@@ -470,23 +468,9 @@ fn enforce_per_page_limit(
 pub async fn create_item(
     State(state): State<AppState>,
     AxumPath(resource): AxumPath<String>,
-    Json(mut payload): Json<Value>,
+    Json(payload): Json<Value>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
-    let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource).await?.as_ref().clone();
-    validate_resource_data(&state, &resource, &data)?;
-    let array = data
-        .as_array_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
-    let item = payload
-        .as_object_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object"))?;
-    let table = state.schema_table(&resource);
-    maybe_fill_missing_id(item, array, table.as_ref())?;
-    let created = Value::Object(item.clone());
-    array.push(created.clone());
-    validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state, &resource, &data).await?;
+    let created = mutation_service::create_item(&state, &resource, payload).await?;
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -528,25 +512,9 @@ pub async fn get_item(
 pub async fn replace_item(
     State(state): State<AppState>,
     AxumPath((resource, id)): AxumPath<(String, String)>,
-    Json(mut payload): Json<Value>,
+    Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource).await?.as_ref().clone();
-    let table = state.schema_table(&resource);
-    let item_key = primary_key_name(table.as_ref()).to_string();
-    let array = data
-        .as_array_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
-    let object = payload
-        .as_object_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object"))?;
-    object.insert(item_key.clone(), coerce_id_value(&id, table.as_ref()));
-    let replacement = Value::Object(object.clone());
-    let position = find_item_index_by_key(array, &item_key, &id)
-        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
-    array[position] = replacement.clone();
-    validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state, &resource, &data).await?;
+    let replacement = mutation_service::replace_item(&state, &resource, &id, payload).await?;
     Ok(Json(replacement))
 }
 
@@ -555,30 +523,7 @@ pub async fn patch_item(
     AxumPath((resource, id)): AxumPath<(String, String)>,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource).await?.as_ref().clone();
-    let table = state.schema_table(&resource);
-    let item_key = primary_key_name(table.as_ref()).to_string();
-    validate_resource_data(&state, &resource, &data)?;
-    let array = data
-        .as_array_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
-    let patch = payload
-        .as_object()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object"))?;
-    let index = find_item_index_by_key(array, &item_key, &id)
-        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
-    let current = array[index].as_object_mut().ok_or_else(|| {
-        AppError::new(StatusCode::BAD_REQUEST, "Array item must be a JSON object")
-    })?;
-    for (key, value) in patch {
-        if key != &item_key {
-            current.insert(key.clone(), value.clone());
-        }
-    }
-    let updated = Value::Object(current.clone());
-    validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state, &resource, &data).await?;
+    let updated = mutation_service::patch_item(&state, &resource, &id, payload).await?;
     Ok(Json(updated))
 }
 
@@ -586,19 +531,7 @@ pub async fn delete_item(
     State(state): State<AppState>,
     AxumPath((resource, id)): AxumPath<(String, String)>,
 ) -> Result<StatusCode, AppError> {
-    let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource).await?.as_ref().clone();
-    let table = state.schema_table(&resource);
-    let item_key = primary_key_name(table.as_ref()).to_string();
-    validate_resource_data(&state, &resource, &data)?;
-    let array = data
-        .as_array_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
-    let index = find_item_index_by_key(array, &item_key, &id)
-        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
-    array.remove(index);
-    validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state, &resource, &data).await?;
+    mutation_service::delete_item(&state, &resource, &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -607,17 +540,7 @@ pub async fn replace_resource_object(
     AxumPath(resource): AxumPath<String>,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource).await?.as_ref().clone();
-    if !data.is_object() || !payload.is_object() {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "Payload and resource must be JSON objects",
-        ));
-    }
-    data = payload;
-    validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state, &resource, &data).await?;
+    let data = mutation_service::replace_resource_object(&state, &resource, payload).await?;
     Ok(Json(data))
 }
 
@@ -626,40 +549,8 @@ pub async fn patch_resource_object(
     AxumPath(resource): AxumPath<String>,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let _guard = state.write_lock_for_resource(&resource).await;
-    let mut data = load_resource(&state, &resource).await?.as_ref().clone();
-    let current = data
-        .as_object_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON object"))?;
-    let patch = payload
-        .as_object()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object"))?;
-    for (key, value) in patch {
-        current.insert(key.clone(), value.clone());
-    }
-    let updated = Value::Object(current.clone());
-    validate_resource_data(&state, &resource, &data)?;
-    write_resource(&state, &resource, &data).await?;
+    let updated = mutation_service::patch_resource_object(&state, &resource, payload).await?;
     Ok(Json(updated))
-}
-
-fn maybe_fill_missing_id(
-    item: &mut serde_json::Map<String, Value>,
-    array: &[Value],
-    table: Option<&TableSchema>,
-) -> Result<(), AppError> {
-    let item_key = primary_key_name(table);
-    if item.contains_key(item_key) {
-        return Ok(());
-    }
-    let id_value = match table.and_then(|table| table.columns.get(item_key)) {
-        Some(column) if matches!(column.column_type, crate::schema::ColumnType::String) => {
-            Value::String(format!("{}", next_numeric_id(array, item_key)))
-        }
-        _ => Value::from(next_numeric_id(array, item_key)),
-    };
-    item.insert(item_key.to_string(), id_value);
-    Ok(())
 }
 
 fn collection_query_operators_present(

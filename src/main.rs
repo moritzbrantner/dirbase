@@ -8,6 +8,7 @@ mod app;
 mod error;
 mod graphql;
 mod http;
+mod mutation_service;
 mod query;
 mod relations;
 mod schema;

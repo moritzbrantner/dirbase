@@ -1,22 +1,8 @@
-use std::{
-    fs,
-    io::{Read, Write},
-    net::TcpStream,
-    process::{Child, Command, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
+use std::fs;
 
-struct ChildGuard {
-    child: Child,
-}
+mod support;
 
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
+use support::{http_request, parse_http_body, spawn_folder_server};
 
 #[test]
 fn schema_endpoint_infers_tables_and_can_persist_schema_json() {
@@ -49,20 +35,9 @@ fn schema_endpoint_infers_tables_and_can_persist_schema_json() {
     )
     .expect("write relation table");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3025")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3025", Duration::from_secs(5));
-
-    let schema_response = http_request("127.0.0.1:3025", "GET", "/schema", None);
+    let schema_response = http_request(&bind_addr, "GET", "/schema", None);
     assert!(schema_response.starts_with("HTTP/1.1 200 OK\r\n"), "{schema_response}");
     let schema_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&schema_response)).expect("schema json");
@@ -78,7 +53,7 @@ fn schema_endpoint_infers_tables_and_can_persist_schema_json() {
         "courses"
     );
 
-    let save_response = http_request("127.0.0.1:3025", "POST", "/schema", None);
+    let save_response = http_request(&bind_addr, "POST", "/schema", None);
     assert!(save_response.starts_with("HTTP/1.1 200 OK\r\n"), "{save_response}");
 
     let saved = temp.path().join("schema.json");
@@ -88,7 +63,7 @@ fn schema_endpoint_infers_tables_and_can_persist_schema_json() {
             .expect("saved schema json");
     assert_eq!(saved_payload["tables"]["student_courses"]["kind"], "relation");
 
-    let root_response = http_request("127.0.0.1:3025", "GET", "/", None);
+    let root_response = http_request(&bind_addr, "GET", "/", None);
     assert!(root_response.starts_with("HTTP/1.1 200 OK\r\n"), "{root_response}");
     let root_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&root_response)).expect("root json");
@@ -140,20 +115,9 @@ fn schema_json_overlay_merges_inferred_columns_and_manual_relations() {
     )
     .expect("write posts");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3026")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3026", Duration::from_secs(5));
-
-    let schema_response = http_request("127.0.0.1:3026", "GET", "/schema", None);
+    let schema_response = http_request(&bind_addr, "GET", "/schema", None);
     assert!(schema_response.starts_with("HTTP/1.1 200 OK\r\n"), "{schema_response}");
     let schema_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&schema_response)).expect("schema json");
@@ -164,14 +128,14 @@ fn schema_json_overlay_merges_inferred_columns_and_manual_relations() {
     );
     assert_eq!(schema_payload["tables"]["posts"]["columns"]["title"]["column_type"], "string");
 
-    let embed_response = http_request("127.0.0.1:3026", "GET", "/posts?embed=author_ref", None);
+    let embed_response = http_request(&bind_addr, "GET", "/posts?embed=author_ref", None);
     assert!(embed_response.starts_with("HTTP/1.1 200 OK\r\n"), "{embed_response}");
     let embed_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&embed_response)).expect("embed json");
     assert_eq!(embed_payload[0]["author_ref"]["user_id"], 1);
     assert_eq!(embed_payload[0]["author_ref"]["name"], "Ada");
 
-    let save_response = http_request("127.0.0.1:3026", "POST", "/schema", None);
+    let save_response = http_request(&bind_addr, "POST", "/schema", None);
     assert!(save_response.starts_with("HTTP/1.1 200 OK\r\n"), "{save_response}");
     let saved_payload: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(temp.path().join("schema.json")).expect("read"))
@@ -237,20 +201,9 @@ Table posts {
     )
     .expect("write posts");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3027")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3027", Duration::from_secs(5));
-
-    let schema_response = http_request("127.0.0.1:3027", "GET", "/schema", None);
+    let schema_response = http_request(&bind_addr, "GET", "/schema", None);
     assert!(schema_response.starts_with("HTTP/1.1 200 OK\r\n"), "{schema_response}");
     let schema_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&schema_response)).expect("schema json");
@@ -302,20 +255,9 @@ fn schema_infer_endpoint_writes_fresh_inferred_schema_json() {
     )
     .expect("write posts");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3029")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3029", Duration::from_secs(5));
-
-    let infer_response = http_request("127.0.0.1:3029", "POST", "/schema/infer", None);
+    let infer_response = http_request(&bind_addr, "POST", "/schema/infer", None);
     assert!(infer_response.starts_with("HTTP/1.1 200 OK\r\n"), "{infer_response}");
 
     let saved_payload: serde_json::Value =
@@ -332,26 +274,25 @@ fn schema_infer_endpoint_writes_fresh_inferred_schema_json() {
 #[test]
 fn schema_put_validates_and_persists_declared_schema() {
     let temp = tempfile::tempdir().expect("create temp directory");
+    let schema_path = temp.path().join("schema.json");
+    let original_schema = r#"{
+  "tables": {
+    "users": {
+      "primary_key": "id"
+    }
+  }
+}
+"#;
+    fs::write(&schema_path, original_schema).expect("write original schema");
     fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
         .expect("write users");
     fs::write(temp.path().join("posts.json"), "[{\"id\":1,\"author_id\":1,\"title\":\"Hello\"}]\n")
         .expect("write posts");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3030")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
-
-    wait_for_server("127.0.0.1:3030", Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
     let invalid = http_request(
-        "127.0.0.1:3030",
+        &bind_addr,
         "PUT",
         "/schema",
         Some(
@@ -370,9 +311,11 @@ fn schema_put_validates_and_persists_declared_schema() {
         ),
     );
     assert!(invalid.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{invalid}");
+    let after_invalid = fs::read_to_string(&schema_path).expect("read schema after invalid put");
+    assert_eq!(after_invalid, original_schema);
 
     let valid = http_request(
-        "127.0.0.1:3030",
+        &bind_addr,
         "PUT",
         "/schema",
         Some(
@@ -399,7 +342,7 @@ fn schema_put_validates_and_persists_declared_schema() {
         "users"
     );
 
-    let schema_response = http_request("127.0.0.1:3030", "GET", "/schema", None);
+    let schema_response = http_request(&bind_addr, "GET", "/schema", None);
     assert!(schema_response.starts_with("HTTP/1.1 200 OK\r\n"), "{schema_response}");
     let schema_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&schema_response)).expect("schema json");
@@ -407,41 +350,4 @@ fn schema_put_validates_and_persists_declared_schema() {
         schema_payload["tables"]["posts"]["foreign_keys"]["author_id"]["target_table"],
         "users"
     );
-}
-
-fn wait_for_server(addr: &str, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        match TcpStream::connect(addr) {
-            Ok(_) => return,
-            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
-            Err(err) => panic!("server at {addr} did not start in time: {err}"),
-        }
-    }
-}
-
-fn http_request(addr: &str, method: &str, path: &str, body: Option<&str>) -> String {
-    let mut stream = TcpStream::connect(addr).expect("connect to server");
-    let payload = body.unwrap_or("");
-
-    let request = if body.is_some() {
-        format!(
-            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            payload.len(),
-            payload
-        )
-    } else {
-        format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n")
-    };
-
-    stream.write_all(request.as_bytes()).expect("write request");
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-    response
-}
-
-fn parse_http_body(response: &str) -> &str {
-    response.split("\r\n\r\n").nth(1).expect("http body")
 }

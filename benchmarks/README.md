@@ -1,8 +1,8 @@
-# Benchmark: folder-server vs typicode/json-server
+# Benchmark: dirbase vs typicode/json-server
 
 This benchmark compares request throughput and latency between:
 
-- `folder-server` (this repository)
+- `dirbase` (this repository)
 - `json-server` (`typicode/json-server` package)
 
 ## What is measured
@@ -24,7 +24,7 @@ The default profile contains 92,252 rows across those resources and exercises a 
 4. Sorted and paginated collection reads on `members`, `tickets`, and `deployments`
 5. Composite filter + sort + pagination workloads
 
-The script uses equivalent server-specific query syntax where `folder-server` and `json-server` differ.
+The script uses equivalent server-specific query syntax where `dirbase` and `json-server` differ.
 
 ## Run
 

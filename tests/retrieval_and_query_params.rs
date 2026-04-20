@@ -1,22 +1,8 @@
-use std::{
-    fs,
-    io::{Read, Write},
-    net::TcpStream,
-    process::{Child, Command, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
+use std::fs;
 
-struct ChildGuard {
-    child: Child,
-}
+mod support;
 
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
+use support::{http_get, http_request, parse_http_body, spawn_folder_server};
 
 #[test]
 fn retrieval_supports_string_ids_and_returns_404_for_missing_item() {
@@ -31,26 +17,15 @@ fn retrieval_supports_string_ids_and_returns_404_for_missing_item() {
     )
     .expect("write users");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3013")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3013", Duration::from_secs(5));
-
-    let get_existing = http_get("127.0.0.1:3013", "/users/user-1");
+    let get_existing = http_get(&bind_addr, "/users/user-1");
     assert!(get_existing.starts_with("HTTP/1.1 200 OK\r\n"), "{get_existing}");
     let existing_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&get_existing)).expect("valid json body");
     assert_eq!(existing_payload["name"], "Ada");
 
-    let get_missing = http_get("127.0.0.1:3013", "/users/user-99");
+    let get_missing = http_get(&bind_addr, "/users/user-99");
     assert!(get_missing.starts_with("HTTP/1.1 404 Not Found\r\n"), "{get_missing}");
     assert!(get_missing.contains("\"error\":\"Item not found\""), "{get_missing}");
 }
@@ -69,20 +44,9 @@ fn query_parameters_support_pagination_defaults_when_page_or_size_is_missing() {
     )
     .expect("write posts");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3014")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3014", Duration::from_secs(5));
-
-    let per_page_only = http_get("127.0.0.1:3014", "/posts?_per_page=2");
+    let per_page_only = http_get(&bind_addr, "/posts?_per_page=2");
     assert!(per_page_only.starts_with("HTTP/1.1 200 OK\r\n"), "{per_page_only}");
     let per_page_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&per_page_only)).expect("valid json body");
@@ -91,7 +55,7 @@ fn query_parameters_support_pagination_defaults_when_page_or_size_is_missing() {
     assert_eq!(per_page_payload["prev"], serde_json::Value::Null);
     assert_eq!(per_page_payload["next"], 2);
 
-    let page_only = http_get("127.0.0.1:3014", "/posts?_page=2");
+    let page_only = http_get(&bind_addr, "/posts?_page=2");
     assert!(page_only.starts_with("HTTP/1.1 200 OK\r\n"), "{page_only}");
     let page_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&page_only)).expect("valid json body");
@@ -107,24 +71,13 @@ fn query_parameters_return_clear_400_errors_for_invalid_values() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(temp.path().join("posts.json"), "[]\n").expect("write posts");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3015")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3015", Duration::from_secs(5));
-
-    let bad_page = http_get("127.0.0.1:3015", "/posts?_page=0");
+    let bad_page = http_get(&bind_addr, "/posts?_page=0");
     assert!(bad_page.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{bad_page}");
     assert!(bad_page.contains("\"error\":\"'_page' must be greater than 0\""));
 
-    let bad_operator = http_get("127.0.0.1:3015", "/posts?title:unknown=value");
+    let bad_operator = http_get(&bind_addr, "/posts?title:unknown=value");
     assert!(bad_operator.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{bad_operator}");
     assert!(
         bad_operator
@@ -132,7 +85,7 @@ fn query_parameters_return_clear_400_errors_for_invalid_values() {
         "{bad_operator}"
     );
 
-    let bad_per_page = http_get("127.0.0.1:3015", "/posts?per_page=abc");
+    let bad_per_page = http_get(&bind_addr, "/posts?per_page=abc");
     assert!(bad_per_page.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{bad_per_page}");
     assert!(
         bad_per_page.contains("\"error\":\"Invalid value for 'per_page': 'abc'\""),
@@ -155,20 +108,9 @@ fn query_parameters_support_unprefixed_pagination_aliases() {
     )
     .expect("write posts");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3016")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3016", Duration::from_secs(5));
-
-    let page_two = http_get("127.0.0.1:3016", "/posts?page=2&per_page=2");
+    let page_two = http_get(&bind_addr, "/posts?page=2&per_page=2");
     assert!(page_two.starts_with("HTTP/1.1 200 OK\r\n"), "{page_two}");
     let payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&page_two)).expect("valid json body");
@@ -223,20 +165,9 @@ Table posts {
     )
     .expect("write posts");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3018")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3018", Duration::from_secs(5));
-
-    let response = http_get("127.0.0.1:3018", "/posts?embed=author_id");
+    let response = http_get(&bind_addr, "/posts?embed=author_id");
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
 
     let payload: serde_json::Value =
@@ -252,20 +183,9 @@ fn retrieval_returns_400_for_invalid_resource_name() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(temp.path().join("users.json"), "[]\n").expect("write users");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3017")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3017", Duration::from_secs(5));
-
-    let response = http_get("127.0.0.1:3017", "/users..bad/1");
+    let response = http_get(&bind_addr, "/users..bad/1");
     assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{response}");
     assert!(
         response.contains(
@@ -304,33 +224,22 @@ fn retrieval_and_create_use_declared_primary_key() {
     )
     .expect("write users");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3019")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3019", Duration::from_secs(5));
-
-    let get_existing = http_get("127.0.0.1:3019", "/users/1");
+    let get_existing = http_get(&bind_addr, "/users/1");
     assert!(get_existing.starts_with("HTTP/1.1 200 OK\r\n"), "{get_existing}");
     let existing_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&get_existing)).expect("valid json body");
     assert_eq!(existing_payload["name"], "Ada");
 
-    let post_response = http_request("127.0.0.1:3019", "POST", "/users", Some(r#"{"name":"Lin"}"#));
+    let post_response = http_request(&bind_addr, "POST", "/users", Some(r#"{"name":"Lin"}"#));
     assert!(post_response.starts_with("HTTP/1.1 201 Created\r\n"), "{post_response}");
     let created_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&post_response)).expect("created json");
     assert_eq!(created_payload["user_id"], 3);
     assert_eq!(created_payload["name"], "Lin");
 
-    let get_created = http_get("127.0.0.1:3019", "/users/3");
+    let get_created = http_get(&bind_addr, "/users/3");
     assert!(get_created.starts_with("HTTP/1.1 200 OK\r\n"), "{get_created}");
 }
 
@@ -368,77 +277,14 @@ fn overlay_schema_validation_allows_undeclared_resources_and_columns() {
     )
     .expect("write users");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3028")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3028", Duration::from_secs(5));
-
-    let users_response = http_get("127.0.0.1:3028", "/users");
+    let users_response = http_get(&bind_addr, "/users");
     assert!(users_response.starts_with("HTTP/1.1 200 OK\r\n"), "{users_response}");
 
-    let posts_response = http_get("127.0.0.1:3028", "/posts");
+    let posts_response = http_get(&bind_addr, "/posts");
     assert!(posts_response.starts_with("HTTP/1.1 200 OK\r\n"), "{posts_response}");
     let posts_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&posts_response)).expect("posts json");
     assert_eq!(posts_payload[0]["extra"], true);
-}
-
-fn wait_for_server(addr: &str, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        match TcpStream::connect(addr) {
-            Ok(_) => return,
-            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
-            Err(err) => panic!("server at {addr} did not start in time: {err}"),
-        }
-    }
-}
-
-fn parse_http_body(response: &str) -> &str {
-    response
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body)
-        .or_else(|| response.split_once("\n\n").map(|(_, body)| body))
-        .expect("response should have body")
-}
-
-fn http_get(addr: &str, path: &str) -> String {
-    let mut stream = TcpStream::connect(addr).expect("connect to server");
-    let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-
-    stream.write_all(request.as_bytes()).expect("write request");
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-
-    response
-}
-
-fn http_request(addr: &str, method: &str, path: &str, body: Option<&str>) -> String {
-    let mut stream = TcpStream::connect(addr).expect("connect to server");
-    let payload = body.unwrap_or("");
-    let request = if body.is_some() {
-        format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
-            payload.len()
-        )
-    } else {
-        format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-    };
-
-    stream.write_all(request.as_bytes()).expect("write request");
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-
-    response
 }

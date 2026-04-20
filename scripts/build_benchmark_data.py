@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     default_output_dir = root_dir / "benchmarks" / ".work" / "benchmark-data"
 
     parser = argparse.ArgumentParser(
-        description="Generate deterministic synthetic benchmark data for folder-server and json-server."
+        description="Generate deterministic synthetic benchmark data for dirbase and json-server."
     )
     parser.add_argument(
         "--output-dir",

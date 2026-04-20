@@ -1,8 +1,12 @@
 import {
+  buildPatchPayload,
   buildMutationPlan,
   buildQuerySummaryChips,
+  collectChangedKeys,
+  createUiState,
   getVisibleMutationActions,
-  loadOverviewPreferences
+  loadOverviewPreferences,
+  summarizeSchemaDiff
 } from './overviewUtils';
 import type { ResourceOverview, ServerCapabilities } from './types';
 
@@ -177,5 +181,56 @@ describe('loadOverviewPreferences', () => {
       lastInspectorTab: 'schema',
       mobileSurface: 'map'
     });
+  });
+});
+
+describe('mutation diff helpers', () => {
+  it('builds patch payloads from changed top-level keys only', () => {
+    expect(
+      buildPatchPayload(
+        { id: 1, name: 'Ada', meta: { nested: true } },
+        { id: 1, name: 'Grace', meta: { nested: true }, city: 'London' }
+      )
+    ).toEqual({
+      name: 'Grace',
+      meta: { nested: true },
+      city: 'London'
+    });
+    expect(buildPatchPayload({ id: 1 }, ['not an object'])).toEqual({});
+  });
+
+  it('collects changed, added, and removed keys for full replacements', () => {
+    expect(collectChangedKeys({ id: 1, name: 'Ada', city: 'London' }, { id: 1, name: 'Ada' })).toEqual([
+      'city'
+    ]);
+    expect(collectChangedKeys({ id: 1 }, { id: 2, name: 'Grace' })).toEqual(['id', 'name']);
+  });
+});
+
+describe('createUiState', () => {
+  it('creates a clean state snapshot for a selected resource', () => {
+    expect(createUiState('members', true)).toEqual({
+      selectedResource: 'members',
+      selectedRow: null,
+      inspectorTab: 'request',
+      liveUpdates: 'connecting',
+      mutationDialog: { open: false, mode: null },
+      readonly: true
+    });
+  });
+});
+
+describe('summarizeSchemaDiff', () => {
+  it('summarizes changed top-level table entries', () => {
+    expect(
+      summarizeSchemaDiff(
+        JSON.stringify({ tables: { members: { primary_key: 'id' } } }),
+        JSON.stringify({ tables: { members: { primary_key: 'member_id' }, teams: {} } })
+      )
+    ).toEqual(['Changed schema entry: members', 'Changed schema entry: teams']);
+  });
+
+  it('falls back when either schema text is invalid JSON', () => {
+    expect(summarizeSchemaDiff('{', '{"tables":{}}')).toEqual(['JSON changed']);
   });
 });

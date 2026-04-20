@@ -9,7 +9,7 @@ test.describe.configure({ mode: 'serial' });
 let readonlyServer = null;
 
 test.beforeAll(async () => {
-  const fixtureCopy = mkdtempSync(join(tmpdir(), 'folder-server-overview-readonly-'));
+  const fixtureCopy = mkdtempSync(join(tmpdir(), 'dirbase-overview-readonly-'));
   const serverFolder = join(fixtureCopy, 'fixtures');
   cpSync(join(process.cwd(), 'e2e/fixtures'), serverFolder, { recursive: true });
 
@@ -90,6 +90,20 @@ test('hides write actions in read-only mode', async ({ page }) => {
   await page.getByRole('button', { name: 'Schema' }).click();
   await expect(page.getByRole('button', { name: 'Infer from data' })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Save' })).toBeDisabled();
+});
+
+test('supports object raw mode and invalid mutation feedback', async ({ page }) => {
+  await page.goto('/?resource=settings');
+  await page.locator('.resource-list-item').first().waitFor({ state: 'visible', timeout: 15_000 });
+
+  await expect(page.locator('main').getByRole('heading', { name: 'settings' })).toBeVisible();
+  await page.getByRole('button', { name: 'Raw JSON' }).click();
+  await expect(page.locator('.json-viewer').first()).toContainText('"theme": "warm"');
+
+  await page.getByRole('button', { name: 'Edit object' }).click();
+  await page.locator('.mutation-editor').fill('{');
+  await expect(page.getByTestId('mutation-dialog').getByText(/Expected property name/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Submit request' })).toBeDisabled();
 });
 
 test('supports create, edit, delete, infer, and save workflows', async ({ page }) => {

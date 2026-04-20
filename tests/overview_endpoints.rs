@@ -1,22 +1,8 @@
-use std::{
-    fs,
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
-    process::{Child, Command, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
+use std::fs;
 
-struct ChildGuard {
-    child: Child,
-}
+mod support;
 
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
+use support::{http_request_with_headers, parse_http_body, spawn_file_server, spawn_folder_server};
 
 #[test]
 fn overview_json_returns_machine_readable_metadata_for_folder_mode() {
@@ -55,21 +41,9 @@ Table posts {
     )
     .expect("write schema");
 
-    let bind_addr = reserve_bind_addr();
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg(&bind_addr)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server(&bind_addr, Duration::from_secs(5));
-
-    let response = http_request("GET", &bind_addr, "/overview.json", None);
+    let response = http_request_with_headers(&bind_addr, "GET", "/overview.json", None, None);
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(response.contains("content-type: application/json"), "{response}");
 
@@ -117,21 +91,10 @@ fn overview_json_describes_file_mode_and_assets_are_served() {
     )
     .expect("write db file");
 
-    let bind_addr = reserve_bind_addr();
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--file")
-        .arg(&db_path)
-        .arg("--bind")
-        .arg(&bind_addr)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_file_server(&db_path);
 
-    wait_for_server(&bind_addr, Duration::from_secs(5));
-
-    let overview_response = http_request("GET", &bind_addr, "/overview.json", None);
+    let overview_response =
+        http_request_with_headers(&bind_addr, "GET", "/overview.json", None, None);
     assert!(overview_response.starts_with("HTTP/1.1 200 OK\r\n"), "{overview_response}");
     let payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&overview_response)).expect("overview body");
@@ -147,12 +110,14 @@ fn overview_json_describes_file_mode_and_assets_are_served() {
             && resource["mutation_capabilities"]["replace_object"] == true
     ));
 
-    let css_response = http_request("GET", &bind_addr, "/assets/overview.css", None);
+    let css_response =
+        http_request_with_headers(&bind_addr, "GET", "/assets/overview.css", None, None);
     assert!(css_response.starts_with("HTTP/1.1 200 OK\r\n"), "{css_response}");
     assert!(css_response.contains("content-type: text/css; charset=utf-8"), "{css_response}");
     assert!(parse_http_body(&css_response).contains(".overview-page"), "{css_response}");
 
-    let js_response = http_request("GET", &bind_addr, "/assets/overview.js", None);
+    let js_response =
+        http_request_with_headers(&bind_addr, "GET", "/assets/overview.js", None, None);
     assert!(js_response.starts_with("HTTP/1.1 200 OK\r\n"), "{js_response}");
     assert!(js_response.contains("content-type: text/javascript; charset=utf-8"), "{js_response}");
     assert!(parse_http_body(&js_response).contains("overview-root"), "{js_response}");
@@ -176,22 +141,9 @@ fn overview_json_reflects_readonly_capabilities() {
     )
     .expect("write settings");
 
-    let bind_addr = reserve_bind_addr();
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg(&bind_addr)
-        .arg("--readonly")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = support::spawn_folder_server_with_args(temp.path(), &["--readonly"]);
 
-    wait_for_server(&bind_addr, Duration::from_secs(5));
-
-    let response = http_request("GET", &bind_addr, "/overview.json", None);
+    let response = http_request_with_headers(&bind_addr, "GET", "/overview.json", None, None);
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
 
     let payload: serde_json::Value =
@@ -208,44 +160,4 @@ fn overview_json_reflects_readonly_capabilities() {
             .any(|resource| resource["name"] == "users"
                 && resource["mutation_capabilities"]["create_item"] == true)
     );
-}
-
-fn reserve_bind_addr() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind to an ephemeral local port");
-    let addr = listener.local_addr().expect("read ephemeral bind address");
-    format!("127.0.0.1:{}", addr.port())
-}
-
-fn wait_for_server(addr: &str, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        match TcpStream::connect(addr) {
-            Ok(_) => return,
-            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
-            Err(err) => panic!("server at {addr} did not start in time: {err}"),
-        }
-    }
-}
-
-fn parse_http_body(response: &str) -> &str {
-    response
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body)
-        .or_else(|| response.split_once("\n\n").map(|(_, body)| body))
-        .expect("response should have body")
-}
-
-fn http_request(method: &str, addr: &str, path: &str, extra_headers: Option<&str>) -> String {
-    let mut stream = TcpStream::connect(addr).expect("connect to server");
-    let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{}\r\n",
-        extra_headers.unwrap_or("")
-    );
-
-    stream.write_all(request.as_bytes()).expect("write request");
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-    response
 }

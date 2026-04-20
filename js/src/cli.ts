@@ -1,4 +1,4 @@
-import { runFolderServer } from './index.js';
+import { runDirbase } from './index.js';
 
-const code = await runFolderServer(process.argv.slice(2));
+const code = await runDirbase(process.argv.slice(2));
 process.exit(code);

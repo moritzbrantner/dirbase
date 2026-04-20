@@ -1,6 +1,6 @@
-# folder-server
+# dirbase
 
-`folder-server` is a small Rust API server inspired by `json-server`, but built for an **entire folder** of JSON files instead of a single JSON document.
+`dirbase` is a small Rust API server for a directory-based JSON datastore. It takes the `json-server` idea and applies it to an **entire folder** of JSON files instead of a single JSON document.
 
 ## Idea
 
@@ -10,7 +10,7 @@
 - the file name becomes the route name,
 - writes are persisted back to the same file.
 
-You can point `folder-server` directly at either a folder or a single JSON database file by passing the path positionally. In file mode, each top-level key in the file is served as a resource, like `json-server`.
+You can point `dirbase` directly at either a folder or a single JSON database file by passing the path positionally. In file mode, each top-level key in the file is served as a resource, like `json-server`.
 
 So if the folder contains:
 
@@ -45,7 +45,7 @@ you get:
 - `POST /{resource}` appends a new object to the array and auto-generates a numeric primary key when none is provided.
 - `PUT`, `PATCH`, and `DELETE` mutate the corresponding array item and persist changes to disk.
 - For object resources, `PUT /{resource}` replaces the full object and `PATCH /{resource}` merges fields.
-- Passing a positional path makes `folder-server` inspect the filesystem and choose file or folder mode automatically.
+- Passing a positional path makes `dirbase` inspect the filesystem and choose file or folder mode automatically.
 - If the positional path does not exist yet, it is treated as a folder unless it ends in `.json`.
 - `--log` enables request logging and `--logname <path>` selects the log output file (default `requests.log`).
 - `--readonly` disables mutation routes and only serves `GET` endpoints.
@@ -129,7 +129,7 @@ curl -X POST http://127.0.0.1:4444/users \
 
 ## Schema files
 
-`folder-server` supports both `schema.json` and `schema.dbml`.
+`dirbase` supports both `schema.json` and `schema.dbml`.
 
 - `schema.json` is the editable, preferred format.
 - `schema.dbml` is still supported for compatibility.
@@ -210,7 +210,7 @@ bun pm pack
 
 1. bundle `src/index.ts` and `src/cli.ts` using esbuild,
 2. compile Rust in release mode,
-3. copy the resulting `folder-server` binary into `js/bin/` so the package can execute it.
+3. copy the resulting `dirbase` binary into `js/bin/` so the package can execute it.
 
 ### Publish pipeline
 
@@ -224,7 +224,7 @@ A GitHub Actions workflow is provided at `.github/workflows/rust-to-bun.yml`.
 Once published, users can run:
 
 ```bash
-bunx --bun folder-server ./data --bind 127.0.0.1:4444
+bunx --bun dirbase ./data --bind 127.0.0.1:4444
 ```
 
 ## Notes
@@ -261,9 +261,21 @@ Before committing or opening a PR, always run linting and tests:
 ```bash
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test
+cargo test --all-features -- --test-threads=1
 
 `cargo build` and `cargo test` both regenerate the overview assets when `ui/src/` or the UI build configuration changes. No separate `cd ui && bun run build` step is required.
+```
+
+### Coverage
+
+Coverage is reported separately from the fast PR test commands so it can guide test expansion without making local iteration slower.
+
+```bash
+cargo llvm-cov --all-features --summary-only -- --test-threads=1
+cargo llvm-cov --all-features --lcov --output-path target/llvm-cov/lcov.info -- --test-threads=1
+
+cd ui
+bun run test:coverage
 ```
 
 ## Benchmarking against typicode/json-server

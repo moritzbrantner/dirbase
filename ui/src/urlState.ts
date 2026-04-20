@@ -132,7 +132,11 @@ export function resetTableState(resource: string, view: OverviewView = 'explore'
 }
 
 export function nextSorting(current: SortDescriptor[], columnId: string, multiSort: boolean): SortDescriptor[] {
-  const previous = multiSort ? [...current] : [];
+  const previous = multiSort
+    ? [...current]
+    : current.find((entry) => entry.id === columnId)
+      ? [current.find((entry) => entry.id === columnId)!]
+      : [];
   const index = previous.findIndex((entry) => entry.id === columnId);
   if (index === -1) {
     previous.push({ id: columnId, desc: false });

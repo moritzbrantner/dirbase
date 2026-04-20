@@ -25,7 +25,7 @@ def render_mode(summary: dict, mode: str) -> list[str]:
     lines = [
         f"## {mode_title(mode)}",
         "",
-        "| Scenario | Category | folder-server req/s | json-server req/s | json-server speedup | folder-server latency (ms) | json-server latency (ms) | folder-server slower |",
+        "| Scenario | Category | dirbase req/s | json-server req/s | json-server speedup | dirbase latency (ms) | json-server latency (ms) | dirbase slower |",
         "|---|---|---:|---:|---:|---:|---:|---:|",
     ]
 
@@ -73,7 +73,7 @@ def render_report(summary: dict) -> str:
     dataset = summary["dataset"]
 
     lines = [
-        "# Benchmark report: folder-server vs json-server",
+        "# Benchmark report: dirbase vs json-server",
         "",
         f"Generated: {generated_at}",
         "",
@@ -117,7 +117,7 @@ def render_report(summary: dict) -> str:
         else:
             lines.append(
                 f"- `{scenario['label']}` ({scenario['category']}): "
-                f"`folder-server {scenario['folder_path']}` vs `json-server {scenario['json_server_path']}`"
+                f"`dirbase {scenario['folder_path']}` vs `json-server {scenario['json_server_path']}`"
             )
 
     lines.append("")

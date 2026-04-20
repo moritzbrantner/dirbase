@@ -1,0 +1,1 @@
+require('./schema.spec.ts');

@@ -156,10 +156,10 @@ pushd "${ROOT_DIR}" >/dev/null
 cargo build --release >/dev/null
 popd >/dev/null
 
-"${ROOT_DIR}/target/release/folder-server" \
+"${ROOT_DIR}/target/release/dirbase" \
   --folder "${DATA_DIR}/folder" \
   --bind "127.0.0.1:${FOLDER_PORT}" \
-  >"${WORK_DIR}/folder-server.log" 2>&1 &
+  >"${WORK_DIR}/dirbase.log" 2>&1 &
 FOLDER_PID=$!
 
 bunx --bun "json-server@${JSON_SERVER_VERSION}" \
@@ -181,8 +181,8 @@ done
 
 if [[ "${READY:-0}" -ne 1 ]]; then
   echo "Servers did not become ready in time." >&2
-  echo "--- folder-server log ---" >&2
-  cat "${WORK_DIR}/folder-server.log" >&2 || true
+  echo "--- dirbase log ---" >&2
+  cat "${WORK_DIR}/dirbase.log" >&2 || true
   echo "--- json-server log ---" >&2
   cat "${WORK_DIR}/json-server.log" >&2 || true
   exit 1

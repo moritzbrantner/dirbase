@@ -2,9 +2,9 @@ use std::process::Command;
 
 #[test]
 fn prints_help_when_no_arguments_are_provided() {
-    let output = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+    let output = Command::new(env!("CARGO_BIN_EXE_dirbase"))
         .output()
-        .expect("run folder-server without arguments");
+        .expect("run dirbase without arguments");
 
     assert!(output.status.success());
 

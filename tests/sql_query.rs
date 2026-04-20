@@ -1,21 +1,8 @@
-use std::{
-    io::{Read, Write},
-    net::TcpStream,
-    process::{Child, Command, Stdio},
-    thread,
-    time::{Duration, Instant},
+mod support;
+
+use support::{
+    http_get, http_post_json, parse_http_body, spawn_folder_server, spawn_folder_server_with_args,
 };
-
-struct ChildGuard {
-    child: Child,
-}
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
 
 #[test]
 fn sql_get_works_in_readonly_mode() {
@@ -31,22 +18,10 @@ fn sql_get_works_in_readonly_mode() {
     std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
         .expect("write users json");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3010")
-        .arg("--readonly")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
-
-    wait_for_server("127.0.0.1:3010", Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), true);
 
     let response = http_get(
-        "127.0.0.1:3010",
+        &bind_addr,
         "/sql?q=SELECT%20id,name%20FROM%20users%20WHERE%20role%20=%20'admin'%20ORDER%20BY%20id%20DESC%20LIMIT%201",
     );
 
@@ -78,28 +53,17 @@ fn sql_post_rejects_non_select_and_unsupported_constructs() {
     std::fs::write(teams_path, serde_json::to_string_pretty(&teams).expect("serialize teams"))
         .expect("write teams json");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3011")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
-
-    wait_for_server("127.0.0.1:3011", Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
     let delete_response =
-        http_post_json("127.0.0.1:3011", "/sql", serde_json::json!({"query": "DELETE FROM users"}));
+        http_post_json(&bind_addr, "/sql", serde_json::json!({"query": "DELETE FROM users"}));
     assert!(delete_response.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{delete_response}");
     let delete_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&delete_response)).expect("delete error json");
     assert_eq!(delete_payload["code"], "unsupported_feature");
 
     let join_response = http_post_json(
-        "127.0.0.1:3011",
+        &bind_addr,
         "/sql",
         serde_json::json!({"query": "SELECT * FROM users u LEFT JOIN teams t ON u.id=t.user_id"}),
     );
@@ -107,52 +71,6 @@ fn sql_post_rejects_non_select_and_unsupported_constructs() {
     let join_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&join_response)).expect("join error json");
     assert_eq!(join_payload["code"], "unsupported_feature");
-}
-
-fn wait_for_server(addr: &str, timeout: Duration) {
-    let start = Instant::now();
-    loop {
-        if TcpStream::connect(addr).is_ok() {
-            return;
-        }
-
-        if start.elapsed() >= timeout {
-            panic!("server did not start in time at {addr}");
-        }
-
-        thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn http_get(addr: &str, path: &str) -> String {
-    let mut stream = TcpStream::connect(addr).expect("connect to test server");
-    let request = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).expect("write GET request");
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read GET response");
-    response
-}
-
-fn http_post_json(addr: &str, path: &str, payload: serde_json::Value) -> String {
-    let mut stream = TcpStream::connect(addr).expect("connect to test server");
-    let body = payload.to_string();
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream.write_all(request.as_bytes()).expect("write POST request");
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read POST response");
-    response
-}
-
-fn parse_http_body(response: &str) -> &str {
-    response
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body)
-        .expect("response should contain header/body separator")
 }
 
 #[test]
@@ -182,21 +100,10 @@ fn sql_supports_is_null_and_projection_and_coercion() {
     )
     .expect("write schema");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3012")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
-
-    wait_for_server("127.0.0.1:3012", Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
     let response = http_get(
-        "127.0.0.1:3012",
+        &bind_addr,
         "/sql?q=SELECT%20id,name%20FROM%20users%20WHERE%20age%20%3E%2025%20AND%20nickname%20IS%20NULL",
     );
 
@@ -214,24 +121,13 @@ fn sql_rejects_ambiguous_null_and_invalid_identifiers() {
 
     std::fs::write(users_path, r#"[{"id":1,"name":"Ada"}]"#).expect("write users");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3013")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
-
-    wait_for_server("127.0.0.1:3013", Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
     let null_cmp =
-        http_get("127.0.0.1:3013", "/sql?q=SELECT%20*%20FROM%20users%20WHERE%20name%20=%20NULL");
+        http_get(&bind_addr, "/sql?q=SELECT%20*%20FROM%20users%20WHERE%20name%20=%20NULL");
     assert!(null_cmp.contains("400 Bad Request"), "{null_cmp}");
 
-    let bad_identifier = http_get("127.0.0.1:3013", "/sql?q=SELECT%20*%20FROM%20users$");
+    let bad_identifier = http_get(&bind_addr, "/sql?q=SELECT%20*%20FROM%20users$");
     assert!(bad_identifier.contains("400 Bad Request"), "{bad_identifier}");
 }
 
@@ -241,26 +137,15 @@ fn sql_returns_structured_codes_for_invalid_and_unknown_table() {
     std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
         .expect("write users");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3014")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3014", Duration::from_secs(5));
-
-    let invalid_sql = http_get("127.0.0.1:3014", "/sql?q=SELECT%20FROM");
+    let invalid_sql = http_get(&bind_addr, "/sql?q=SELECT%20FROM");
     assert!(invalid_sql.contains("400 Bad Request"), "{invalid_sql}");
     let invalid_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&invalid_sql)).expect("invalid sql payload");
     assert_eq!(invalid_payload["code"], "invalid_sql");
 
-    let unknown_table = http_get("127.0.0.1:3014", "/sql?q=SELECT%20*%20FROM%20missing");
+    let unknown_table = http_get(&bind_addr, "/sql?q=SELECT%20*%20FROM%20missing");
     assert!(unknown_table.contains("404 Not Found"), "{unknown_table}");
     let unknown_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&unknown_table)).expect("unknown table payload");
@@ -280,28 +165,61 @@ fn sql_enforces_limit_guards() {
     std::fs::write(users_path, serde_json::to_string_pretty(&users).expect("serialize users"))
         .expect("write users json");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg("127.0.0.1:3015")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start folder-server");
-    let _child = ChildGuard { child };
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
 
-    wait_for_server("127.0.0.1:3015", Duration::from_secs(5));
-
-    let over_limit = http_get("127.0.0.1:3015", "/sql?q=SELECT%20*%20FROM%20users%20LIMIT%201001");
+    let over_limit = http_get(&bind_addr, "/sql?q=SELECT%20*%20FROM%20users%20LIMIT%201001");
     assert!(over_limit.contains("400 Bad Request"), "{over_limit}");
     let over_limit_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&over_limit)).expect("over limit payload");
     assert_eq!(over_limit_payload["code"], "unsupported_feature");
 
-    let no_limit = http_get("127.0.0.1:3015", "/sql?q=SELECT%20*%20FROM%20users");
+    let no_limit = http_get(&bind_addr, "/sql?q=SELECT%20*%20FROM%20users");
     assert!(no_limit.contains("400 Bad Request"), "{no_limit}");
     let no_limit_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&no_limit)).expect("row count guard payload");
     assert_eq!(no_limit_payload["code"], "unsupported_feature");
+}
+
+#[test]
+fn sql_custom_limit_guards_apply_to_get_and_post() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let users = serde_json::json!([
+        {"id": 1, "name": "Ada"},
+        {"id": 2, "name": "Grace"},
+        {"id": 3, "name": "Linus"}
+    ]);
+    std::fs::write(
+        temp.path().join("users.json"),
+        serde_json::to_string_pretty(&users).expect("serialize users"),
+    )
+    .expect("write users");
+
+    let (_child, scan_addr) =
+        spawn_folder_server_with_args(temp.path(), &["--max-sql-scan-rows", "2"]);
+    let scan_guard = http_get(&scan_addr, "/sql?q=SELECT%20*%20FROM%20users%20LIMIT%201");
+    assert!(scan_guard.starts_with("HTTP/1.1 413 Payload Too Large\r\n"), "{scan_guard}");
+    let scan_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&scan_guard)).expect("scan guard payload");
+    assert_eq!(scan_payload["code"], "unsupported_feature");
+
+    let (_child, selected_addr) = spawn_folder_server_with_args(
+        temp.path(),
+        &["--max-sql-scan-rows", "10", "--max-sql-selected-rows", "1"],
+    );
+    let selected_guard = http_post_json(
+        &selected_addr,
+        "/sql",
+        serde_json::json!({"query": "SELECT * FROM users LIMIT 2"}),
+    );
+    assert!(selected_guard.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{selected_guard}");
+    let selected_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&selected_guard)).expect("selected guard payload");
+    assert_eq!(selected_payload["code"], "unsupported_feature");
+    assert!(
+        selected_payload["error"]
+            .as_str()
+            .expect("error")
+            .contains("LIMIT exceeds max selected rows (1)"),
+        "{selected_guard}"
+    );
 }

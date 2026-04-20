@@ -56,7 +56,7 @@ Table posts {
     .expect("write schema");
 
     let bind_addr = reserve_bind_addr();
-    let child = Command::new(env!("CARGO_BIN_EXE_folder-server"))
+    let child = Command::new(env!("CARGO_BIN_EXE_dirbase"))
         .arg("--folder")
         .arg(temp.path())
         .arg("--bind")
@@ -64,7 +64,7 @@ Table posts {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("start folder-server");
+        .expect("start dirbase");
     let _child = ChildGuard { child };
 
     wait_for_server(&bind_addr, Duration::from_secs(5));

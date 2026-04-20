@@ -1,8 +1,8 @@
-import { rm } from 'node:fs/promises';
+const { rm } = require('node:fs/promises');
+const { join } = require('node:path');
+const { expect, test } = require('@playwright/test');
 
-import { expect, test } from '@playwright/test';
-
-const FIXTURE_SCHEMA_PATH = new URL('./fixtures/schema.json', import.meta.url);
+const FIXTURE_SCHEMA_PATH = join(__dirname, 'fixtures', 'schema.json');
 
 const BASE_SCHEMA = {
   tables: {
@@ -32,6 +32,7 @@ test.describe('schema editor', () => {
 
   test('persists schema edits and reloads them from the server', async ({ page, request }) => {
     await page.goto('/?resource=members');
+    await page.getByRole('button', { name: 'Schema' }).click();
 
     const editor = page.locator('.schema-editor');
     await expect(editor).toHaveValue(/"team_id"/);
@@ -56,7 +57,7 @@ test.describe('schema editor', () => {
     const saveResponsePromise = page.waitForResponse(
       (response) => response.url().endsWith('/schema') && response.request().method() === 'PUT'
     );
-    await page.getByRole('button', { name: 'Save schema' }).click();
+    await page.getByRole('button', { name: 'Save' }).click();
     const saveResponse = await saveResponsePromise;
 
     expect(saveResponse.ok()).toBeTruthy();
@@ -68,12 +69,14 @@ test.describe('schema editor', () => {
     expect(schemaPayload.tables.members.foreign_keys.city.target_column).toBe('name');
 
     await page.reload();
+    await page.getByRole('button', { name: 'Schema' }).click();
     await expect(editor).toHaveValue(/"city"/);
     await expect(editor).toHaveValue(/"target_column": "name"/);
   });
 
   test('reloads the server schema and discards unsaved textarea changes', async ({ page }) => {
     await page.goto('/?resource=members');
+    await page.getByRole('button', { name: 'Schema' }).click();
 
     const editor = page.locator('.schema-editor');
     await expect(editor).toHaveValue(/"team_id"/);
@@ -92,7 +95,7 @@ test.describe('schema editor', () => {
 }`);
     await expect(editor).toHaveValue(/"city"/);
 
-    await page.getByRole('button', { name: 'Reload schema' }).click();
+    await page.getByRole('button', { name: 'Reload' }).click();
 
     await expect(page.getByText('Schema reloaded from the server.')).toBeVisible();
     await expect(editor).toHaveValue(/"team_id"/);
@@ -106,6 +109,7 @@ test.describe('schema editor', () => {
     request
   }) => {
     await page.goto('/?resource=members');
+    await page.getByRole('button', { name: 'Schema' }).click();
 
     const editor = page.locator('.schema-editor');
     await editor.fill(`{
@@ -124,11 +128,11 @@ test.describe('schema editor', () => {
     const saveResponsePromise = page.waitForResponse(
       (response) => response.url().endsWith('/schema') && response.request().method() === 'PUT'
     );
-    await page.getByRole('button', { name: 'Save schema' }).click();
+    await page.getByRole('button', { name: 'Save' }).click();
     const saveResponse = await saveResponsePromise;
 
     expect(saveResponse.status()).toBe(400);
-    await expect(page.getByText(/targets unknown table 'missing'/)).toBeVisible();
+    await expect(page.getByTestId('inspector-panel').getByText(/targets unknown table 'missing'/)).toBeVisible();
 
     const schemaResponse = await request.get('/schema');
     expect(schemaResponse.ok()).toBeTruthy();

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(__dirname, '..');
 const platformKey = process.env.TARGET_PLATFORM_KEY ?? `${process.platform}-${process.arch}`;
-const binaryName = process.env.TARGET_BINARY_NAME ?? (process.platform === 'win32' ? 'folder-server.exe' : 'folder-server');
+const binaryName = process.env.TARGET_BINARY_NAME ?? (process.platform === 'win32' ? 'dirbase.exe' : 'dirbase');
 const cargoTarget = process.env.CARGO_BUILD_TARGET ? join(process.env.CARGO_BUILD_TARGET, 'release') : 'release';
 const source = join(packageRoot, '..', 'target', cargoTarget, binaryName);
 const outDir = join(packageRoot, 'bin', platformKey);

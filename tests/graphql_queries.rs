@@ -1,22 +1,13 @@
 use std::{
-    fs,
-    io::{Read, Write},
-    net::TcpStream,
-    process::{Child, Command, Stdio},
-    thread,
+    fs, thread,
     time::{Duration, Instant},
 };
 
-struct ChildGuard {
-    child: Child,
-}
+mod support;
 
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
+use support::{
+    ChildGuard, http_request, http_request_with_headers, parse_http_body, wait_for_http,
+};
 
 #[test]
 fn graphql_executes_basic_queries_and_serves_graphiql() {
@@ -55,11 +46,7 @@ Table posts {
     )
     .expect("write schema");
 
-    let bind_addr = "127.0.0.1:3031".to_string();
-    let child = spawn_server(temp.path(), &bind_addr, false);
-    let _child = ChildGuard { child };
-
-    wait_for_server(&bind_addr, Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
 
     let html = http_request_with_headers(
         &bind_addr,
@@ -105,10 +92,7 @@ Table posts {
     )
     .expect("write schema");
 
-    let bind_addr = "127.0.0.1:3032".to_string();
-    let child = spawn_server(temp.path(), &bind_addr, false);
-    let _child = ChildGuard { child };
-    wait_for_server(&bind_addr, Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
 
     let payload = graphql_json(
         &bind_addr,
@@ -140,10 +124,7 @@ fn graphql_collection_query_fields_support_filter_sort_and_pagination() {
     )
     .expect("write users");
 
-    let bind_addr = "127.0.0.1:3040".to_string();
-    let child = spawn_server(temp.path(), &bind_addr, false);
-    let _child = ChildGuard { child };
-    wait_for_server(&bind_addr, Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
 
     let payload = graphql_json(
         &bind_addr,
@@ -197,10 +178,7 @@ fn graphql_respects_declared_primary_keys_and_manual_relations() {
     )
     .expect("write posts");
 
-    let bind_addr = "127.0.0.1:3033".to_string();
-    let child = spawn_server(temp.path(), &bind_addr, false);
-    let _child = ChildGuard { child };
-    wait_for_server(&bind_addr, Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
 
     let payload = graphql_json(
         &bind_addr,
@@ -240,10 +218,7 @@ fn graphql_keeps_relation_tables_as_explicit_collections() {
     )
     .expect("write relation");
 
-    let bind_addr = "127.0.0.1:3034".to_string();
-    let child = spawn_server(temp.path(), &bind_addr, false);
-    let _child = ChildGuard { child };
-    wait_for_server(&bind_addr, Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
 
     let payload = graphql_json(
         &bind_addr,
@@ -267,10 +242,7 @@ fn graphql_types_top_level_object_resources() {
     )
     .expect("write profile");
 
-    let bind_addr = "127.0.0.1:3035".to_string();
-    let child = spawn_server(temp.path(), &bind_addr, false);
-    let _child = ChildGuard { child };
-    wait_for_server(&bind_addr, Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
 
     let payload = graphql_json(&bind_addr, r#"{ profile { name theme settings } }"#);
     assert_eq!(payload["data"]["profile"]["name"], "Ada");
@@ -309,10 +281,7 @@ fn graphql_treats_schema_aware_object_resources_as_objects() {
     )
     .expect("write profile");
 
-    let bind_addr = "127.0.0.1:3041".to_string();
-    let child = spawn_server(temp.path(), &bind_addr, false);
-    let _child = ChildGuard { child };
-    wait_for_server(&bind_addr, Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
 
     let payload = graphql_json(
         &bind_addr,
@@ -379,10 +348,7 @@ fn graphql_sanitizes_resource_and_field_names() {
     )
     .expect("write posts");
 
-    let bind_addr = "127.0.0.1:3036".to_string();
-    let child = spawn_server(temp.path(), &bind_addr, false);
-    let _child = ChildGuard { child };
-    wait_for_server(&bind_addr, Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
 
     let payload = graphql_json(
         &bind_addr,
@@ -399,10 +365,7 @@ fn graphql_reports_name_collisions_with_clear_errors() {
     fs::write(temp.path().join("team-a.json"), "[{\"id\":1}]\n").expect("write team-a");
     fs::write(temp.path().join("team_a.json"), "[{\"id\":2}]\n").expect("write team_a");
 
-    let bind_addr = "127.0.0.1:3037".to_string();
-    let child = spawn_server(temp.path(), &bind_addr, false);
-    let _child = ChildGuard { child };
-    wait_for_server(&bind_addr, Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
 
     let response = graphql_raw(&bind_addr, r#"{ __schema { queryType { name } } }"#);
     assert!(response.starts_with("HTTP/1.1 500 Internal Server Error\r\n"), "{response}");
@@ -425,10 +388,7 @@ fn graphql_schema_invalidates_after_rest_writes_and_file_watch_events() {
     )
     .expect("write users");
 
-    let bind_addr = "127.0.0.1:3038".to_string();
-    let child = spawn_server(temp.path(), &bind_addr, false);
-    let _child = ChildGuard { child };
-    wait_for_server(&bind_addr, Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
 
     let before = graphql_json(&bind_addr, r#"{ __type(name: "UsersRecord") { fields { name } } }"#);
     assert!(
@@ -468,15 +428,56 @@ fn graphql_schema_invalidates_after_rest_writes_and_file_watch_events() {
 }
 
 #[test]
+fn watcher_handles_file_add_delete_invalid_json_and_recovery() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let users_path = temp.path().join("users.json");
+    let teams_path = temp.path().join("teams.json");
+    fs::write(&users_path, "[{\"id\":1,\"name\":\"Ada\"}]\n").expect("write users");
+
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
+
+    let initial_root = http_request(&bind_addr, "GET", "/", None);
+    assert!(initial_root.contains("\"users\""), "{initial_root}");
+    assert!(!initial_root.contains("\"teams\""), "{initial_root}");
+
+    fs::write(&teams_path, "[{\"id\":10,\"name\":\"Core\"}]\n").expect("write teams");
+    let added_root = wait_for_http(&bind_addr, "GET", "/", None, |response| {
+        response.starts_with("HTTP/1.1 200 OK\r\n") && response.contains("\"teams\"")
+    });
+    assert!(added_root.contains("\"users\""), "{added_root}");
+
+    fs::remove_file(&users_path).expect("delete users");
+    let users_missing = wait_for_http(&bind_addr, "GET", "/users", None, |response| {
+        response.starts_with("HTTP/1.1 404 Not Found\r\n")
+    });
+    assert!(users_missing.starts_with("HTTP/1.1 404 Not Found\r\n"), "{users_missing}");
+
+    fs::write(&teams_path, "[{\"id\":10").expect("write invalid teams");
+    let not_ready = wait_for_http(&bind_addr, "GET", "/readyz", None, |response| {
+        response.starts_with("HTTP/1.1 503 Service Unavailable\r\n")
+    });
+    assert!(not_ready.contains("\"ready\":false"), "{not_ready}");
+
+    fs::write(&teams_path, "[{\"id\":10,\"name\":\"Core\",\"city\":\"Berlin\"}]\n")
+        .expect("fix teams");
+    let recovered = wait_for_http(&bind_addr, "GET", "/readyz", None, |response| {
+        response.starts_with("HTTP/1.1 200 OK\r\n")
+    });
+    assert!(recovered.contains("\"ready\":true"), "{recovered}");
+
+    let teams_response = wait_for_http(&bind_addr, "GET", "/teams", None, |response| {
+        response.starts_with("HTTP/1.1 200 OK\r\n") && response.contains("\"city\":\"Berlin\"")
+    });
+    assert!(teams_response.contains("\"name\":\"Core\""), "{teams_response}");
+}
+
+#[test]
 fn graphql_queries_work_in_readonly_mode_and_mutations_are_rejected() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
         .expect("write users");
 
-    let bind_addr = "127.0.0.1:3039".to_string();
-    let child = spawn_server(temp.path(), &bind_addr, true);
-    let _child = ChildGuard { child };
-    wait_for_server(&bind_addr, Duration::from_secs(5));
+    let (_child, bind_addr) = spawn_server(temp.path(), true);
 
     let query_payload = graphql_json(&bind_addr, r#"{ users { id name } }"#);
     assert_eq!(query_payload["data"]["users"][0]["name"], "Ada");
@@ -486,33 +487,8 @@ fn graphql_queries_work_in_readonly_mode_and_mutations_are_rejected() {
     assert!(mutation_payload.get("errors").is_some(), "{mutation_payload}");
 }
 
-fn spawn_server(folder: &std::path::Path, bind_addr: &str, readonly: bool) -> Child {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_folder-server"));
-    command
-        .arg("--folder")
-        .arg(folder)
-        .arg("--bind")
-        .arg(bind_addr)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
-    if readonly {
-        command.arg("--readonly");
-    }
-
-    command.spawn().expect("start folder-server")
-}
-
-fn wait_for_server(addr: &str, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        match TcpStream::connect(addr) {
-            Ok(_) => return,
-            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
-            Err(err) => panic!("server at {addr} did not start in time: {err}"),
-        }
-    }
+fn spawn_server(folder: &std::path::Path, readonly: bool) -> (ChildGuard, String) {
+    support::spawn_folder_server(folder, readonly)
 }
 
 fn wait_for_graphql_json<F>(addr: &str, query: &str, predicate: F) -> serde_json::Value
@@ -546,45 +522,4 @@ fn graphql_raw(addr: &str, query: &str) -> String {
         "/graphql",
         Some(&format!(r#"{{"query":{}}}"#, serde_json::to_string(query).expect("query json"))),
     )
-}
-
-fn http_request(addr: &str, method: &str, path: &str, body: Option<&str>) -> String {
-    http_request_with_headers(addr, method, path, None, body)
-}
-
-fn http_request_with_headers(
-    addr: &str,
-    method: &str,
-    path: &str,
-    extra_headers: Option<&str>,
-    body: Option<&str>,
-) -> String {
-    let mut stream = TcpStream::connect(addr).expect("connect to server");
-    let payload = body.unwrap_or("");
-
-    let request = if body.is_some() {
-        format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}",
-            extra_headers.unwrap_or(""),
-            payload.len()
-        )
-    } else {
-        format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{}\r\n",
-            extra_headers.unwrap_or("")
-        )
-    };
-
-    stream.write_all(request.as_bytes()).expect("write request");
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-    response
-}
-
-fn parse_http_body(response: &str) -> &str {
-    response
-        .split_once("\r\n\r\n")
-        .map(|(_, body)| body)
-        .unwrap_or_else(|| panic!("missing HTTP body in response: {response}"))
 }

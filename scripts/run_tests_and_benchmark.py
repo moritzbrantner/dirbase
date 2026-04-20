@@ -228,8 +228,8 @@ def benchmark_mode_snapshot(summary: dict, mode: str) -> dict:
 def render_benchmark_table(summary: dict, mode: str) -> list[str]:
     lines = [
         (
-            "| Scenario | Category | folder-server req/s | json-server req/s | json-server speedup "
-            "| folder-server latency (ms) | json-server latency (ms) | folder-server slower |"
+            "| Scenario | Category | dirbase req/s | json-server req/s | json-server speedup "
+            "| dirbase latency (ms) | json-server latency (ms) | dirbase slower |"
         ),
         "|---|---|---:|---:|---:|---:|---:|---:|",
     ]
@@ -323,11 +323,11 @@ def render_report(
                 "## Benchmark highlights",
                 "",
                 (
-                    f"- With warm-up: folder-server was faster in {with_warmup['faster']} scenarios, "
+                    f"- With warm-up: dirbase was faster in {with_warmup['faster']} scenarios, "
                     f"slower in {with_warmup['slower']}, tied in {with_warmup['tied']}."
                 ),
                 (
-                    f"- Without warm-up: folder-server was faster in {without_warmup['faster']} scenarios, "
+                    f"- Without warm-up: dirbase was faster in {without_warmup['faster']} scenarios, "
                     f"slower in {without_warmup['slower']}, tied in {without_warmup['tied']}."
                 ),
                 "",

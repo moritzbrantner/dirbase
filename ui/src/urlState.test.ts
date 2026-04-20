@@ -1,4 +1,10 @@
-import { buildBrowserQueryString, buildResourceSearchParams, parseOverviewState } from './urlState';
+import {
+  buildBrowserQueryString,
+  buildResourceSearchParams,
+  nextSorting,
+  parseOverviewState,
+  resetTableState
+} from './urlState';
 
 describe('overview URL state', () => {
   it('hydrates state from the browser query string', () => {
@@ -68,5 +74,36 @@ describe('overview URL state', () => {
     expect(params.toString()).toBe(
       'page=1&per_page=25&deleted_at%3AisNull=true&published_at%3AisNotNull=true'
     );
+  });
+
+  it('falls back for invalid pagination values', () => {
+    const state = parseOverviewState('?resource=posts&page=0&per_page=abc');
+
+    expect(state.page).toBe(1);
+    expect(state.perPage).toBe(25);
+  });
+
+  it('resets table state for a resource and optional view', () => {
+    expect(resetTableState('members', 'raw')).toEqual({
+      resource: 'members',
+      view: 'raw',
+      page: 1,
+      perPage: 25,
+      filters: [],
+      sorting: [],
+      embeds: []
+    });
+  });
+
+  it('cycles sorting through ascending, descending, and removed states', () => {
+    expect(nextSorting([], 'name', false)).toEqual([{ id: 'name', desc: false }]);
+    expect(nextSorting([{ id: 'name', desc: false }], 'name', false)).toEqual([
+      { id: 'name', desc: true }
+    ]);
+    expect(nextSorting([{ id: 'name', desc: true }], 'name', false)).toEqual([]);
+    expect(nextSorting([{ id: 'name', desc: false }], 'age', true)).toEqual([
+      { id: 'name', desc: false },
+      { id: 'age', desc: false }
+    ]);
   });
 });

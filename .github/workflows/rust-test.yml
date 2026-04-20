@@ -32,4 +32,4 @@ jobs:
       - name: Run tests
         run: |
           rm -rf ui/dist
-          cargo test --all-features --verbose
+          cargo test --all-features --verbose -- --test-threads=1

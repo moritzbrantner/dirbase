@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "folder-server",
+      "name": "dirbase",
       "devDependencies": {
         "esbuild": "^0.25.0",
       },
