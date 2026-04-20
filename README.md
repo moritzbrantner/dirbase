@@ -69,6 +69,24 @@ you get:
 | SQL | Yes | No | `SELECT`, projection, `WHERE`, `ORDER BY`, `LIMIT/OFFSET` | Schema-backed `INNER JOIN` | Query endpoint at `/sql` |
 | Overview UI | Yes | Schema editor only | Explorer drives REST params | Live-updating relation map | Root HTML at `GET /` |
 
+## Why dirbase?
+
+`dirbase` is for projects where the local JSON files are the source of truth and should become a usable API immediately. Compared with `json-server`, it keeps each resource in its own file, watches the folder for changes, infers schema metadata, supports schema-backed relations, exposes REST, GraphQL, and SQL read paths over the same data, and includes operational endpoints such as health checks and metrics.
+
+| Capability | dirbase | json-server | Mockoon | Prism |
+| --- | --- | --- | --- | --- |
+| Folder of JSON files as API | Yes | No | Configured mocks | No |
+| Single `db.json` mode | Yes | Yes | No | No |
+| Persisted CRUD writes | Yes | Yes | Mock-oriented | No |
+| REST API | Yes | Yes | Yes | Yes |
+| GraphQL API | Yes, read-only | No | No | No |
+| SQL endpoint | Yes, read-only | No | No | No |
+| File watching | Yes | Limited / version-dependent | No | No |
+| Schema inference | Yes | No | No | OpenAPI-driven |
+| Best fit | Local JSON datastore API | Simple fake REST API | Rich mock scenarios | Contract-first API mocking |
+
+See [`BENCHMARKS.md`](./BENCHMARKS.md) for comparison notes, benchmark methodology, and reproduction commands.
+
 ## Quick start
 
 Local Rust builds embed the overview UI. Install Bun first so `cargo build`, `cargo run`, and `cargo test` can auto-generate `ui/dist/overview.css` and `ui/dist/overview.js`.
@@ -282,5 +300,6 @@ bun run test:coverage
 
 A reproducible benchmark script is available at [`scripts/benchmark_vs_json_server.sh`](./scripts/benchmark_vs_json_server.sh).
 
+- Comparison guide and methodology: [`BENCHMARKS.md`](./BENCHMARKS.md)
 - Usage and methodology: [`benchmarks/README.md`](./benchmarks/README.md)
 - Historical comparison note: [`benchmarks/comparison.md`](./benchmarks/comparison.md)

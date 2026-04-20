@@ -48,7 +48,7 @@ def render_mode(summary: dict, mode: str) -> list[str]:
     lines.extend(
         [
             "",
-            "| Scenario | folder non-2xx | folder errors | folder timeouts | json-server non-2xx | json-server errors | json-server timeouts |",
+            "| Scenario | dirbase non-2xx | dirbase errors | dirbase timeouts | json-server non-2xx | json-server errors | json-server timeouts |",
             "|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
