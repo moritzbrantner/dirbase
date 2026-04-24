@@ -22,12 +22,7 @@ import {
 } from './overview/overviewAppUtils';
 import { invalidateOverviewQueries } from './overview/queryClient';
 import { RelationMap } from './overview/relationMap';
-import {
-  SummaryCard,
-  ToastViewport,
-  groupResources,
-  renderLiveUpdateLabel
-} from './overview/shared';
+import { ToastViewport, groupResources, renderLiveUpdateLabel } from './overview/shared';
 import { useOverviewLiveUpdates } from './overview/useOverviewLiveUpdates';
 import { useOverviewSchemaEditor } from './overview/useOverviewSchemaEditor';
 import { useOverviewToasts } from './overview/useOverviewToasts';
@@ -153,6 +148,7 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
   const columnVisibility =
     selectedResource?.name ? preferences.columnVisibility[selectedResource.name] ?? {} : {};
   const groupedResources = groupResources(filterResourcesBySearch(resources, deferredSidebarSearch));
+  const hasActiveQuery = urlState.filters.length > 0 || urlState.sorting.length > 0 || urlState.embeds.length > 0;
 
   useEffect(() => {
     saveOverviewPreferences(window.localStorage, preferences);
@@ -257,71 +253,41 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
 
   return (
     <div className="overview-app-shell">
-      <section className="overview-summary-grid">
-        <SummaryCard
-          label="Resources"
-          value={overviewQuery.isLoading ? null : String(overviewQuery.data?.stats.resource_count ?? 0)}
-          copy="Tables, objects, and scalar resources exposed by the server."
-        />
-        <SummaryCard
-          label="Relations"
-          value={overviewQuery.isLoading ? null : String(overviewQuery.data?.stats.relation_count ?? 0)}
-          copy="Foreign-key links that drive drill-down and embeds."
-        />
-        <SummaryCard
-          label="Rows"
-          value={overviewQuery.isLoading ? null : String(overviewQuery.data?.stats.total_rows ?? 0)}
-          copy="Approximate array rows across table resources."
-        />
-        <SummaryCard
-          label="Source"
-          value={overviewQuery.isLoading ? null : overviewQuery.data?.data_source_kind ?? 'unknown'}
-          copy={overviewQuery.data?.source_rule ?? 'Loading source metadata...'}
-        />
-      </section>
-
       <section className="overview-status-card shell-card">
+        <div className="grid min-w-0 gap-2">
+          <div>
+            <p className="section-title">Workspace</p>
+            <h1 className="text-2xl font-semibold tracking-tight text-stoneink-900">
+              {selectedResource?.name ?? 'dirbase overview'}
+            </h1>
+          </div>
+          <p className="overview-copy">
+            {overviewQuery.data?.source_rule ?? 'Loading source metadata...'}
+          </p>
+          <code className="overview-source-line">{overviewQuery.data?.source_label ?? 'Loading source...'}</code>
+        </div>
         <div className="overview-status-group">
+          <span className="overview-inline-badge">
+            {overviewQuery.data?.stats.resource_count ?? 0} resources
+          </span>
+          <span className="overview-inline-badge">
+            {overviewQuery.data?.stats.relation_count ?? 0} relations
+          </span>
+          <span className="overview-inline-badge">{overviewQuery.data?.stats.total_rows ?? 0} rows</span>
           <span className={`status-pill is-live-${liveUpdates}`}>
-            Live updates: {renderLiveUpdateLabel(liveUpdates)}
+            Live {renderLiveUpdateLabel(liveUpdates)}
           </span>
           {uiState.readonly && <span className="status-pill is-warn">Read-only mode</span>}
           {overviewQuery.data?.schema_enabled && <span className="status-pill">Schema loaded</span>}
-        </div>
-        <div className="overview-status-group">
-          <code className="overview-source-line">{overviewQuery.data?.source_label ?? 'Loading source...'}</code>
           {liveUpdates === 'paused' && (
             <button type="button" className="overview-secondary-button" onClick={retryLiveUpdates}>
               Retry live updates
             </button>
           )}
+          <button type="button" className="overview-secondary-button" onClick={() => toggleMobileSurface('map')}>
+            {preferences.mobileSurface === 'map' ? 'Close map' : 'Open map'}
+          </button>
         </div>
-      </section>
-
-      <section
-        className={`overview-panel shell-card relation-map-panel ${
-          preferences.mobileSurface === 'map' ? 'mobile-drawer-open' : ''
-        }`}
-      >
-        <div className="overview-panel-head">
-          <div>
-            <p className="section-title">Relation map</p>
-            <h2>Drill through resource links</h2>
-          </div>
-          <p className="overview-copy">
-            Click a node to switch resources. Drag from a source column to a target column to stage
-            a schema relationship before saving it.
-          </p>
-        </div>
-        <RelationMap
-          overview={overviewQuery.data ?? null}
-          schemaEdges={schemaEdges}
-          selectedResourceName={selectedResource?.name ?? null}
-          onSelectResource={selectResource}
-          onCreateRelationship={stageRelationship}
-          connectable={!schemaValidationError}
-          loading={overviewQuery.isLoading}
-        />
       </section>
 
       <section className="overview-workspace">
@@ -353,7 +319,7 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
 
           <QuerySummaryBar
             chips={querySummaryChips}
-            hasState={urlState.filters.length > 0 || urlState.sorting.length > 0 || urlState.embeds.length > 0}
+            hasState={hasActiveQuery}
             onClear={() =>
               updateTableState((current) => ({
                 ...current,
@@ -420,6 +386,34 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
             selectResource(relation.source_table, [buildDrilldownFilter(relation.source_column, value)])
           }
         />
+      </section>
+
+      <section
+        className={`relation-map-panel shell-card ${preferences.mobileSurface === 'map' ? 'mobile-drawer-open' : ''}`}
+      >
+        <div className="grid gap-3">
+          <div className="overview-panel-head">
+            <div>
+              <p className="section-title">Relation map</p>
+              <h2 className="text-xl font-semibold tracking-tight text-stoneink-900">Links across resources</h2>
+            </div>
+            <button type="button" className="overview-icon-button" onClick={() => toggleMobileSurface('map')}>
+              Close
+            </button>
+          </div>
+          <p className="overview-copy">
+            Click a node to switch resources. Drag a source column to a target column to stage a schema relationship.
+          </p>
+          <RelationMap
+            overview={overviewQuery.data ?? null}
+            schemaEdges={schemaEdges}
+            selectedResourceName={selectedResource?.name ?? null}
+            onSelectResource={selectResource}
+            onCreateRelationship={stageRelationship}
+            connectable={!schemaValidationError}
+            loading={overviewQuery.isLoading}
+          />
+        </div>
       </section>
 
       <div className="mobile-sticky-actions">

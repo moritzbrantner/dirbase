@@ -73,15 +73,17 @@ Table posts {
 
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(response.contains("content-type: text/html; charset=utf-8"), "{response}");
-    assert!(response.contains("<h1>Visual overview of your data</h1>"), "{response}");
-    assert!(response.contains("Rules of paths"), "{response}");
-    assert!(response.contains("First 60 seconds"), "{response}");
+    assert!(response.contains("<h1>Data workspace</h1>"), "{response}");
+    assert!(response.contains("Routes and quick checks"), "{response}");
+    assert!(!response.contains("Rules of paths"), "{response}");
+    assert!(!response.contains("First 60 seconds"), "{response}");
     assert!(response.contains("Create one row"), "{response}");
     assert!(response.contains("<span class=\"overview-method\">POST</span> /posts"), "{response}");
     assert!(response.contains("id=\"overview-root\""), "{response}");
     assert!(response.contains("data-overview-endpoint=\"/overview.json\""), "{response}");
     assert!(response.contains("href=\"/assets/overview.css\""), "{response}");
     assert!(response.contains("src=\"/assets/overview.js\""), "{response}");
+    assert!(response.contains("Source mode: folder"), "{response}");
     assert!(response.contains("Each valid `*.json` filename becomes `/{resource}`."), "{response}");
     assert!(
         response

@@ -19,7 +19,7 @@ import type {
   ResourceResponse
 } from '../types';
 import { FILTER_OPERATORS, PAGE_SIZE_OPTIONS, createFilter, nextSorting } from '../urlState';
-import { HighlightText, TableSkeleton, renderCapabilityChip, renderCellValue } from './shared';
+import { HighlightText, TableSkeleton, renderCellValue } from './shared';
 
 export function ResourceSidebar({
   groupedResources,
@@ -48,12 +48,13 @@ export function ResourceSidebar({
       <div className="overview-panel-head">
         <div>
           <p className="section-title">Resources</p>
-          <h2>Browse and compare</h2>
+          <h2 className="text-xl font-semibold tracking-tight text-stoneink-900">Browse</h2>
         </div>
+        <span className="overview-inline-badge">
+          {groupedResources.table.length + groupedResources.object.length + groupedResources.value.length} total
+        </span>
       </div>
-      <p className="overview-copy">
-        Resources are REST routes over JSON files or top-level JSON keys. Search by route name or field.
-      </p>
+
       <label className="sidebar-search-label" htmlFor="resource-search">
         Search resources
       </label>
@@ -62,7 +63,7 @@ export function ResourceSidebar({
         className="overview-input"
         value={search}
         onChange={(event) => onSearchChange(event.target.value)}
-        placeholder="Search by resource or field"
+        placeholder="name or field"
       />
 
       {loading ? (
@@ -95,7 +96,7 @@ export function ResourceSidebar({
                     >
                       <div className="resource-list-copy">
                         <div className="resource-list-head">
-                          <strong>
+                          <strong className="text-sm font-semibold text-stoneink-900">
                             <HighlightText text={resource.name} needle={searchNeedle} />
                           </strong>
                           <span className="overview-kind-badge">{resource.kind}</span>
@@ -108,25 +109,20 @@ export function ResourceSidebar({
                                 ? `${resource.key_count} keys`
                                 : 'scalar value'}
                           </span>
-                          {resource.primary_key && <span>PK: {resource.primary_key}</span>}
-                          <span>{resource.outgoing_relations.length} outgoing links</span>
+                          {resource.primary_key && <span>PK {resource.primary_key}</span>}
+                          {resource.outgoing_relations.length > 0 && (
+                            <span>{resource.outgoing_relations.length} links</span>
+                          )}
                         </div>
                         {resource.field_names.length > 0 && (
                           <div className="resource-field-list">
-                            {resource.field_names.slice(0, 4).map((field) => (
+                            {resource.field_names.slice(0, 3).map((field) => (
                               <span key={field} className="resource-field-pill">
                                 <HighlightText text={field} needle={searchNeedle} />
                               </span>
                             ))}
                           </div>
                         )}
-                      </div>
-                      <div className="resource-capability-row">
-                        {renderCapabilityChip('filter', resource.query_capabilities.filter)}
-                        {renderCapabilityChip('sort', resource.query_capabilities.sort)}
-                        {renderCapabilityChip('page', resource.query_capabilities.pagination)}
-                        {renderCapabilityChip('embed', resource.query_capabilities.embed)}
-                        {renderCapabilityChip('item', resource.query_capabilities.item_route)}
                       </div>
                     </button>
                   ))}
@@ -179,37 +175,39 @@ export function ExplorerHeader({
       <div className="explorer-header-summary">
         <div>
           <p className="section-title">Explorer</p>
-          <h2>{resource?.name ?? 'Choose a resource'}</h2>
+          <h2 className="text-2xl font-semibold tracking-tight text-stoneink-900">
+            {resource?.name ?? 'Choose a resource'}
+          </h2>
         </div>
         {resource && (
-          <div className="resource-summary-row">
-            <span className="overview-kind-badge">{resource.kind}</span>
-            {resource.primary_key && <span className="overview-inline-badge">Primary key: {resource.primary_key}</span>}
-            {resource.row_count !== null ? (
-              <span className="overview-inline-badge">{resource.row_count} rows</span>
-            ) : resource.key_count !== null ? (
-              <span className="overview-inline-badge">{resource.key_count} keys</span>
-            ) : (
-              <span className="overview-inline-badge">Scalar value</span>
-            )}
-          </div>
-        )}
-        {resource && (
-          <div className="route-link-row">
-            <a href={collectionRoute} target="_blank" rel="noreferrer">
-              Collection route
-            </a>
-            {sampleItemRoute && (
-              <a href={sampleItemRoute} target="_blank" rel="noreferrer">
-                Sample item
+          <>
+            <div className="resource-summary-row">
+              <span className="overview-kind-badge">{resource.kind}</span>
+              {resource.primary_key && <span className="overview-inline-badge">PK {resource.primary_key}</span>}
+              <span className="overview-inline-badge">
+                {resource.row_count !== null
+                  ? `${resource.row_count} rows`
+                  : resource.key_count !== null
+                    ? `${resource.key_count} keys`
+                    : 'Scalar value'}
+              </span>
+            </div>
+            <div className="route-link-row text-sm text-stoneink-700">
+              <a className="underline decoration-stone-900/20 underline-offset-4" href={collectionRoute} target="_blank" rel="noreferrer">
+                Collection
               </a>
-            )}
-            {selectedItemRoute && (
-              <a href={selectedItemRoute} target="_blank" rel="noreferrer">
-                Selected item
-              </a>
-            )}
-          </div>
+              {sampleItemRoute && (
+                <a className="underline decoration-stone-900/20 underline-offset-4" href={sampleItemRoute} target="_blank" rel="noreferrer">
+                  Sample item
+                </a>
+              )}
+              {selectedItemRoute && (
+                <a className="underline decoration-stone-900/20 underline-offset-4" href={selectedItemRoute} target="_blank" rel="noreferrer">
+                  Selected item
+                </a>
+              )}
+            </div>
+          </>
         )}
       </div>
 
@@ -258,37 +256,35 @@ export function QuerySummaryBar({
   onClear: () => void;
   onRemoveChip: (chip: QuerySummaryChip) => void;
 }) {
+  if (chips.length === 0) {
+    return null;
+  }
+
   return (
     <section className="query-summary-bar" data-testid="query-summary">
       <div className="query-summary-head">
         <div>
-          <p className="section-title">Query summary</p>
-          <p className="overview-copy">
-            Filters, sorting, embeds, and pagination always compile back to the server&apos;s native REST query params.
-          </p>
+          <p className="section-title">Active query</p>
+          <p className="overview-copy">Every chip maps directly to the request URL.</p>
         </div>
         <button type="button" className="overview-secondary-button" onClick={onClear} disabled={!hasState}>
           Clear all
         </button>
       </div>
-      {chips.length > 0 ? (
-        <div className="query-chip-row">
-          {chips.map((chip) => (
-            <button
-              key={chip.id}
-              type="button"
-              className={`query-chip is-${chip.kind}`}
-              onClick={() => onRemoveChip(chip)}
-              aria-label={chip.removeLabel}
-            >
-              <strong>{chip.label}</strong>
-              <span>{chip.value}</span>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <p className="overview-empty">No active filters, sorting, or embeds.</p>
-      )}
+      <div className="query-chip-row">
+        {chips.map((chip) => (
+          <button
+            key={chip.id}
+            type="button"
+            className={`query-chip is-${chip.kind}`}
+            onClick={() => onRemoveChip(chip)}
+            aria-label={chip.removeLabel}
+          >
+            <strong>{chip.label}</strong>
+            <span>{chip.value}</span>
+          </button>
+        ))}
+      </div>
     </section>
   );
 }
@@ -394,6 +390,11 @@ export function DataExplorerPanel({
             filters={state.filters}
             relationColumns={relationColumns}
             state={state}
+            columns={table.getAllLeafColumns().map((column) => ({
+              id: column.id,
+              visible: column.getIsVisible(),
+              onToggle: column.getToggleVisibilityHandler()
+            }))}
             onStateChange={onStateChange}
           />
         )}
@@ -405,9 +406,7 @@ export function DataExplorerPanel({
   if (resource.kind !== 'table') {
     return (
       <div className="non-table-panel" data-testid="non-table-view">
-        <p className="overview-copy">
-          This resource is not array-shaped, so the explorer stays JSON-first.
-        </p>
+        <p className="overview-copy">This resource is JSON-first, so the raw document is the primary view.</p>
         <pre className="json-viewer">{formatJson(response?.parsed ?? null)}</pre>
       </div>
     );
@@ -420,24 +419,13 @@ export function DataExplorerPanel({
         filters={state.filters}
         relationColumns={relationColumns}
         state={state}
+        columns={table.getAllLeafColumns().map((column) => ({
+          id: column.id,
+          visible: column.getIsVisible(),
+          onToggle: column.getToggleVisibilityHandler()
+        }))}
         onStateChange={onStateChange}
       />
-
-      <details className="column-picker">
-        <summary>Visible columns</summary>
-        <div className="column-picker-grid">
-          {table.getAllLeafColumns().map((column) => (
-            <label key={column.id} className="column-toggle">
-              <input
-                type="checkbox"
-                checked={column.getIsVisible()}
-                onChange={column.getToggleVisibilityHandler()}
-              />
-              <span>{column.id}</span>
-            </label>
-          ))}
-        </div>
-      </details>
 
       <div className="table-shell">
         <table className="data-table">
@@ -529,12 +517,14 @@ function ControlBar({
   filters,
   relationColumns,
   state,
+  columns,
   onStateChange
 }: {
   fields: string[];
   filters: FilterDescriptor[];
   relationColumns: ResourceOverview['columns'];
   state: OverviewUrlState;
+  columns: Array<{ id: string; visible: boolean; onToggle: () => void }>;
   onStateChange: (updater: (state: OverviewUrlState) => OverviewUrlState) => void;
 }) {
   return (
@@ -566,8 +556,8 @@ function ControlBar({
       />
 
       <div className="secondary-controls">
-        <label>
-          Page size
+        <label className="grid gap-1.5 text-sm text-stoneink-800">
+          <span className="section-title">Page size</span>
           <select
             className="overview-select"
             value={state.perPage}
@@ -613,6 +603,18 @@ function ControlBar({
             ))}
           </fieldset>
         )}
+
+        <details className="column-picker">
+          <summary>Visible columns</summary>
+          <div className="column-picker-grid">
+            {columns.map((column) => (
+              <label key={column.id} className="column-toggle">
+                <input type="checkbox" checked={column.visible} onChange={column.onToggle} />
+                <span>{column.id}</span>
+              </label>
+            ))}
+          </div>
+        </details>
       </div>
     </div>
   );
@@ -636,7 +638,7 @@ function FilterBuilder({
       <div className="filter-builder-head">
         <div>
           <span className="section-title">Filters</span>
-          <p className="overview-copy">Choose user-facing operators; the request still uses the server-native query params.</p>
+          <p className="overview-copy">Narrow the result set with the same query operators exposed by REST.</p>
         </div>
         <button type="button" className="overview-secondary-button" onClick={onAddFilter}>
           Add filter
@@ -696,14 +698,13 @@ function FilterBuilder({
             </button>
           </div>
         ))}
-        {filters.length === 0 && <p className="overview-empty">No filters yet. Add one to narrow the result set.</p>}
+        {filters.length === 0 && <p className="overview-empty">No filters yet.</p>}
       </div>
 
       <details className="filter-help">
-        <summary>Advanced operator semantics</summary>
+        <summary>Operator help</summary>
         <p className="overview-copy">
-          `contains`, `starts with`, `ends with`, null checks, and comparison operators map to the server&apos;s
-          native `field:operator=value` query syntax.
+          Advanced operators still compile to the server&apos;s native `field:operator=value` query syntax.
         </p>
       </details>
     </div>

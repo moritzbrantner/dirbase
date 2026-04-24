@@ -48,17 +48,17 @@ test('supports first-load discovery, filter chips, and relation drill-down in bo
   await expect(page.locator('.request-path').first()).toContainText('code=MEM-012');
 
   await page.getByRole('button', { name: 'Remove filter on code' }).click();
-  await expect(page.getByTestId('query-summary')).toContainText('No active filters');
+  await expect(page.getByTestId('query-summary')).toHaveCount(0);
 
   await page.locator('tbody tr').first().click();
   await expect(page.getByTestId('inspector-panel')).toContainText('Selected row');
   await page.locator('.relation-link-button').filter({ hasText: 'teams' }).first().click();
-  await expect(page.locator('main').getByRole('heading', { name: 'teams' })).toBeVisible();
+  await expect(page.locator('.workspace-main').getByRole('heading', { name: 'teams' })).toBeVisible();
   await expect(page.locator('.request-path').first()).toContainText('/teams?page=1&per_page=25&id=1');
 
   await page.locator('tbody tr').first().click();
   await page.locator('.relation-link-button').filter({ hasText: 'members' }).first().click();
-  await expect(page.locator('main').getByRole('heading', { name: 'members' })).toBeVisible();
+  await expect(page.locator('.workspace-main').getByRole('heading', { name: 'members' })).toBeVisible();
   await expect(page.locator('.request-path').first()).toContainText('team_id=1');
 });
 
@@ -70,20 +70,30 @@ test('supports mobile drawers and inspector sheet without losing explorer state'
   await page.getByRole('button', { name: 'Resources' }).click();
   await expect(page.getByTestId('resource-sidebar')).toHaveClass(/mobile-drawer-open/);
 
-  await page.getByRole('button', { name: 'Map' }).click();
+  await page.getByRole('button', { name: 'Map', exact: true }).click();
   await expect(page.locator('.relation-map-panel')).toHaveClass(/mobile-drawer-open/);
 
-  await page.getByRole('button', { name: 'Map' }).click();
+  await page.getByRole('button', { name: 'Map', exact: true }).click();
   await page.locator('tbody tr').first().click();
   await expect(page.getByTestId('inspector-panel')).toHaveClass(/mobile-sheet-open/);
-  await expect(page.locator('main').getByRole('heading', { name: 'members' })).toBeVisible();
+  await expect(page.locator('.workspace-main').getByRole('heading', { name: 'members' })).toBeVisible();
+});
+
+test('opens the relation map as a secondary desktop panel', async ({ page }) => {
+  await page.goto('/?resource=members');
+  await page.locator('.resource-list-item').first().waitFor({ state: 'visible', timeout: 15_000 });
+
+  await page.getByRole('button', { name: 'Open map' }).click();
+  await expect(page.locator('.relation-map-panel')).toHaveClass(/mobile-drawer-open/);
+  await page.getByRole('button', { name: 'Close map' }).first().click();
+  await expect(page.locator('.relation-map-panel')).not.toHaveClass(/mobile-drawer-open/);
 });
 
 test('hides write actions in read-only mode', async ({ page }) => {
   await page.goto('http://127.0.0.1:4511/?resource=members');
   await page.locator('.resource-list-item').first().waitFor({ state: 'visible', timeout: 15_000 });
 
-  await expect(page.getByText('Read-only mode')).toBeVisible();
+  await expect(page.locator('.status-pill.is-warn').first()).toBeVisible();
   await expect(page.getByRole('button', { name: 'New row' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Delete row' })).toHaveCount(0);
 
@@ -96,7 +106,7 @@ test('supports object raw mode and invalid mutation feedback', async ({ page }) 
   await page.goto('/?resource=settings');
   await page.locator('.resource-list-item').first().waitFor({ state: 'visible', timeout: 15_000 });
 
-  await expect(page.locator('main').getByRole('heading', { name: 'settings' })).toBeVisible();
+  await expect(page.locator('.workspace-main').getByRole('heading', { name: 'settings' })).toBeVisible();
   await page.getByRole('button', { name: 'Raw JSON' }).click();
   await expect(page.locator('.json-viewer').first()).toContainText('"theme": "warm"');
 

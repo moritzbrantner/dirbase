@@ -7,16 +7,6 @@ export interface ToastMessage {
   message: string;
 }
 
-export function SummaryCard({ label, value, copy }: { label: string; value: string | null; copy: string }) {
-  return (
-    <article className="summary-card">
-      <span className="section-title">{label}</span>
-      {value === null ? <div className="skeleton skeleton-title" /> : <strong>{value}</strong>}
-      <p>{copy}</p>
-    </article>
-  );
-}
-
 export function ToastViewport({ toasts }: { toasts: ToastMessage[] }) {
   return (
     <div className="toast-viewport" aria-live="polite" aria-atomic="true">
@@ -100,14 +90,6 @@ export function groupResources(resources: ResourceOverview[]) {
       return groups;
     },
     { table: [], object: [], value: [] }
-  );
-}
-
-export function renderCapabilityChip(label: string, enabled: boolean) {
-  return (
-    <span className={`capability-chip ${enabled ? 'is-enabled' : ''}`} key={label}>
-      {label}
-    </span>
   );
 }
 

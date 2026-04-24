@@ -128,6 +128,14 @@ describe('QuerySummaryBar', () => {
       removeLabel: 'Remove filter on name'
     });
   });
+
+  it('renders nothing when there is no active query state', () => {
+    const { container } = render(
+      <QuerySummaryBar hasState={false} onClear={vi.fn()} onRemoveChip={vi.fn()} chips={[]} />
+    );
+
+    expect(container).toBeEmptyDOMElement();
+  });
 });
 
 describe('ResourceSidebar', () => {

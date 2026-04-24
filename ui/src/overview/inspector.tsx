@@ -77,8 +77,9 @@ export function InspectorPanel({
       <div className="overview-panel-head">
         <div>
           <p className="section-title">Inspector</p>
-          <h2>Request, selection, schema</h2>
+          <h2 className="text-xl font-semibold tracking-tight text-stoneink-900">Request and detail</h2>
         </div>
+        {readonly && <span className="status-pill is-warn">Read-only</span>}
       </div>
 
       <div className="inspector-tab-row" role="tablist" aria-label="Inspector tabs">
@@ -99,15 +100,12 @@ export function InspectorPanel({
 
       {selectedTab === 'request' && (
         <section className="inspector-section">
-          <div className="request-header-row">
-            <span className="overview-inline-code">
-              <span className="overview-method">GET</span>
-              {requestPath}
-            </span>
-          </div>
+          <code className="request-path">
+            GET {requestPath}
+          </code>
           <div className="request-action-grid">
             <button type="button" className="overview-secondary-button" onClick={() => void onCopy(requestPath)}>
-              Copy relative URL
+              Copy URL
             </button>
             <button type="button" className="overview-secondary-button" onClick={() => void onCopy(curlExample)}>
               Copy curl
@@ -116,12 +114,14 @@ export function InspectorPanel({
               Open request
             </button>
           </div>
-          <code className="request-path">{requestPath}</code>
           {response && (
             <div className="request-meta-stack">
-              <span className={`status-pill ${response.status >= 400 ? 'is-error' : ''}`}>
-                {response.status} {response.statusText}
-              </span>
+              <div className="overview-inline-list">
+                <span className={`status-pill ${response.status >= 400 ? 'is-error' : ''}`}>
+                  {response.status} {response.statusText}
+                </span>
+                <span className="overview-inline-badge">{response.url}</span>
+              </div>
               {isPaginatedResponse(response.parsed) && (
                 <div className="request-page-metadata">
                   <span className="overview-inline-badge">Page {response.parsed.page}</span>
@@ -146,13 +146,15 @@ export function InspectorPanel({
               onDrilldownIncoming={onDrilldownIncoming}
             />
           ) : (
-            <section className="resource-snapshot">
-              <h3>Resource snapshot</h3>
-              <p className="overview-copy">
-                {resource
-                  ? truncate(summarizeValue(response?.parsed ?? resource.row_samples[0] ?? null), 180)
-                  : 'Choose a resource to inspect it here.'}
-              </p>
+            <section className="grid gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-stoneink-900">Snapshot</h3>
+                <p className="overview-copy">
+                  {resource
+                    ? truncate(summarizeValue(response?.parsed ?? resource.row_samples[0] ?? null), 180)
+                    : 'Choose a resource to inspect it here.'}
+                </p>
+              </div>
               {resource && resource.row_samples.length > 0 && (
                 <pre className="json-viewer">{formatJson(resource.row_samples[0])}</pre>
               )}
@@ -262,7 +264,9 @@ export function MutationDialog({
         <div className="overview-panel-head">
           <div>
             <p className="section-title">Mutation</p>
-            <h2>{renderMutationTitle(mode, resource.kind)}</h2>
+            <h2 className="text-2xl font-semibold tracking-tight text-stoneink-900">
+              {renderMutationTitle(mode, resource.kind)}
+            </h2>
           </div>
           <button type="button" className="overview-icon-button" onClick={onClose}>
             Close
@@ -287,7 +291,7 @@ export function MutationDialog({
                     setConfirmAction(false);
                   }}
                 />
-                <span>Replace the full document with `PUT` instead of sending only changed keys with `PATCH`.</span>
+                <span>Use `PUT` to replace the full document instead of sending only changed keys.</span>
               </label>
             )}
           </>
@@ -379,22 +383,23 @@ function SelectionPanel({
 
   return (
     <div className="details-stack">
-      <section>
-        <h3>Selected row</h3>
-        <p className="overview-copy">
-          {itemRoute ? (
-            <>
-              Item route: <code className="overview-inline-code">{itemRoute}</code>
-            </>
-          ) : (
-            'Select a row to inspect the raw JSON payload.'
-          )}
-        </p>
-        <pre className="json-viewer">{formatJson(row)}</pre>
+      <section className="grid gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-stoneink-900">Selected row</h3>
+          <p className="overview-copy">
+            {itemRoute ? (
+              <>
+                Item route <code className="overview-inline-code">{itemRoute}</code>
+              </>
+            ) : (
+              'Select a row to inspect the raw JSON payload.'
+            )}
+          </p>
+        </div>
       </section>
 
-      <section>
-        <h3>Outgoing relations</h3>
+      <section className="grid gap-2">
+        <h3 className="text-sm font-semibold text-stoneink-900">Relations out</h3>
         <div className="relation-link-list">
           {outgoingRelations.length > 0 ? (
             outgoingRelations.map((entry) => (
@@ -411,13 +416,13 @@ function SelectionPanel({
               </button>
             ))
           ) : (
-            <p className="overview-empty">No outgoing relation drill-down is available for this row.</p>
+            <p className="overview-empty">No outgoing drill-down is available for this row.</p>
           )}
         </div>
       </section>
 
-      <section>
-        <h3>Incoming relations</h3>
+      <section className="grid gap-2">
+        <h3 className="text-sm font-semibold text-stoneink-900">Relations in</h3>
         <div className="relation-link-list">
           {incomingRelations.length > 0 ? (
             incomingRelations.map((entry) => (
@@ -434,9 +439,14 @@ function SelectionPanel({
               </button>
             ))
           ) : (
-            <p className="overview-empty">No incoming relation drill-down is available for this row.</p>
+            <p className="overview-empty">No incoming drill-down is available for this row.</p>
           )}
         </div>
+      </section>
+
+      <section className="grid gap-2">
+        <h3 className="text-sm font-semibold text-stoneink-900">JSON</h3>
+        <pre className="json-viewer">{formatJson(row)}</pre>
       </section>
     </div>
   );
@@ -473,10 +483,8 @@ function SchemaEditorPanel({
     <section className="inspector-section">
       <div className="schema-panel-head">
         <div>
-          <h3>Schema editor</h3>
-          <p className="overview-copy">
-            Edit the JSON schema overlay directly. Save uses `PUT /schema`; infer uses `POST /schema/infer`.
-          </p>
+          <h3 className="text-sm font-semibold text-stoneink-900">Schema editor</h3>
+          <p className="overview-copy">Edit the JSON overlay directly. Save uses `PUT /schema`; infer uses `POST /schema/infer`.</p>
         </div>
         {readonly && <span className="status-pill is-warn">Read-only mode</span>}
       </div>

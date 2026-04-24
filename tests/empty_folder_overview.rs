@@ -34,8 +34,12 @@ fn empty_folder_html_overview_shows_bootstrap_examples() {
     );
 
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert!(response.contains("Routes and quick checks"), "{response}");
     assert!(response.contains("Create your first resource"), "{response}");
     assert!(response.contains(&format!("{}/users.json", temp.path().display())), "{response}");
     assert!(response.contains("&quot;name&quot;: &quot;Ada&quot;"), "{response}");
-    assert!(response.contains("Use the example files above, then reload the page."), "{response}");
+    assert!(
+        response.contains("Use the help panel below to add the first JSON files."),
+        "{response}"
+    );
 }

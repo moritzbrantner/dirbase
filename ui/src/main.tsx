@@ -2,7 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { OverviewAppRoot } from './OverviewApp';
-import './styles.css';
+import './tailwind.generated.css';
 import '@xyflow/react/dist/style.css';
 
 const mountNode = document.getElementById('overview-root');

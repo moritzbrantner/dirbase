@@ -461,9 +461,9 @@ fn sample_create_payload(resource: Option<&ResourceOverview>) -> String {
 }
 
 fn render_empty_state_guide(html: &mut String, page: &OverviewPageData) {
-    html.push_str("<article class=\"overview-guide shell-card\">");
+    html.push_str("<article class=\"overview-help-card\">");
     html.push_str("<p class=\"section-title\">First data</p>");
-    html.push_str("<h2>Create your first resource</h2>");
+    html.push_str("<h3>Create your first resource</h3>");
     match page.data_source_kind {
         "folder" => {
             let users_path = format!("{}/users.json", page.source_label.trim_end_matches('/'));
@@ -473,8 +473,8 @@ fn render_empty_state_guide(html: &mut String, page: &OverviewPageData) {
             let _ = write!(
                 html,
                 "<p class=\"overview-copy\">This folder is empty right now. Create one or two files like these, then refresh the page:</p>\
-                 <code class=\"overview-path-code\">{}</code><pre class=\"overview-path-code\">{}</pre>\
-                 <code class=\"overview-path-code\">{}</code><pre class=\"overview-path-code\">{}</pre>",
+                 <code class=\"request-path\">{}</code><pre class=\"request-path\">{}</pre>\
+                 <code class=\"request-path\">{}</code><pre class=\"request-path\">{}</pre>",
                 escape_html(&users_path),
                 escape_html(users_json),
                 escape_html(&posts_path),
@@ -486,7 +486,7 @@ fn render_empty_state_guide(html: &mut String, page: &OverviewPageData) {
             let _ = write!(
                 html,
                 "<p class=\"overview-copy\">This database file has no top-level resources yet. Start with a structure like this, then refresh the page:</p>\
-                 <code class=\"overview-path-code\">{}</code><pre class=\"overview-path-code\">{}</pre>",
+                 <code class=\"request-path\">{}</code><pre class=\"request-path\">{}</pre>",
                 escape_html(&page.source_label),
                 escape_html(db_json),
             );
@@ -505,13 +505,13 @@ fn render_request_card(
 ) {
     let _ = write!(
         html,
-        "<article class=\"overview-rule-card\"><p class=\"overview-rule-title\">{}</p><code class=\"overview-path-code\"><span class=\"overview-method\">{}</span> {}</code>",
+        "<article class=\"overview-help-card\"><p class=\"section-title\">{}</p><code class=\"request-path\"><span class=\"overview-method\">{}</span> {}</code>",
         escape_html(title),
         escape_html(method),
         escape_html(path),
     );
     if let Some(body) = body {
-        let _ = write!(html, "<pre class=\"overview-path-code\">{}</pre>", escape_html(body));
+        let _ = write!(html, "<pre class=\"request-path\">{}</pre>", escape_html(body));
     }
     let _ = write!(html, "<p class=\"overview-copy\">{}</p></article>", escape_html(copy));
 }
@@ -573,149 +573,47 @@ fn render_overview_html(page: &OverviewPageData) -> String {
     html.push_str("<title>dirbase overview</title>");
     html.push_str("<link rel=\"stylesheet\" href=\"/assets/overview.css\">");
     html.push_str("</head><body><main class=\"overview-page\">");
-    html.push_str("<section class=\"overview-hero shell-card\">");
+    html.push_str("<section class=\"shell-card overview-root-hero\">");
+    html.push_str("<div class=\"overview-root-title\">");
     html.push_str("<p class=\"overview-eyebrow\">dirbase</p>");
-    html.push_str("<h1>Visual overview of your data</h1>");
-    html.push_str("<p class=\"overview-lede\">Use this page as both a route guide and a data explorer. The interactive UI below speaks the same REST query language as the server, so filtering, sorting, paging, and relation drill-down always resolve to copyable request URLs.</p>");
+    html.push_str("<h1>Data workspace</h1>");
+    html.push_str("<p class=\"overview-lede\">Use the app below to browse resources, inspect request URLs, and drill through live relationships without leaving the page.</p>");
+    html.push_str("</div>");
+    html.push_str("<div class=\"overview-status-group\">");
     let _ = write!(
         html,
-        "<div class=\"overview-stats\"><span class=\"overview-stat\">{} resources</span><span class=\"overview-stat\">{} table links</span><span class=\"overview-stat\">{} total rows</span><span class=\"overview-stat\">Schema {}</span><span class=\"overview-stat\">Source mode: {}</span></div>",
+        "<span class=\"overview-inline-badge\">{} resources</span><span class=\"overview-inline-badge\">{} relations</span><span class=\"overview-inline-badge\">{} rows</span><span class=\"overview-inline-badge\">Source mode: {}</span><span class=\"status-pill\">Schema {}</span>",
         page.stats.resource_count,
         page.stats.relation_count,
         page.stats.total_rows,
-        if page.schema_enabled { "loaded" } else { "not loaded" },
         escape_html(page.data_source_kind),
+        if page.schema_enabled { "loaded" } else { "not loaded" },
     );
-    html.push_str("</section>");
-
-    html.push_str("<section class=\"overview-guide-grid\">");
-    html.push_str("<article class=\"overview-guide shell-card\">");
-    html.push_str("<p class=\"section-title\">Rules of paths</p>");
-    html.push_str("<h2>How dirbase derives routes</h2>");
+    if page.server_capabilities.readonly {
+        html.push_str("<span class=\"status-pill is-warn\">Read-only mode</span>");
+    } else {
+        html.push_str("<span class=\"status-pill\">Writable mode</span>");
+    }
+    html.push_str("</div>");
     let _ = write!(
         html,
-        "<p class=\"overview-copy\">{}</p><code class=\"overview-inline-code overview-source-line\">{}</code><p class=\"overview-copy\">{}</p>",
-        escape_html(&page.source_rule),
+        "<code class=\"overview-source-line\">{}</code>",
         escape_html(&page.source_label),
-        escape_html(page.resource_name_rule),
     );
-    html.push_str("<div class=\"overview-rule-grid\">");
-    render_rule_card(
-        &mut html,
-        "Resource index",
-        "GET",
-        "/",
-        "Lists all resources as JSON for API clients and renders this guide for browsers.",
-    );
-    render_rule_card(
-        &mut html,
-        "Collection or object",
-        "GET",
-        &sample_collection_path,
-        "Reads the full JSON resource. Arrays stay arrays unless pagination is requested.",
-    );
-    render_rule_card(
-        &mut html,
-        "Single item",
-        "GET",
-        &sample_item_path,
-        "Works for array resources whose rows are objects with an `id` field or declared primary key.",
-    );
-    render_rule_card(
-        &mut html,
-        "Overview metadata",
-        "GET",
-        "/overview.json",
-        "Returns the schema-aware overview metadata consumed by the interactive explorer.",
-    );
-    html.push_str("</div></article>");
-
-    html.push_str("<article class=\"overview-guide shell-card\">");
-    html.push_str("<p class=\"section-title\">First 60 seconds</p>");
-    html.push_str("<h2>Three requests to verify everything works</h2>");
-    html.push_str("<div class=\"overview-rule-grid\">");
-    render_request_card(
-        &mut html,
-        "List data",
-        "GET",
-        &sample_collection_path,
-        "Open the first collection or object route and confirm you get JSON back immediately.",
-        None,
-    );
-    render_request_card(
-        &mut html,
-        "Fetch one item",
-        "GET",
-        &sample_item_path,
-        "Use an item route when your resource exposes rows with an id or declared primary key.",
-        None,
-    );
-    render_request_card(
-        &mut html,
-        "Create one row",
-        "POST",
-        &sample_create_path,
-        "Send one JSON object to confirm writes persist back to disk. Skip this in readonly mode.",
-        Some(&sample_create_body),
-    );
-    html.push_str("</div></article>");
-
-    html.push_str("<article class=\"overview-guide shell-card\">");
-    html.push_str("<p class=\"section-title\">Query options</p>");
-    html.push_str("<h2>REST controls that power the UI</h2>");
-    html.push_str("<div class=\"overview-rule-grid\">");
-    render_rule_card(
-        &mut html,
-        "Filtering",
-        "GET",
-        &sample_filter_path,
-        "Basic filters use `field=value`. Advanced filters use `field:operator=value`.",
-    );
-    render_rule_card(
-        &mut html,
-        "Sorting",
-        "GET",
-        &sample_sort_path,
-        "Use `sort` or `_sort`; prefix a field with `-` for descending order.",
-    );
-    render_rule_card(
-        &mut html,
-        "Pagination",
-        "GET",
-        &sample_page_path,
-        "Use `page` and `per_page` to receive metadata plus the current page of rows.",
-    );
-    render_rule_card(
-        &mut html,
-        "Embedding",
-        "GET",
-        &sample_embed_path,
-        "Use `embed` when schema metadata defines foreign keys for that resource.",
-    );
-    html.push_str("</div>");
-    html.push_str("<div class=\"overview-note-list\">");
-    html.push_str("<div class=\"overview-note-item\">The React overview keeps its state in the page query string. `resource` and `view` are reserved by the shell; table filters, paging, sorting, and embed state reuse the server’s own query params.</div>");
-    let _ =
-        write!(html, "<div class=\"overview-note-item\">{}</div>", escape_html(capability_note));
-    html.push_str("<div class=\"overview-note-item\">GraphQL remains available at <span class=\"overview-inline-code\">/graphql</span>, but the overview explorer uses REST because it already supports filtering, sorting, pagination, and embeds.</div>");
-    html.push_str("</div></article>");
-    if page.resources.is_empty() {
-        render_empty_state_guide(&mut html, page);
-    }
     html.push_str("</section>");
 
     html.push_str(
         "<section class=\"shell-card\"><div id=\"overview-root\" data-overview-endpoint=\"/overview.json\"></div><noscript>",
     );
-    html.push_str("<div class=\"noscript-shell\"><p class=\"section-title\">Overview fallback</p><h2>Resources</h2><p class=\"overview-copy\">JavaScript is disabled, so the interactive explorer is unavailable. The data model and route guide remain visible below.</p>");
+    html.push_str("<div class=\"noscript-shell\"><p class=\"section-title\">Overview fallback</p><h2>Resources</h2><p class=\"overview-copy\">JavaScript is disabled, so the interactive explorer is unavailable. The compact resource list remains visible below.</p>");
     if page.resources.is_empty() {
-        html.push_str("<p class=\"overview-empty\">No resources found yet. Use the example files above, then reload the page.</p>");
+        html.push_str("<p class=\"overview-empty\">No resources found yet. Use the help panel below to add the first JSON files.</p>");
     } else {
         html.push_str("<div class=\"noscript-resource-grid\">");
         for resource in &page.resources {
             let _ = write!(
                 html,
-                "<article class=\"noscript-resource-card\" data-resource=\"{}\"><div class=\"noscript-resource-head\"><h3>{}</h3><span class=\"overview-kind-badge\">{}</span></div>",
+                "<article class=\"noscript-resource-card\" data-resource=\"{}\"><div class=\"overview-panel-head\"><h3>{}</h3><span class=\"overview-kind-badge\">{}</span></div>",
                 escape_html(&resource.name),
                 escape_html(&resource.name),
                 escape_html(resource.kind),
@@ -737,23 +635,14 @@ fn render_overview_html(page: &OverviewPageData) -> String {
                 html.push_str("<p class=\"overview-copy\">Scalar JSON value</p>");
             }
 
-            if !resource.columns.is_empty() {
-                html.push_str("<div class=\"overview-chip-row\">");
-                for column in resource.columns.iter().take(8) {
+            if !resource.field_names.is_empty() {
+                html.push_str("<div class=\"resource-field-list\">");
+                for field in resource.field_names.iter().take(4) {
                     let _ = write!(
                         html,
-                        "<span class=\"overview-chip{}\">{} · {}</span>",
-                        if column.relation.is_some() { " relation" } else { "" },
-                        escape_html(&column.name),
-                        escape_html(column.column_type),
+                        "<span class=\"resource-field-pill\">{}</span>",
+                        escape_html(field)
                     );
-                }
-                html.push_str("</div>");
-            } else if !resource.field_names.is_empty() {
-                html.push_str("<div class=\"overview-chip-row\">");
-                for field in resource.field_names.iter().take(8) {
-                    let _ =
-                        write!(html, "<span class=\"overview-chip\">{}</span>", escape_html(field));
                 }
                 html.push_str("</div>");
             }
@@ -777,20 +666,75 @@ fn render_overview_html(page: &OverviewPageData) -> String {
     }
     html.push_str("</div></noscript></section>");
 
+    if page.resources.is_empty() {
+        html.push_str("<section class=\"shell-card\">");
+        html.push_str("<details class=\"overview-help\" open>");
+        html.push_str("<summary><p class=\"section-title\">Help</p><h2>Routes and quick checks</h2><p class=\"overview-copy\">Start with one or two files, then use the app above to explore them.</p></summary>");
+        html.push_str("<div class=\"overview-help-grid\">");
+        render_empty_state_guide(&mut html, page);
+        html.push_str("</div></details></section>");
+    } else {
+        html.push_str("<section class=\"shell-card\">");
+        html.push_str("<details class=\"overview-help\">");
+        html.push_str("<summary><p class=\"section-title\">Help</p><h2>Routes and quick checks</h2><p class=\"overview-copy\">Path rules, example requests, and a few reminders for the interactive overview.</p></summary>");
+        html.push_str("<div class=\"overview-help-grid\">");
+        let _ = write!(
+            html,
+            "<article class=\"overview-help-card\"><p class=\"section-title\">Routes</p><h3>How dirbase derives paths</h3><p class=\"overview-copy\">{}</p><code class=\"request-path\">{}</code><p class=\"overview-copy\">{}</p></article>",
+            escape_html(&page.source_rule),
+            escape_html(&page.source_label),
+            escape_html(page.resource_name_rule),
+        );
+        html.push_str("<div class=\"overview-help-card\">");
+        html.push_str("<p class=\"section-title\">Quick checks</p><h3>Try these requests</h3>");
+        render_request_card(
+            &mut html,
+            "List data",
+            "GET",
+            &sample_collection_path,
+            "Open the first collection or object route and confirm it returns JSON.",
+            None,
+        );
+        render_request_card(
+            &mut html,
+            "Fetch one item",
+            "GET",
+            &sample_item_path,
+            "Use an item route when the resource exposes a sample item or declared primary key.",
+            None,
+        );
+        render_request_card(
+            &mut html,
+            "Create one row",
+            "POST",
+            &sample_create_path,
+            "Send one JSON object to confirm writes persist back to disk. Skip this in readonly mode.",
+            Some(&sample_create_body),
+        );
+        html.push_str("</div>");
+        html.push_str("</div>");
+        html.push_str("<div class=\"overview-note-list\">");
+        let _ = write!(
+            html,
+            "<div class=\"overview-note-item\">{}</div>",
+            escape_html(capability_note)
+        );
+        html.push_str("<div class=\"overview-note-item\">The React overview keeps its state in the page query string. `resource` and `view` are reserved by the shell; table filters, paging, sorting, and embed state reuse the server’s own query params.</div>");
+        let _ = write!(
+            html,
+            "<div class=\"overview-note-item\">Filtering, sorting, pagination, and embedding all resolve to native REST requests such as <span class=\"overview-inline-code\">{}</span>, <span class=\"overview-inline-code\">{}</span>, <span class=\"overview-inline-code\">{}</span>, and <span class=\"overview-inline-code\">{}</span>.</div>",
+            escape_html(&sample_filter_path),
+            escape_html(&sample_sort_path),
+            escape_html(&sample_page_path),
+            escape_html(&sample_embed_path),
+        );
+        html.push_str("<div class=\"overview-note-item\">GraphQL remains available at <span class=\"overview-inline-code\">/graphql</span>, but the overview explorer uses REST because it already supports filtering, sorting, pagination, and embeds.</div>");
+        html.push_str("</div></details></section>");
+    }
+
     html.push_str("<script type=\"module\" src=\"/assets/overview.js\"></script>");
     html.push_str("</main></body></html>");
     html
-}
-
-fn render_rule_card(html: &mut String, title: &str, method: &str, path: &str, copy: &str) {
-    let _ = write!(
-        html,
-        "<article class=\"overview-rule-card\"><p class=\"overview-rule-title\">{}</p><code class=\"overview-path-code\"><span class=\"overview-method\">{}</span> {}</code><p class=\"overview-copy\">{}</p></article>",
-        escape_html(title),
-        escape_html(method),
-        escape_html(path),
-        escape_html(copy),
-    );
 }
 
 fn escape_html(input: &str) -> String {
