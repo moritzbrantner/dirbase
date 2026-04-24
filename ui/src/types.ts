@@ -178,7 +178,6 @@ export interface OverviewUiState {
   selectedResource: string | null;
   selectedRow: Record<string, unknown> | null;
   inspectorTab: InspectorTab;
-  liveUpdates: LiveUpdateStatus;
   mutationDialog: MutationDialogState;
   readonly: boolean;
 }

@@ -228,7 +228,6 @@ export function createUiState(selectedResource: string | null, readonly: boolean
     selectedResource,
     selectedRow: null,
     inspectorTab: DEFAULT_PREFERENCES.lastInspectorTab,
-    liveUpdates: 'connecting',
     mutationDialog: { open: false, mode: null },
     readonly
   };

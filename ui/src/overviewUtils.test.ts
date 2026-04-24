@@ -213,7 +213,6 @@ describe('createUiState', () => {
       selectedResource: 'members',
       selectedRow: null,
       inspectorTab: 'request',
-      liveUpdates: 'connecting',
       mutationDialog: { open: false, mode: null },
       readonly: true
     });

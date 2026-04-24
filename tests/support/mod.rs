@@ -111,11 +111,33 @@ pub fn http_request_with_headers(
     body: Option<&str>,
 ) -> String {
     let deadline = Instant::now() + Duration::from_secs(2);
+
+    loop {
+        match try_http_request_with_headers(addr, method, path, extra_headers, body) {
+            Ok(response) => return response,
+            Err(err) if is_transient_network_error(&err) && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(err) => panic!("request {method} {path} failed: {err}"),
+        }
+    }
+}
+
+fn try_http_request_with_headers(
+    addr: &str,
+    method: &str,
+    path: &str,
+    extra_headers: Option<&str>,
+    body: Option<&str>,
+) -> std::io::Result<String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
     let mut stream = loop {
         match TcpStream::connect(addr) {
             Ok(stream) => break stream,
-            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
-            Err(err) => panic!("connect to server: {err}"),
+            Err(err) if is_transient_network_error(&err) && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(err) => return Err(err),
         }
     };
     let payload = body.unwrap_or("");
@@ -133,12 +155,24 @@ pub fn http_request_with_headers(
         )
     };
 
-    stream.write_all(request.as_bytes()).expect("write request");
+    stream.write_all(request.as_bytes())?;
 
     let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
+    stream.read_to_string(&mut response)?;
 
-    response
+    Ok(response)
+}
+
+fn is_transient_network_error(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::UnexpectedEof
+    )
 }
 
 pub fn http_post_json(addr: &str, path: &str, payload: serde_json::Value) -> String {

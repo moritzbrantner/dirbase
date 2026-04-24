@@ -12,7 +12,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
 };
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{
     app::{AppState, DataSource},
@@ -409,8 +409,116 @@ fn column_type_label(column_type: &ColumnType) -> &'static str {
     }
 }
 
+fn sample_table_resource(page: &OverviewPageData) -> Option<&ResourceOverview> {
+    page.resources.iter().find(|resource| resource.kind == "table")
+}
+
+fn sample_create_payload(resource: Option<&ResourceOverview>) -> String {
+    let Some(resource) = resource else {
+        return "{\n  \"name\": \"New item\"\n}".to_string();
+    };
+
+    if let Some(object) = resource.row_samples.iter().find_map(|value| value.as_object()) {
+        let primary_key = resource.primary_key.as_deref().unwrap_or("id");
+        let mut payload = Map::new();
+        for (key, value) in object {
+            if key == primary_key {
+                continue;
+            }
+            payload.insert(key.clone(), value.clone());
+            if payload.len() >= 3 {
+                break;
+            }
+        }
+        if !payload.is_empty() {
+            return serde_json::to_string_pretty(&Value::Object(payload))
+                .unwrap_or_else(|_| "{\n  \"name\": \"New item\"\n}".to_string());
+        }
+    }
+
+    let field_name = resource
+        .columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .chain(resource.field_names.iter().map(String::as_str))
+        .find(|name| Some(*name) != resource.primary_key.as_deref() && *name != "id")
+        .unwrap_or("name");
+    let field_value = if field_name.contains("email") {
+        Value::String("new@example.com".to_string())
+    } else if field_name.contains("name")
+        || field_name.contains("title")
+        || field_name.contains("code")
+    {
+        Value::String("New item".to_string())
+    } else {
+        Value::String("value".to_string())
+    };
+
+    let mut payload = Map::new();
+    payload.insert(field_name.to_string(), field_value);
+    serde_json::to_string_pretty(&Value::Object(payload))
+        .unwrap_or_else(|_| "{\n  \"name\": \"New item\"\n}".to_string())
+}
+
+fn render_empty_state_guide(html: &mut String, page: &OverviewPageData) {
+    html.push_str("<article class=\"overview-guide shell-card\">");
+    html.push_str("<p class=\"section-title\">First data</p>");
+    html.push_str("<h2>Create your first resource</h2>");
+    match page.data_source_kind {
+        "folder" => {
+            let users_path = format!("{}/users.json", page.source_label.trim_end_matches('/'));
+            let posts_path = format!("{}/posts.json", page.source_label.trim_end_matches('/'));
+            let users_json = "[\n  {\"id\": 1, \"name\": \"Ada\"}\n]";
+            let posts_json = "[\n  {\"id\": 1, \"title\": \"Hello\", \"user_id\": 1}\n]";
+            let _ = write!(
+                html,
+                "<p class=\"overview-copy\">This folder is empty right now. Create one or two files like these, then refresh the page:</p>\
+                 <code class=\"overview-path-code\">{}</code><pre class=\"overview-path-code\">{}</pre>\
+                 <code class=\"overview-path-code\">{}</code><pre class=\"overview-path-code\">{}</pre>",
+                escape_html(&users_path),
+                escape_html(users_json),
+                escape_html(&posts_path),
+                escape_html(posts_json),
+            );
+        }
+        _ => {
+            let db_json = "{\n  \"users\": [\n    {\"id\": 1, \"name\": \"Ada\"}\n  ],\n  \"settings\": {\n    \"theme\": \"warm\"\n  }\n}";
+            let _ = write!(
+                html,
+                "<p class=\"overview-copy\">This database file has no top-level resources yet. Start with a structure like this, then refresh the page:</p>\
+                 <code class=\"overview-path-code\">{}</code><pre class=\"overview-path-code\">{}</pre>",
+                escape_html(&page.source_label),
+                escape_html(db_json),
+            );
+        }
+    }
+    html.push_str("</article>");
+}
+
+fn render_request_card(
+    html: &mut String,
+    title: &str,
+    method: &str,
+    path: &str,
+    copy: &str,
+    body: Option<&str>,
+) {
+    let _ = write!(
+        html,
+        "<article class=\"overview-rule-card\"><p class=\"overview-rule-title\">{}</p><code class=\"overview-path-code\"><span class=\"overview-method\">{}</span> {}</code>",
+        escape_html(title),
+        escape_html(method),
+        escape_html(path),
+    );
+    if let Some(body) = body {
+        let _ = write!(html, "<pre class=\"overview-path-code\">{}</pre>", escape_html(body));
+    }
+    let _ = write!(html, "<p class=\"overview-copy\">{}</p></article>", escape_html(copy));
+}
+
 fn render_overview_html(page: &OverviewPageData) -> String {
     let sample_resource = page.resources.first();
+    let sample_table_resource = sample_table_resource(page);
     let sample_collection_path = sample_resource
         .map(|resource| format!("/{}", resource.name))
         .unwrap_or_else(|| "/resource".to_string());
@@ -448,6 +556,15 @@ fn render_overview_html(page: &OverviewPageData) -> String {
             })
         })
         .unwrap_or_else(|| format!("{sample_collection_path}?embed=foreign_key"));
+    let sample_create_path = sample_table_resource
+        .map(|resource| format!("/{}", resource.name))
+        .unwrap_or_else(|| sample_collection_path.clone());
+    let sample_create_body = sample_create_payload(sample_table_resource);
+    let capability_note = if page.server_capabilities.readonly {
+        "This server is in readonly mode. Browse routes, inspect rows, copy request URLs, and use /graphql, but mutations and schema writes are disabled."
+    } else {
+        "This server is writable. Use the overview to create, edit, and delete rows, patch object resources, and persist schema changes when you want explicit primary keys or relationships."
+    };
 
     let mut html = String::new();
     html.push_str(
@@ -514,6 +631,36 @@ fn render_overview_html(page: &OverviewPageData) -> String {
     html.push_str("</div></article>");
 
     html.push_str("<article class=\"overview-guide shell-card\">");
+    html.push_str("<p class=\"section-title\">First 60 seconds</p>");
+    html.push_str("<h2>Three requests to verify everything works</h2>");
+    html.push_str("<div class=\"overview-rule-grid\">");
+    render_request_card(
+        &mut html,
+        "List data",
+        "GET",
+        &sample_collection_path,
+        "Open the first collection or object route and confirm you get JSON back immediately.",
+        None,
+    );
+    render_request_card(
+        &mut html,
+        "Fetch one item",
+        "GET",
+        &sample_item_path,
+        "Use an item route when your resource exposes rows with an id or declared primary key.",
+        None,
+    );
+    render_request_card(
+        &mut html,
+        "Create one row",
+        "POST",
+        &sample_create_path,
+        "Send one JSON object to confirm writes persist back to disk. Skip this in readonly mode.",
+        Some(&sample_create_body),
+    );
+    html.push_str("</div></article>");
+
+    html.push_str("<article class=\"overview-guide shell-card\">");
     html.push_str("<p class=\"section-title\">Query options</p>");
     html.push_str("<h2>REST controls that power the UI</h2>");
     html.push_str("<div class=\"overview-rule-grid\">");
@@ -548,16 +695,21 @@ fn render_overview_html(page: &OverviewPageData) -> String {
     html.push_str("</div>");
     html.push_str("<div class=\"overview-note-list\">");
     html.push_str("<div class=\"overview-note-item\">The React overview keeps its state in the page query string. `resource` and `view` are reserved by the shell; table filters, paging, sorting, and embed state reuse the server’s own query params.</div>");
-    html.push_str("<div class=\"overview-note-item\">This first version is read-focused: use it to inspect tables, follow foreign keys, preview raw rows, and copy exact request URLs for REST clients.</div>");
+    let _ =
+        write!(html, "<div class=\"overview-note-item\">{}</div>", escape_html(capability_note));
     html.push_str("<div class=\"overview-note-item\">GraphQL remains available at <span class=\"overview-inline-code\">/graphql</span>, but the overview explorer uses REST because it already supports filtering, sorting, pagination, and embeds.</div>");
-    html.push_str("</div></article></section>");
+    html.push_str("</div></article>");
+    if page.resources.is_empty() {
+        render_empty_state_guide(&mut html, page);
+    }
+    html.push_str("</section>");
 
     html.push_str(
         "<section class=\"shell-card\"><div id=\"overview-root\" data-overview-endpoint=\"/overview.json\"></div><noscript>",
     );
     html.push_str("<div class=\"noscript-shell\"><p class=\"section-title\">Overview fallback</p><h2>Resources</h2><p class=\"overview-copy\">JavaScript is disabled, so the interactive explorer is unavailable. The data model and route guide remain visible below.</p>");
     if page.resources.is_empty() {
-        html.push_str("<p class=\"overview-empty\">No resources found yet. Add JSON files to the configured source and reload the page.</p>");
+        html.push_str("<p class=\"overview-empty\">No resources found yet. Use the example files above, then reload the page.</p>");
     } else {
         html.push_str("<div class=\"noscript-resource-grid\">");
         for resource in &page.resources {

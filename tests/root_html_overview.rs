@@ -75,13 +75,48 @@ Table posts {
     assert!(response.contains("content-type: text/html; charset=utf-8"), "{response}");
     assert!(response.contains("<h1>Visual overview of your data</h1>"), "{response}");
     assert!(response.contains("Rules of paths"), "{response}");
+    assert!(response.contains("First 60 seconds"), "{response}");
+    assert!(response.contains("Create one row"), "{response}");
+    assert!(response.contains("<span class=\"overview-method\">POST</span> /posts"), "{response}");
     assert!(response.contains("id=\"overview-root\""), "{response}");
     assert!(response.contains("data-overview-endpoint=\"/overview.json\""), "{response}");
     assert!(response.contains("href=\"/assets/overview.css\""), "{response}");
     assert!(response.contains("src=\"/assets/overview.js\""), "{response}");
     assert!(response.contains("Each valid `*.json` filename becomes `/{resource}`."), "{response}");
+    assert!(
+        response
+            .contains("This server is writable. Use the overview to create, edit, and delete rows"),
+        "{response}"
+    );
     assert!(response.contains("data-resource=\"posts\""), "{response}");
     assert!(response.contains("data-resource=\"users\""), "{response}");
+}
+
+#[test]
+fn readonly_root_html_calls_out_disabled_mutations() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
+        .expect("write users");
+
+    let bind_addr = reserve_bind_addr();
+    let child = Command::new(env!("CARGO_BIN_EXE_dirbase"))
+        .arg("--folder")
+        .arg(temp.path())
+        .arg("--bind")
+        .arg(&bind_addr)
+        .arg("--readonly")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start dirbase");
+    let _child = ChildGuard { child };
+
+    wait_for_server(&bind_addr, Duration::from_secs(5));
+
+    let response = http_get(&bind_addr, "/", Some("Accept: text/html,application/xhtml+xml\r\n"));
+
+    assert!(response.contains("This server is in readonly mode."), "{response}");
+    assert!(response.contains("mutations and schema writes are disabled"), "{response}");
 }
 
 fn reserve_bind_addr() -> String {

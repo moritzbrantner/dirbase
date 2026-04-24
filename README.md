@@ -2,6 +2,59 @@
 
 `dirbase` is a small Rust API server for a directory-based JSON datastore. It takes the `json-server` idea and applies it to an **entire folder** of JSON files instead of a single JSON document.
 
+## Install options
+
+| Path | Best for | Command |
+| --- | --- | --- |
+| Direct binary | Fastest first run | Download the latest release from <https://github.com/moritzbrantner/dirbase/releases> and run `dirbase ./data` |
+| `cargo install` | Rust users who want a local CLI | `cargo install --git https://github.com/moritzbrantner/dirbase.git` |
+| Bun wrapper | Optional JavaScript distribution flow | `bunx --bun dirbase ./data --bind 127.0.0.1:4444` |
+
+Default recommendation: use a release binary when you want the shortest path to a working server. `cargo build`, `cargo run`, `cargo test`, and `cargo install` use the checked-in `ui/dist/*` assets by default and do not require Bun.
+
+## First run
+
+### 1) Create a small dataset
+
+```bash
+mkdir -p data
+cat > data/users.json <<'JSON'
+[
+  {"id": 1, "name": "Ada"},
+  {"id": 2, "name": "Linus"}
+]
+JSON
+
+cat > data/posts.json <<'JSON'
+[
+  {"id": 1, "title": "Hello", "user_id": 1}
+]
+JSON
+```
+
+### 2) Start the server
+
+```bash
+dirbase ./data
+
+# Or, without installing globally:
+cargo run -- ./data
+```
+
+Startup prints a short summary that includes the detected source mode, resource count, schema status, and the browser URL to open.
+
+### 3) Verify it works
+
+```bash
+curl http://127.0.0.1:4444/users
+curl http://127.0.0.1:4444/users/1
+curl -X POST http://127.0.0.1:4444/users \
+  -H 'content-type: application/json' \
+  -d '{"name":"Grace"}'
+```
+
+Then open the printed browser URL to use the built-in overview, explorer, relation map, and schema editor.
+
 ## Idea
 
 `json-server` usually serves one file (for example `db.json`) as REST resources. This project applies the same idea to a whole directory:
@@ -47,6 +100,8 @@ you get:
 - For object resources, `PUT /{resource}` replaces the full object and `PATCH /{resource}` merges fields.
 - Passing a positional path makes `dirbase` inspect the filesystem and choose file or folder mode automatically.
 - If the positional path does not exist yet, it is treated as a folder unless it ends in `.json`.
+- If `./dirbase.conf` exists in the current working directory, `dirbase` loads it automatically using the same CLI-style arguments as the command line; explicit CLI arguments take precedence.
+- `--port <port>` overrides just the listen port while keeping the current bind address host.
 - `--log` enables request logging and `--logname <path>` selects the log output file (default `requests.log`).
 - `--readonly` disables mutation routes and only serves `GET` endpoints.
 - `--auth-token <token>` enables bearer-token auth for application routes.
@@ -67,7 +122,7 @@ you get:
 | REST | Yes | Yes unless `--readonly` | Yes | `embed` plus item routes | Primary API surface |
 | GraphQL | Yes | No | `*Query` fields support filter / sort / pagination | Foreign-key traversal | GraphiQL at `GET /graphql` |
 | SQL | Yes | No | `SELECT`, projection, `WHERE`, `ORDER BY`, `LIMIT/OFFSET` | Schema-backed `INNER JOIN` | Query endpoint at `/sql` |
-| Overview UI | Yes | Schema editor only | Explorer drives REST params | Live-updating relation map | Root HTML at `GET /` |
+| Overview UI | Yes | Yes unless `--readonly` | Explorer drives REST params | Live-updating relation map | Root HTML at `GET /` |
 
 ## Why dirbase?
 
@@ -87,62 +142,39 @@ you get:
 
 See [`BENCHMARKS.md`](./BENCHMARKS.md) for comparison notes, benchmark methodology, and reproduction commands.
 
-## Quick start
-
-Local Rust builds embed the overview UI. Install Bun first so `cargo build`, `cargo run`, and `cargo test` can auto-generate `ui/dist/overview.css` and `ui/dist/overview.js`.
-
-### 1) Create data files
+## CLI examples
 
 ```bash
-mkdir -p data
-cat > data/users.json <<'JSON'
-[
-  {"id": 1, "name": "Ada"},
-  {"id": 2, "name": "Linus"}
-]
-JSON
-
-cat > data/posts.json <<'JSON'
-[
-  {"id": 1, "title": "Hello", "userId": 1}
-]
-JSON
-```
-
-### 2) Run the server
-
-```bash
-cargo run -- ./data --bind 127.0.0.1:4444
+# Keep the default host and only override the port
+dirbase ./data --port 5555
 
 # Read-only mode (only GET routes)
-cargo run -- ./data --bind 127.0.0.1:4444 --readonly
+dirbase ./data --readonly
 
 # Auth + explicit CORS
-cargo run -- ./data --auth-token secret --cors-origin http://localhost:3000
+dirbase ./data --auth-token secret --cors-origin http://localhost:3000
 
 # Explicit schema file (if not using ./data/schema.dbml)
-cargo run -- ./data --schema ./schema.dbml
+dirbase ./data --schema ./schema.dbml
 
 # Serve a single json-server-style database file
-cargo run -- ./db.json --bind 127.0.0.1:4444
+dirbase ./db.json --bind 127.0.0.1:4444
 ```
 
-### 3) Try the API
+Optional local config in the directory where you run `dirbase`:
 
 ```bash
-curl http://127.0.0.1:4444/
-open http://127.0.0.1:4444/
-curl http://127.0.0.1:4444/users
-curl http://127.0.0.1:4444/users/1
-curl -H 'content-type: application/json' \
-  -d '{"query":"{ users { id name } }"}' \
-  http://127.0.0.1:4444/graphql
-curl -H 'content-type: application/json' \
-  -d '{"query":"{ usersQuery(sort:[{field:\"id\",direction:DESC}], page:1, perPage:1) { items data { id name } } }"}' \
-  http://127.0.0.1:4444/graphql
-curl -X POST http://127.0.0.1:4444/users \
-  -H 'content-type: application/json' \
-  -d '{"name":"Grace"}'
+cat > dirbase.conf <<'CONF'
+--folder ./data
+--port 4444
+--readonly
+CONF
+
+# Uses dirbase.conf automatically
+dirbase
+
+# Explicit CLI args override dirbase.conf
+dirbase --bind 127.0.0.1:5555
 ```
 
 ## Schema files
@@ -211,7 +243,7 @@ With either format:
 - `GET /users/1` resolves against `user_id` when that is the declared primary key
 - `POST /schema` exports a complete `schema.json` snapshot with inferred columns plus declared PK/FK overrides
 
-## Bun package pipeline (Rust + esbuild)
+## Optional Bun package pipeline (Rust + esbuild)
 
 This repository now contains a Bun-powered package wrapper in [`js/`](./js) that bundles a tiny CLI launcher with **esbuild** and ships the compiled Rust binary.
 
@@ -272,16 +304,22 @@ If your editor uses different settings, configure it to run `cargo fmt --all` on
 
 ## Development checks
 
-Prerequisite: Bun must be installed locally because Rust builds invoke `bun run build` to refresh the embedded overview assets automatically.
-
 Before committing or opening a PR, always run linting and tests:
 
 ```bash
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features -- --test-threads=1
+```
 
-`cargo build` and `cargo test` both regenerate the overview assets when `ui/src/` or the UI build configuration changes. No separate `cd ui && bun run build` step is required.
+Maintainers only: the checked-in `ui/dist/overview.css` and `ui/dist/overview.js` assets are used by default. Rebuild them explicitly when the overview UI changes:
+
+```bash
+cd ui
+bun run build
+
+# Or from the repo root
+DIRBASE_REBUILD_UI=1 cargo build
 ```
 
 ### Coverage
