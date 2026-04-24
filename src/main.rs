@@ -1,4 +1,9 @@
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use app::{AppConfig, AppState, HealthState, MetricsStore};
 use clap::{CommandFactory, Parser};
@@ -145,10 +150,27 @@ async fn main() {
     );
 
     let app = build_router(state.clone());
-    tracing::info!(readonly = cli.readonly, "Readonly mode");
-    tracing::info!("Listening on http://{}", cli.bind);
     let listener = tokio::net::TcpListener::bind(cli.bind).await.expect("binding server listener");
+    let listen_addr = listener.local_addr().expect("reading server listener address");
+    let browser_url = browser_url_for(listen_addr);
+    tracing::info!(readonly = cli.readonly, "Readonly mode");
+    tracing::info!(listen_addr = %listen_addr, browser_url = %browser_url, "Server started");
+    eprintln!("Open {browser_url}");
     axum::serve(listener, app).await.expect("running server");
+}
+
+fn browser_url_for(addr: SocketAddr) -> String {
+    let browser_addr = match addr.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => {
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), addr.port())
+        }
+        IpAddr::V6(ip) if ip.is_unspecified() => {
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), addr.port())
+        }
+        _ => addr,
+    };
+
+    format!("http://{browser_addr}/")
 }
 
 async fn resolve_data_source(cli: &Cli) -> app::DataSource {
@@ -196,5 +218,28 @@ async fn ensure_folder_exists(folder: &std::path::Path) {
     if let Err(err) = tokio::fs::create_dir_all(folder).await {
         eprintln!("Failed to create data folder {}: {err}", folder.display());
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::browser_url_for;
+
+    #[test]
+    fn browser_url_preserves_specific_bind_addresses() {
+        let addr = "127.0.0.1:4444".parse().expect("socket addr");
+        assert_eq!(browser_url_for(addr), "http://127.0.0.1:4444/");
+    }
+
+    #[test]
+    fn browser_url_maps_unspecified_ipv4_to_loopback() {
+        let addr = "0.0.0.0:4444".parse().expect("socket addr");
+        assert_eq!(browser_url_for(addr), "http://127.0.0.1:4444/");
+    }
+
+    #[test]
+    fn browser_url_maps_unspecified_ipv6_to_loopback() {
+        let addr = "[::]:4444".parse().expect("socket addr");
+        assert_eq!(browser_url_for(addr), "http://[::1]:4444/");
     }
 }
