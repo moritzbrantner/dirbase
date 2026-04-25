@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  deriveSchemaGraphRelations,
   deriveSchemaGraphTables,
   getSchemaGraphAutoLayout,
   mergeSchemaEditorPayload,
@@ -178,6 +179,97 @@ const graphResources: ResourceOverview[] = [
   }
 ];
 
+const arrayIdSchema: SchemaResponse = {
+  tables: {
+    classes: {
+      kind: 'object',
+      primary_key: 'id',
+      columns: {
+        id: { column_type: 'integer', nullable: false },
+        title: { column_type: 'string', nullable: false },
+        student_ids: { column_type: 'json', nullable: false }
+      },
+      foreign_keys: {}
+    },
+    students: {
+      kind: 'object',
+      primary_key: 'id',
+      columns: {
+        id: { column_type: 'integer', nullable: false },
+        name: { column_type: 'string', nullable: false }
+      },
+      foreign_keys: {}
+    },
+    teams: {
+      kind: 'object',
+      primary_key: 'id',
+      columns: {
+        id: { column_type: 'integer', nullable: false },
+        name: { column_type: 'string', nullable: false },
+        memberIds: { column_type: 'json', nullable: false }
+      },
+      foreign_keys: {}
+    },
+    members: {
+      kind: 'object',
+      primary_key: 'id',
+      columns: {
+        id: { column_type: 'integer', nullable: false },
+        handle: { column_type: 'string', nullable: false }
+      },
+      foreign_keys: {}
+    }
+  }
+};
+
+function buildGraphResource(
+  name: string,
+  fieldNames: string[],
+  primaryKey: string | null
+): ResourceOverview {
+  return {
+    name,
+    kind: 'table',
+    row_count: 2,
+    key_count: null,
+    primary_key: primaryKey,
+    field_names: fieldNames,
+    row_samples: [],
+    columns: fieldNames.map((fieldName) => ({
+      name: fieldName,
+      column_type: fieldName === 'id' ? 'integer' : fieldName.endsWith('ids') || fieldName.endsWith('Ids') ? 'json' : 'string',
+      nullable: false,
+      relation: null,
+      is_primary_key: fieldName === primaryKey
+    })),
+    outgoing_relations: [],
+    incoming_relations: [],
+    many_to_many_relations: [],
+    sample_item_id: primaryKey ? '1' : null,
+    query_capabilities: {
+      filter: true,
+      sort: true,
+      pagination: true,
+      embed: false,
+      item_route: Boolean(primaryKey)
+    },
+    mutation_capabilities: {
+      create_item: true,
+      update_item: true,
+      delete_item: true,
+      replace_object: false,
+      patch_object: false
+    }
+  };
+}
+
+const arrayIdResources: ResourceOverview[] = [
+  buildGraphResource('classes', ['id', 'title', 'student_ids'], 'id'),
+  buildGraphResource('students', ['id', 'name'], 'id'),
+  buildGraphResource('teams', ['id', 'name', 'memberIds'], 'id'),
+  buildGraphResource('members', ['id', 'handle'], 'id')
+];
+
 describe('schema workspace helpers', () => {
   it('merges inferred schema with declared overrides and suppressions', () => {
     const declared: DeclaredSchemaResponse = {
@@ -351,10 +443,58 @@ describe('schema workspace helpers', () => {
     expect(graphTables.audit_logs.columns).toEqual([]);
   });
 
+  it('derives one-to-many graph relations from _ids and Ids suffixes', () => {
+    const relations = deriveSchemaGraphRelations(arrayIdResources, arrayIdSchema.tables ?? {});
+
+    expect(relations).toEqual([
+      {
+        kind: 'one_to_many',
+        sourceTable: 'classes',
+        sourceColumn: 'student_ids',
+        targetTable: 'students',
+        targetColumn: 'id'
+      },
+      {
+        kind: 'one_to_many',
+        sourceTable: 'teams',
+        sourceColumn: 'memberIds',
+        targetTable: 'members',
+        targetColumn: 'id'
+      }
+    ]);
+  });
+
+  it('shows inferred array-id columns in the schema graph without making them editable sources', () => {
+    const graphTables = deriveSchemaGraphTables(arrayIdResources, arrayIdSchema.tables ?? {});
+
+    expect(graphTables.classes.columns.find((column) => column.name === 'student_ids')).toMatchObject({
+      relation: 'one_to_many',
+      canSource: false,
+      canTarget: false
+    });
+    expect(graphTables.students.columns).toEqual([
+      expect.objectContaining({
+        name: 'id',
+        canTarget: true
+      })
+    ]);
+    expect(graphTables.teams.columns.find((column) => column.name === 'memberIds')).toMatchObject({
+      relation: 'one_to_many',
+      canSource: false
+    });
+  });
+
   it('auto-arranges related tables from source to target order', () => {
     const layout = getSchemaGraphAutoLayout(graphResources, inferredSchema.tables ?? {});
 
     expect(layout.users.x).toBeLessThan(layout.teams.x);
     expect(layout.audit_logs.x).toBeGreaterThanOrEqual(0);
+  });
+
+  it('auto-arranges inferred array-id relations from source to target order', () => {
+    const layout = getSchemaGraphAutoLayout(arrayIdResources, arrayIdSchema.tables ?? {});
+
+    expect(layout.classes.x).toBeLessThan(layout.students.x);
+    expect(layout.teams.x).toBeLessThan(layout.members.x);
   });
 });

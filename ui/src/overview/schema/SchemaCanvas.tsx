@@ -16,6 +16,7 @@ import {
 
 import { buildSchemaHandleId } from '../../schemaEditor';
 import {
+  deriveSchemaGraphRelations,
   deriveSchemaGraphTables,
   getSchemaGraphAutoLayout
 } from '../../schemaWorkspace';
@@ -25,6 +26,7 @@ interface SchemaNodeData extends Record<string, unknown> {
   resource: ResourceOverview;
   table: SchemaTable;
   columns: ReturnType<typeof deriveSchemaGraphTables>[string]['columns'];
+  relationCount: number;
   selected: boolean;
   selectedColumn: string | null;
   onSelectTable: (tableName: string) => void;
@@ -32,6 +34,7 @@ interface SchemaNodeData extends Record<string, unknown> {
 }
 
 type SchemaFlowNode = Node<SchemaNodeData, 'schemaWorkspaceTable'>;
+type SchemaFlowEdge = Edge<{ relationKind: 'foreign' | 'one_to_many' }>;
 
 const NODE_TYPES = {
   schemaWorkspaceTable: SchemaWorkspaceNode
@@ -64,11 +67,22 @@ export function SchemaCanvas({
     () => deriveSchemaGraphTables(resources, effectiveTables),
     [effectiveTables, resources]
   );
+  const graphRelations = useMemo(
+    () => deriveSchemaGraphRelations(resources, effectiveTables),
+    [effectiveTables, resources]
+  );
+  const relationCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const relation of graphRelations) {
+      counts.set(relation.sourceTable, (counts.get(relation.sourceTable) ?? 0) + 1);
+    }
+    return counts;
+  }, [graphRelations]);
   const autoLayout = useMemo(
     () => getSchemaGraphAutoLayout(resources, effectiveTables),
     [effectiveTables, resources]
   );
-  const [flow, setFlow] = useState<ReactFlowInstance<SchemaFlowNode, Edge> | null>(null);
+  const [flow, setFlow] = useState<ReactFlowInstance<SchemaFlowNode, SchemaFlowEdge> | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<SchemaFlowNode>([]);
 
   useEffect(() => {
@@ -78,13 +92,14 @@ export function SchemaCanvas({
         resource,
         table: effectiveTables[resource.name] ?? {},
         columns: graphTables[resource.name]?.columns ?? [],
+        relationCount: relationCounts.get(resource.name) ?? 0,
         selection,
         onSelectTable,
         onSelectColumn,
         position: existingPositions.get(resource.name) ?? autoLayout[resource.name] ?? { x: 0, y: 0 }
       }));
     });
-  }, [autoLayout, effectiveTables, graphTables, onSelectColumn, onSelectTable, resources, selection, setNodes]);
+  }, [autoLayout, effectiveTables, graphTables, onSelectColumn, onSelectTable, relationCounts, resources, selection, setNodes]);
 
   useEffect(() => {
     setNodes((currentNodes) =>
@@ -96,33 +111,44 @@ export function SchemaCanvas({
     flow?.fitView({ duration: 240, padding: 0.12 });
   }, [autoArrangeNonce, autoLayout, flow, setNodes]);
 
-  const edges: Edge[] = resources.flatMap((resource) => {
-    const table = effectiveTables[resource.name] ?? {};
-    return Object.entries(table.foreign_keys ?? {}).map(([sourceColumn, relation]) => {
-      const selected =
-        selection?.kind === 'relation' &&
-        selection.tableName === resource.name &&
-        selection.relationSourceColumn === sourceColumn;
-      return {
-        id: `${resource.name}:${sourceColumn}:${relation.target_table}:${relation.target_column}`,
-        source: resource.name,
-        target: relation.target_table,
-        sourceHandle: buildSchemaHandleId('source', sourceColumn),
-        targetHandle: buildSchemaHandleId('target', relation.target_column),
-        label: `${sourceColumn} -> ${relation.target_column}`,
-        animated: selected,
-        style: selected
-          ? { stroke: '#0891b2', strokeWidth: 2.6 }
-          : { stroke: 'rgba(46, 84, 104, 0.52)', strokeWidth: 1.8 },
-        labelStyle: { fill: '#214154', fontWeight: 600 }
-      } satisfies Edge;
-    });
+  const edges: SchemaFlowEdge[] = graphRelations.map((relation) => {
+    const selected =
+      relation.kind === 'foreign'
+        ? selection?.kind === 'relation' &&
+          selection.tableName === relation.sourceTable &&
+          selection.relationSourceColumn === relation.sourceColumn
+        : selection?.kind === 'column' &&
+          selection.tableName === relation.sourceTable &&
+          selection.columnName === relation.sourceColumn;
+
+    return {
+      id: `${relation.sourceTable}:${relation.sourceColumn}:${relation.targetTable}:${relation.targetColumn}`,
+      source: relation.sourceTable,
+      target: relation.targetTable,
+      sourceHandle: buildSchemaHandleId('source', relation.sourceColumn),
+      targetHandle: buildSchemaHandleId('target', relation.targetColumn),
+      label:
+        relation.kind === 'one_to_many'
+          ? `${relation.sourceColumn} -> ${relation.targetColumn}[]`
+          : `${relation.sourceColumn} -> ${relation.targetColumn}`,
+      animated: selected,
+      style:
+        relation.kind === 'one_to_many'
+          ? selected
+            ? { stroke: '#0f766e', strokeWidth: 2.6, strokeDasharray: '8 5' }
+            : { stroke: 'rgba(15, 118, 110, 0.55)', strokeWidth: 1.9, strokeDasharray: '8 5' }
+          : selected
+            ? { stroke: '#0891b2', strokeWidth: 2.6 }
+            : { stroke: 'rgba(46, 84, 104, 0.52)', strokeWidth: 1.8 },
+      labelStyle: { fill: '#214154', fontWeight: 600 },
+      data: { relationKind: relation.kind }
+    };
   });
   const connectable = !readonly && !structuredEditingDisabled;
 
   return (
     <div className="schema-canvas-shell" data-testid="schema-canvas">
-      <ReactFlow<SchemaFlowNode, Edge>
+      <ReactFlow<SchemaFlowNode, SchemaFlowEdge>
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
@@ -140,7 +166,11 @@ export function SchemaCanvas({
         onNodeClick={(_, node) => onSelectTable(node.id)}
         onEdgeClick={(_, edge) => {
           const [tableName, sourceColumn] = edge.id.split(':', 2);
-          onSelectRelation(tableName, sourceColumn);
+          if (edge.data?.relationKind === 'foreign') {
+            onSelectRelation(tableName, sourceColumn);
+            return;
+          }
+          onSelectColumn(tableName, sourceColumn);
         }}
       >
         <MiniMap zoomable pannable className="relation-map-minimap" />
@@ -164,7 +194,7 @@ function SchemaWorkspaceNode({ data }: NodeProps<SchemaFlowNode>) {
       </div>
       <div className="schema-node-summary">
         <span>{data.resource.row_count !== null ? `${data.resource.row_count} rows` : 'resource'}</span>
-        <span>{Object.keys(data.table.foreign_keys ?? {}).length} relations</span>
+        <span>{data.relationCount} relations</span>
       </div>
       <div className="schema-node-columns">
         {columns.length > 0 ? (
@@ -192,7 +222,11 @@ function SchemaWorkspaceNode({ data }: NodeProps<SchemaFlowNode>) {
                   <span className="schema-node-column-meta">
                     {column.column_type}
                     {column.is_primary_key ? ' · pk' : ''}
-                    {column.relation ? ' · fk' : ''}
+                    {column.relation === 'foreign'
+                      ? ' · fk'
+                      : column.relation === 'one_to_many'
+                        ? ' · 1:n'
+                        : ''}
                   </span>
                 </button>
                 <Handle
@@ -218,6 +252,7 @@ function buildSchemaNode({
   resource,
   table,
   columns,
+  relationCount,
   selection,
   onSelectTable,
   onSelectColumn,
@@ -226,6 +261,7 @@ function buildSchemaNode({
   resource: ResourceOverview;
   table: SchemaTable;
   columns: ReturnType<typeof deriveSchemaGraphTables>[string]['columns'];
+  relationCount: number;
   selection: SchemaWorkspaceSelection | null;
   onSelectTable: (tableName: string) => void;
   onSelectColumn: (tableName: string, columnName: string) => void;
@@ -241,6 +277,7 @@ function buildSchemaNode({
       resource,
       table,
       columns,
+      relationCount,
       selected: selection?.tableName === resource.name,
       selectedColumn:
         selection?.kind === 'column' && selection.tableName === resource.name

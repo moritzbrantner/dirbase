@@ -26,7 +26,7 @@ export interface SchemaGraphColumn {
   name: string;
   column_type: string;
   nullable: boolean;
-  relation: 'foreign' | null;
+  relation: 'foreign' | 'one_to_many' | null;
   is_primary_key: boolean;
   canSource: boolean;
   canTarget: boolean;
@@ -35,6 +35,14 @@ export interface SchemaGraphColumn {
 
 export interface SchemaGraphTable {
   columns: SchemaGraphColumn[];
+}
+
+export interface SchemaGraphRelation {
+  kind: 'foreign' | 'one_to_many';
+  sourceTable: string;
+  sourceColumn: string;
+  targetTable: string;
+  targetColumn: string;
 }
 
 export function normalizeSchema(schema: SchemaResponse | null | undefined): SchemaResponse {
@@ -379,10 +387,20 @@ export function deriveSchemaGraphTables(
   effectiveTables: Record<string, SchemaTable>
 ): Record<string, SchemaGraphTable> {
   const knownTableNames = new Set(resources.map((resource) => resource.name));
+  const relations = deriveSchemaGraphRelations(resources, effectiveTables);
+  const relationKindsByTable = new Map<string, Map<string, SchemaGraphColumn['relation']>>();
+  for (const relation of relations) {
+    const columns = relationKindsByTable.get(relation.sourceTable) ?? new Map();
+    columns.set(relation.sourceColumn, relation.kind);
+    relationKindsByTable.set(relation.sourceTable, columns);
+  }
   const baseColumnsByTable = Object.fromEntries(
     resources.map((resource) => {
       const table = normalizeSchemaTable(effectiveTables[resource.name]);
-      return [resource.name, getBaseSchemaGraphColumns(resource, table)];
+      return [
+        resource.name,
+        getBaseSchemaGraphColumns(resource, table, relationKindsByTable.get(resource.name))
+      ];
     })
   );
   const primaryKeys = resources.flatMap((resource) => {
@@ -397,20 +415,13 @@ export function deriveSchemaGraphTables(
   });
   const targetedColumns = new Map<string, Set<string>>();
 
-  for (const [tableName, tableValue] of Object.entries(effectiveTables)) {
-    if (!knownTableNames.has(tableName)) {
+  for (const relation of relations) {
+    if (!knownTableNames.has(relation.targetTable)) {
       continue;
     }
-
-    const table = normalizeSchemaTable(tableValue);
-    for (const relation of Object.values(table.foreign_keys ?? {})) {
-      if (!knownTableNames.has(relation.target_table)) {
-        continue;
-      }
-      const columns = targetedColumns.get(relation.target_table) ?? new Set<string>();
-      columns.add(relation.target_column);
-      targetedColumns.set(relation.target_table, columns);
-    }
+    const columns = targetedColumns.get(relation.targetTable) ?? new Set<string>();
+    columns.add(relation.targetColumn);
+    targetedColumns.set(relation.targetTable, columns);
   }
 
   return Object.fromEntries(
@@ -438,13 +449,18 @@ export function deriveSchemaGraphTables(
                 columnTypesAreCompatible(candidateColumn.column_type, column.column_type)
             );
           });
-        const canSource = column.relation === 'foreign' || hasCompatiblePrimaryTarget;
+        const canSource =
+          column.relation === 'foreign'
+            ? true
+            : column.relation === 'one_to_many'
+              ? false
+              : hasCompatiblePrimaryTarget;
         const canTarget = column.is_primary_key && (hasCompatibleSource || isExistingTarget);
         return {
           ...column,
           canSource,
           canTarget,
-          visible: canSource || canTarget || column.relation === 'foreign' || isExistingTarget
+          visible: canSource || canTarget || Boolean(column.relation) || isExistingTarget
         };
       });
 
@@ -457,7 +473,10 @@ export function deriveSchemaGraphTables(
               if (left.is_primary_key !== right.is_primary_key) {
                 return left.is_primary_key ? -1 : 1;
               }
-              if ((left.relation === 'foreign') !== (right.relation === 'foreign')) {
+              if (Boolean(left.relation) !== Boolean(right.relation)) {
+                return left.relation ? -1 : 1;
+              }
+              if (left.relation !== right.relation) {
                 return left.relation === 'foreign' ? -1 : 1;
               }
               return left.name.localeCompare(right.name);
@@ -503,6 +522,57 @@ export function getSchemaGraphAutoLayout(
   }
 
   return positions;
+}
+
+export function deriveSchemaGraphRelations(
+  resources: ResourceOverview[],
+  effectiveTables: Record<string, SchemaTable>
+): SchemaGraphRelation[] {
+  const resourceNames = resources.map((resource) => resource.name);
+  const knownTableNames = new Set(resourceNames);
+  const aliases = buildSchemaGraphTableAliases(resourceNames);
+  const relations = new Map<string, SchemaGraphRelation>();
+
+  for (const sourceTable of resourceNames) {
+    const table = normalizeSchemaTable(effectiveTables[sourceTable]);
+
+    for (const [sourceColumn, foreignKey] of Object.entries(table.foreign_keys ?? {})) {
+      if (!knownTableNames.has(foreignKey.target_table)) {
+        continue;
+      }
+
+      relations.set(`${sourceTable}:${sourceColumn}`, {
+        kind: 'foreign',
+        sourceTable,
+        sourceColumn,
+        targetTable: foreignKey.target_table,
+        targetColumn: foreignKey.target_column
+      });
+    }
+
+    for (const sourceColumn of Object.keys(table.columns ?? {})) {
+      const key = `${sourceTable}:${sourceColumn}`;
+      if (relations.has(key)) {
+        continue;
+      }
+
+      const relation = inferOneToManyGraphRelation(
+        sourceTable,
+        sourceColumn,
+        effectiveTables,
+        aliases
+      );
+      if (relation) {
+        relations.set(key, relation);
+      }
+    }
+  }
+
+  return [...relations.values()].sort((left, right) => {
+    const leftKey = `${left.sourceTable}:${left.sourceColumn}:${left.targetTable}:${left.targetColumn}`;
+    const rightKey = `${right.sourceTable}:${right.sourceColumn}:${right.targetTable}:${right.targetColumn}`;
+    return leftKey.localeCompare(rightKey);
+  });
 }
 
 function updateDeclaredTable(
@@ -758,6 +828,75 @@ function isKnownComparableColumnType(columnType: string): boolean {
   return COLUMN_TYPES.has(columnType);
 }
 
+function buildSchemaGraphTableAliases(tableNames: string[]): Map<string, string> {
+  const aliases = new Map<string, string>();
+
+  for (const tableName of tableNames) {
+    const singular = singularizeSchemaGraphTableName(tableName);
+    for (const alias of [
+      tableName,
+      singular,
+      normalizeSchemaGraphAlias(tableName),
+      normalizeSchemaGraphAlias(singular)
+    ]) {
+      if (alias) {
+        aliases.set(alias, tableName);
+      }
+    }
+  }
+
+  return aliases;
+}
+
+function singularizeSchemaGraphTableName(tableName: string): string {
+  if (tableName.endsWith('ies') && tableName.length > 3) {
+    return `${tableName.slice(0, -3)}y`;
+  }
+  if (tableName.endsWith('s') && tableName.length > 1) {
+    return tableName.slice(0, -1);
+  }
+  return tableName;
+}
+
+function normalizeSchemaGraphAlias(value: string): string {
+  return value.trim().replace(/[-_]/g, '').toLowerCase();
+}
+
+function inferOneToManyGraphRelation(
+  sourceTable: string,
+  sourceColumn: string,
+  tables: Record<string, SchemaTable>,
+  aliases: Map<string, string>
+): SchemaGraphRelation | null {
+  const rawTargetAlias = sourceColumn.endsWith('_ids')
+    ? sourceColumn.slice(0, -4)
+    : sourceColumn.endsWith('Ids') && sourceColumn.length > 3
+      ? sourceColumn.slice(0, -3)
+      : null;
+  if (!rawTargetAlias) {
+    return null;
+  }
+
+  const targetTableName =
+    aliases.get(rawTargetAlias) ?? aliases.get(normalizeSchemaGraphAlias(rawTargetAlias)) ?? null;
+  if (!targetTableName || targetTableName === sourceTable) {
+    return null;
+  }
+
+  const targetTable = normalizeSchemaTable(tables[targetTableName]);
+  if (!targetTable.primary_key || !targetTable.columns?.[targetTable.primary_key]) {
+    return null;
+  }
+
+  return {
+    kind: 'one_to_many',
+    sourceTable,
+    sourceColumn,
+    targetTable: targetTableName,
+    targetColumn: targetTable.primary_key
+  };
+}
+
 function isValidForeignKey(value: unknown): value is SchemaForeignKey {
   return (
     isRecord(value) &&
@@ -873,8 +1012,13 @@ function addManyToManyRelation(
 
 function getBaseSchemaGraphColumns(
   resource: ResourceOverview,
-  table: SchemaTable
+  table: SchemaTable,
+  relationKinds: Map<string, SchemaGraphColumn['relation']> | undefined
 ): Array<Omit<SchemaGraphColumn, 'canSource' | 'canTarget' | 'visible'>> {
+  const resolveRelation = (
+    columnName: string,
+    fallback: SchemaGraphColumn['relation'] = null
+  ): SchemaGraphColumn['relation'] => relationKinds?.get(columnName) ?? fallback;
   const tableColumns = table.columns ?? {};
   const columnNames = Object.keys(tableColumns);
   if (columnNames.length > 0) {
@@ -882,7 +1026,7 @@ function getBaseSchemaGraphColumns(
       name: columnName,
       column_type: tableColumns[columnName]?.column_type ?? 'unknown',
       nullable: tableColumns[columnName]?.nullable ?? true,
-      relation: table.foreign_keys?.[columnName] ? 'foreign' : null,
+      relation: resolveRelation(columnName),
       is_primary_key: table.primary_key === columnName
     }));
   }
@@ -892,14 +1036,14 @@ function getBaseSchemaGraphColumns(
         name: column.name,
         column_type: column.column_type,
         nullable: column.nullable,
-        relation: table.foreign_keys?.[column.name] ? 'foreign' : column.relation === 'foreign' ? 'foreign' : null,
+        relation: resolveRelation(column.name, column.relation === 'foreign' ? 'foreign' : null),
         is_primary_key: table.primary_key ? table.primary_key === column.name : column.is_primary_key
       }))
     : resource.field_names.map((fieldName) => ({
         name: fieldName,
         column_type: 'unknown',
         nullable: true,
-        relation: table.foreign_keys?.[fieldName] ? 'foreign' : null,
+        relation: resolveRelation(fieldName),
         is_primary_key: table.primary_key === fieldName || resource.primary_key === fieldName
       }));
 }
@@ -909,25 +1053,19 @@ function rankSchemaGraphTables(
   effectiveTables: Record<string, SchemaTable>
 ): string[][] {
   const tableNames = resources.map((resource) => resource.name);
-  const knownTableNames = new Set(tableNames);
   const incomingCounts = new Map<string, number>(tableNames.map((tableName) => [tableName, 0]));
   const outgoing = new Map<string, Set<string>>(tableNames.map((tableName) => [tableName, new Set()]));
   const ranks = new Map<string, number>(tableNames.map((tableName) => [tableName, 0]));
+  const relations = deriveSchemaGraphRelations(resources, effectiveTables);
 
-  for (const tableName of tableNames) {
-    const table = normalizeSchemaTable(effectiveTables[tableName]);
-    for (const relation of Object.values(table.foreign_keys ?? {})) {
-      if (!knownTableNames.has(relation.target_table)) {
-        continue;
-      }
-      const neighbors = outgoing.get(tableName) ?? new Set<string>();
-      if (neighbors.has(relation.target_table)) {
-        continue;
-      }
-      neighbors.add(relation.target_table);
-      outgoing.set(tableName, neighbors);
-      incomingCounts.set(relation.target_table, (incomingCounts.get(relation.target_table) ?? 0) + 1);
+  for (const relation of relations) {
+    const neighbors = outgoing.get(relation.sourceTable) ?? new Set<string>();
+    if (neighbors.has(relation.targetTable)) {
+      continue;
     }
+    neighbors.add(relation.targetTable);
+    outgoing.set(relation.sourceTable, neighbors);
+    incomingCounts.set(relation.targetTable, (incomingCounts.get(relation.targetTable) ?? 0) + 1);
   }
 
   const queue = tableNames.filter((tableName) => (incomingCounts.get(tableName) ?? 0) === 0).sort();
@@ -954,11 +1092,14 @@ function rankSchemaGraphTables(
   }
 
   const graphTables = deriveSchemaGraphTables(resources, effectiveTables);
+  const relationCounts = relations.reduce<Map<string, number>>((counts, relation) => {
+    counts.set(relation.sourceTable, (counts.get(relation.sourceTable) ?? 0) + 1);
+    return counts;
+  }, new Map());
   const degreeByTable = new Map(
     tableNames.map((tableName) => [
       tableName,
-      Object.keys(normalizeSchemaTable(effectiveTables[tableName]).foreign_keys ?? {}).length +
-        [...(outgoing.get(tableName) ?? [])].length
+      (relationCounts.get(tableName) ?? 0) + [...(outgoing.get(tableName) ?? [])].length
     ])
   );
 
