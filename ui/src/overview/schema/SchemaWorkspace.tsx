@@ -82,6 +82,7 @@ export function SchemaWorkspace({
   const [selection, setSelection] = useState<SchemaWorkspaceSelection | null>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<SchemaSidebarFilter>('all');
+  const [autoArrangeNonce, setAutoArrangeNonce] = useState(0);
   const structuredEditingDisabled = Boolean(jsonDraftError);
 
   const discoveredTableNames = useMemo(() => resources.map((resource) => resource.name), [resources]);
@@ -218,9 +219,16 @@ export function SchemaWorkspace({
               <p className="section-title">Graph</p>
               <h3 className="text-lg font-semibold text-stoneink-900">Visual relations and columns</h3>
             </div>
+            <button
+              type="button"
+              className="overview-secondary-button"
+              onClick={() => setAutoArrangeNonce((current) => current + 1)}
+            >
+              Auto-arrange
+            </button>
           </div>
           <p className="overview-copy">
-            Select tables and columns directly on the graph. Drag from a source column to a target column to stage a relation.
+            Drag tables to reposition them. Only compatible key columns stay visible, and new links can only go from candidate foreign keys to primary keys.
           </p>
           <SchemaCanvas
             resources={resources}
@@ -228,6 +236,7 @@ export function SchemaWorkspace({
             selection={selection}
             readonly={readonly}
             structuredEditingDisabled={structuredEditingDisabled}
+            autoArrangeNonce={autoArrangeNonce}
             onSelectTable={selectTable}
             onSelectColumn={selectColumn}
             onSelectRelation={selectRelation}

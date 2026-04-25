@@ -5,6 +5,7 @@ import { parseSchemaConnection } from './schemaEditor';
 import type {
   DeclaredSchemaResponse,
   DeclaredSchemaTable,
+  ResourceOverview,
   SchemaColumn,
   SchemaEditorPayload,
   SchemaForeignKey,
@@ -16,6 +17,25 @@ import type {
 const EMPTY_DECLARED_SCHEMA: DeclaredSchemaResponse = { tables: {} };
 const COLUMN_TYPES = new Set(['integer', 'float', 'boolean', 'string', 'json']);
 const TABLE_KINDS = new Set(['object', 'relation', 'unknown']);
+const SCHEMA_GRAPH_NODE_WIDTH = 260;
+const SCHEMA_GRAPH_NODE_GAP_X = 64;
+const SCHEMA_GRAPH_NODE_GAP_Y = 28;
+const SCHEMA_GRAPH_MAX_ROWS_PER_LANE = 6;
+
+export interface SchemaGraphColumn {
+  name: string;
+  column_type: string;
+  nullable: boolean;
+  relation: 'foreign' | null;
+  is_primary_key: boolean;
+  canSource: boolean;
+  canTarget: boolean;
+  visible: boolean;
+}
+
+export interface SchemaGraphTable {
+  columns: SchemaGraphColumn[];
+}
 
 export function normalizeSchema(schema: SchemaResponse | null | undefined): SchemaResponse {
   if (!schema || !isRecord(schema.tables)) {
@@ -354,6 +374,137 @@ export function getSchemaWorkspaceSnapshot(payload: SchemaEditorPayload | undefi
   };
 }
 
+export function deriveSchemaGraphTables(
+  resources: ResourceOverview[],
+  effectiveTables: Record<string, SchemaTable>
+): Record<string, SchemaGraphTable> {
+  const knownTableNames = new Set(resources.map((resource) => resource.name));
+  const baseColumnsByTable = Object.fromEntries(
+    resources.map((resource) => {
+      const table = normalizeSchemaTable(effectiveTables[resource.name]);
+      return [resource.name, getBaseSchemaGraphColumns(resource, table)];
+    })
+  );
+  const primaryKeys = resources.flatMap((resource) => {
+    const columns = baseColumnsByTable[resource.name] ?? [];
+    return columns
+      .filter((column) => column.is_primary_key && isKnownComparableColumnType(column.column_type))
+      .map((column) => ({
+        tableName: resource.name,
+        columnName: column.name,
+        columnType: column.column_type
+      }));
+  });
+  const targetedColumns = new Map<string, Set<string>>();
+
+  for (const [tableName, tableValue] of Object.entries(effectiveTables)) {
+    if (!knownTableNames.has(tableName)) {
+      continue;
+    }
+
+    const table = normalizeSchemaTable(tableValue);
+    for (const relation of Object.values(table.foreign_keys ?? {})) {
+      if (!knownTableNames.has(relation.target_table)) {
+        continue;
+      }
+      const columns = targetedColumns.get(relation.target_table) ?? new Set<string>();
+      columns.add(relation.target_column);
+      targetedColumns.set(relation.target_table, columns);
+    }
+  }
+
+  return Object.fromEntries(
+    resources.map((resource) => {
+      const table = normalizeSchemaTable(effectiveTables[resource.name]);
+      const columns = (baseColumnsByTable[resource.name] ?? []).map((column) => {
+        const isExistingTarget = targetedColumns.get(resource.name)?.has(column.name) ?? false;
+        const hasCompatiblePrimaryTarget =
+          !column.is_primary_key &&
+          isKnownComparableColumnType(column.column_type) &&
+          primaryKeys.some(
+            (target) =>
+              (target.tableName !== resource.name || target.columnName !== column.name) &&
+              columnTypesAreCompatible(column.column_type, target.columnType)
+          );
+        const hasCompatibleSource =
+          column.is_primary_key &&
+          isKnownComparableColumnType(column.column_type) &&
+          resources.some((candidateResource) => {
+            const candidateColumns = baseColumnsByTable[candidateResource.name] ?? [];
+            return candidateColumns.some(
+              (candidateColumn) =>
+                !candidateColumn.is_primary_key &&
+                isKnownComparableColumnType(candidateColumn.column_type) &&
+                columnTypesAreCompatible(candidateColumn.column_type, column.column_type)
+            );
+          });
+        const canSource = column.relation === 'foreign' || hasCompatiblePrimaryTarget;
+        const canTarget = column.is_primary_key && (hasCompatibleSource || isExistingTarget);
+        return {
+          ...column,
+          canSource,
+          canTarget,
+          visible: canSource || canTarget || column.relation === 'foreign' || isExistingTarget
+        };
+      });
+
+      return [
+        resource.name,
+        {
+          columns: columns
+            .filter((column) => column.visible)
+            .sort((left, right) => {
+              if (left.is_primary_key !== right.is_primary_key) {
+                return left.is_primary_key ? -1 : 1;
+              }
+              if ((left.relation === 'foreign') !== (right.relation === 'foreign')) {
+                return left.relation === 'foreign' ? -1 : 1;
+              }
+              return left.name.localeCompare(right.name);
+            })
+        }
+      ];
+    })
+  );
+}
+
+export function getSchemaGraphAutoLayout(
+  resources: ResourceOverview[],
+  effectiveTables: Record<string, SchemaTable>
+): Record<string, { x: number; y: number }> {
+  const graphTables = deriveSchemaGraphTables(resources, effectiveTables);
+  const tableNames = resources.map((resource) => resource.name);
+  const groupedByRank = rankSchemaGraphTables(resources, effectiveTables);
+  const positions: Record<string, { x: number; y: number }> = {};
+  let xCursor = 0;
+
+  for (const rankGroup of groupedByRank) {
+    const lanes = Math.max(1, Math.ceil(rankGroup.length / SCHEMA_GRAPH_MAX_ROWS_PER_LANE));
+    const laneHeights = Array.from({ length: lanes }, () => 0);
+
+    rankGroup.forEach((tableName, index) => {
+      const laneIndex = index % lanes;
+      const columns = graphTables[tableName]?.columns ?? [];
+      positions[tableName] = {
+        x: xCursor + laneIndex * (SCHEMA_GRAPH_NODE_WIDTH + SCHEMA_GRAPH_NODE_GAP_X),
+        y: laneHeights[laneIndex]
+      };
+      laneHeights[laneIndex] += estimateSchemaNodeHeight(columns.length) + SCHEMA_GRAPH_NODE_GAP_Y;
+    });
+
+    xCursor += lanes * (SCHEMA_GRAPH_NODE_WIDTH + SCHEMA_GRAPH_NODE_GAP_X) + SCHEMA_GRAPH_NODE_GAP_X;
+  }
+
+  for (const tableName of tableNames) {
+    if (!positions[tableName]) {
+      positions[tableName] = { x: xCursor, y: 0 };
+      xCursor += SCHEMA_GRAPH_NODE_WIDTH + SCHEMA_GRAPH_NODE_GAP_X;
+    }
+  }
+
+  return positions;
+}
+
 function updateDeclaredTable(
   declaredInput: DeclaredSchemaResponse,
   tableName: string,
@@ -603,6 +754,10 @@ function columnTypesAreCompatible(left: string, right: string): boolean {
   );
 }
 
+function isKnownComparableColumnType(columnType: string): boolean {
+  return COLUMN_TYPES.has(columnType);
+}
+
 function isValidForeignKey(value: unknown): value is SchemaForeignKey {
   return (
     isRecord(value) &&
@@ -714,4 +869,131 @@ function addManyToManyRelation(
     ...existing,
     [relationName]: relation
   };
+}
+
+function getBaseSchemaGraphColumns(
+  resource: ResourceOverview,
+  table: SchemaTable
+): Array<Omit<SchemaGraphColumn, 'canSource' | 'canTarget' | 'visible'>> {
+  const tableColumns = table.columns ?? {};
+  const columnNames = Object.keys(tableColumns);
+  if (columnNames.length > 0) {
+    return columnNames.map((columnName) => ({
+      name: columnName,
+      column_type: tableColumns[columnName]?.column_type ?? 'unknown',
+      nullable: tableColumns[columnName]?.nullable ?? true,
+      relation: table.foreign_keys?.[columnName] ? 'foreign' : null,
+      is_primary_key: table.primary_key === columnName
+    }));
+  }
+
+  return resource.columns.length > 0
+    ? resource.columns.map((column) => ({
+        name: column.name,
+        column_type: column.column_type,
+        nullable: column.nullable,
+        relation: table.foreign_keys?.[column.name] ? 'foreign' : column.relation === 'foreign' ? 'foreign' : null,
+        is_primary_key: table.primary_key ? table.primary_key === column.name : column.is_primary_key
+      }))
+    : resource.field_names.map((fieldName) => ({
+        name: fieldName,
+        column_type: 'unknown',
+        nullable: true,
+        relation: table.foreign_keys?.[fieldName] ? 'foreign' : null,
+        is_primary_key: table.primary_key === fieldName || resource.primary_key === fieldName
+      }));
+}
+
+function rankSchemaGraphTables(
+  resources: ResourceOverview[],
+  effectiveTables: Record<string, SchemaTable>
+): string[][] {
+  const tableNames = resources.map((resource) => resource.name);
+  const knownTableNames = new Set(tableNames);
+  const incomingCounts = new Map<string, number>(tableNames.map((tableName) => [tableName, 0]));
+  const outgoing = new Map<string, Set<string>>(tableNames.map((tableName) => [tableName, new Set()]));
+  const ranks = new Map<string, number>(tableNames.map((tableName) => [tableName, 0]));
+
+  for (const tableName of tableNames) {
+    const table = normalizeSchemaTable(effectiveTables[tableName]);
+    for (const relation of Object.values(table.foreign_keys ?? {})) {
+      if (!knownTableNames.has(relation.target_table)) {
+        continue;
+      }
+      const neighbors = outgoing.get(tableName) ?? new Set<string>();
+      if (neighbors.has(relation.target_table)) {
+        continue;
+      }
+      neighbors.add(relation.target_table);
+      outgoing.set(tableName, neighbors);
+      incomingCounts.set(relation.target_table, (incomingCounts.get(relation.target_table) ?? 0) + 1);
+    }
+  }
+
+  const queue = tableNames.filter((tableName) => (incomingCounts.get(tableName) ?? 0) === 0).sort();
+  const visited = new Set<string>();
+
+  while (queue.length > 0) {
+    const tableName = queue.shift();
+    if (!tableName || visited.has(tableName)) {
+      continue;
+    }
+    visited.add(tableName);
+    const nextRank = (ranks.get(tableName) ?? 0) + 1;
+
+    [...(outgoing.get(tableName) ?? [])]
+      .sort()
+      .forEach((targetTable) => {
+        incomingCounts.set(targetTable, (incomingCounts.get(targetTable) ?? 1) - 1);
+        ranks.set(targetTable, Math.max(ranks.get(targetTable) ?? 0, nextRank));
+        if ((incomingCounts.get(targetTable) ?? 0) === 0) {
+          queue.push(targetTable);
+          queue.sort();
+        }
+      });
+  }
+
+  const graphTables = deriveSchemaGraphTables(resources, effectiveTables);
+  const degreeByTable = new Map(
+    tableNames.map((tableName) => [
+      tableName,
+      Object.keys(normalizeSchemaTable(effectiveTables[tableName]).foreign_keys ?? {}).length +
+        [...(outgoing.get(tableName) ?? [])].length
+    ])
+  );
+
+  for (const tableName of tableNames) {
+    if (!visited.has(tableName)) {
+      ranks.set(tableName, 0);
+    }
+  }
+
+  const grouped = new Map<number, string[]>();
+  for (const tableName of tableNames) {
+    const rank = ranks.get(tableName) ?? 0;
+    const tablesAtRank = grouped.get(rank) ?? [];
+    tablesAtRank.push(tableName);
+    grouped.set(rank, tablesAtRank);
+  }
+
+  return [...grouped.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, group]) =>
+      group.sort((left, right) => {
+        const leftVisibleColumns = graphTables[left]?.columns.length ?? 0;
+        const rightVisibleColumns = graphTables[right]?.columns.length ?? 0;
+        const degreeDelta = (degreeByTable.get(right) ?? 0) - (degreeByTable.get(left) ?? 0);
+        if (degreeDelta !== 0) {
+          return degreeDelta;
+        }
+        if (rightVisibleColumns !== leftVisibleColumns) {
+          return rightVisibleColumns - leftVisibleColumns;
+        }
+        return left.localeCompare(right);
+      })
+    );
+}
+
+function estimateSchemaNodeHeight(columnCount: number): number {
+  return 104 + columnCount * 38;
 }

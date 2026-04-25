@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  deriveSchemaGraphTables,
+  getSchemaGraphAutoLayout,
   mergeSchemaEditorPayload,
   removeDeclaredRelationship,
   resetDeclaredRelationship,
@@ -10,7 +12,7 @@ import {
   upsertDeclaredRelationship,
   validateSchemaDraft
 } from './schemaWorkspace';
-import type { DeclaredSchemaResponse, SchemaResponse } from './types';
+import type { DeclaredSchemaResponse, ResourceOverview, SchemaResponse } from './types';
 
 const inferredSchema: SchemaResponse = {
   tables: {
@@ -81,6 +83,100 @@ const junctionSchema: SchemaResponse = {
     }
   }
 };
+
+const graphResources: ResourceOverview[] = [
+  {
+    name: 'users',
+    kind: 'table',
+    row_count: 2,
+    key_count: null,
+    primary_key: 'id',
+    field_names: ['id', 'team_id', 'name'],
+    row_samples: [],
+    columns: [
+      { name: 'id', column_type: 'integer', nullable: false, relation: null, is_primary_key: true },
+      { name: 'team_id', column_type: 'integer', nullable: true, relation: 'foreign', is_primary_key: false },
+      { name: 'name', column_type: 'string', nullable: false, relation: null, is_primary_key: false }
+    ],
+    outgoing_relations: [],
+    incoming_relations: [],
+    many_to_many_relations: [],
+    sample_item_id: '1',
+    query_capabilities: {
+      filter: true,
+      sort: true,
+      pagination: true,
+      embed: true,
+      item_route: true
+    },
+    mutation_capabilities: {
+      create_item: true,
+      update_item: true,
+      delete_item: true,
+      replace_object: false,
+      patch_object: false
+    }
+  },
+  {
+    name: 'teams',
+    kind: 'table',
+    row_count: 2,
+    key_count: null,
+    primary_key: 'id',
+    field_names: ['id', 'name'],
+    row_samples: [],
+    columns: [
+      { name: 'id', column_type: 'integer', nullable: false, relation: null, is_primary_key: true },
+      { name: 'name', column_type: 'string', nullable: false, relation: null, is_primary_key: false }
+    ],
+    outgoing_relations: [],
+    incoming_relations: [],
+    many_to_many_relations: [],
+    sample_item_id: '1',
+    query_capabilities: {
+      filter: true,
+      sort: true,
+      pagination: true,
+      embed: true,
+      item_route: true
+    },
+    mutation_capabilities: {
+      create_item: true,
+      update_item: true,
+      delete_item: true,
+      replace_object: false,
+      patch_object: false
+    }
+  },
+  {
+    name: 'audit_logs',
+    kind: 'table',
+    row_count: 2,
+    key_count: null,
+    primary_key: null,
+    field_names: ['message'],
+    row_samples: [],
+    columns: [{ name: 'message', column_type: 'string', nullable: false, relation: null, is_primary_key: false }],
+    outgoing_relations: [],
+    incoming_relations: [],
+    many_to_many_relations: [],
+    sample_item_id: null,
+    query_capabilities: {
+      filter: true,
+      sort: true,
+      pagination: true,
+      embed: false,
+      item_route: false
+    },
+    mutation_capabilities: {
+      create_item: true,
+      update_item: true,
+      delete_item: true,
+      replace_object: false,
+      patch_object: false
+    }
+  }
+];
 
 describe('schema workspace helpers', () => {
   it('merges inferred schema with declared overrides and suppressions', () => {
@@ -235,5 +331,30 @@ describe('schema workspace helpers', () => {
     expect(effective.tables?.courses.many_to_many?.students?.through_table).toBe(
       'student_courses'
     );
+  });
+
+  it('keeps only compatible key columns visible in the schema graph', () => {
+    const graphTables = deriveSchemaGraphTables(graphResources, inferredSchema.tables ?? {});
+
+    expect(graphTables.users.columns.map((column) => column.name)).toEqual(['id', 'team_id']);
+    expect(graphTables.users.columns.find((column) => column.name === 'team_id')).toMatchObject({
+      canSource: true,
+      canTarget: false
+    });
+    expect(graphTables.teams.columns).toEqual([
+      expect.objectContaining({
+        name: 'id',
+        canSource: false,
+        canTarget: true
+      })
+    ]);
+    expect(graphTables.audit_logs.columns).toEqual([]);
+  });
+
+  it('auto-arranges related tables from source to target order', () => {
+    const layout = getSchemaGraphAutoLayout(graphResources, inferredSchema.tables ?? {});
+
+    expect(layout.users.x).toBeLessThan(layout.teams.x);
+    expect(layout.audit_logs.x).toBeGreaterThanOrEqual(0);
   });
 });
