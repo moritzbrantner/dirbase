@@ -15,55 +15,33 @@ import { getJsonValidationError } from './shared';
 export function InspectorPanel({
   resource,
   response,
-  schemaDraft,
-  schemaStatus,
-  schemaDiffSummary,
-  schemaValidationError,
   selectedRow,
   selectedTab,
   outgoingRelations,
   incomingRelations,
   readonly,
   mobileOpen,
-  schemaBusy,
-  canSaveSchema,
-  canInferSchema,
   requestPath,
   requestUrl,
   onTabChange,
-  onSchemaDraftChange,
   onCopy,
   onOpenRequest,
-  onReloadSchema,
-  onSaveSchema,
-  onInferSchema,
   onDrilldownOutgoing,
   onDrilldownIncoming
 }: {
   resource: ResourceOverview | null;
   response: ResourceResponse | undefined;
-  schemaDraft: string;
-  schemaStatus: string | null;
-  schemaDiffSummary: string[];
-  schemaValidationError: string | null;
   selectedRow: Record<string, unknown> | null;
   selectedTab: InspectorTab;
   outgoingRelations: Array<{ relation: OverviewRelation; value: string | null }>;
   incomingRelations: Array<{ relation: OverviewRelation; value: string | null }>;
   readonly: boolean;
   mobileOpen: boolean;
-  schemaBusy: boolean;
-  canSaveSchema: boolean;
-  canInferSchema: boolean;
   requestPath: string;
   requestUrl: string;
   onTabChange: (tab: InspectorTab) => void;
-  onSchemaDraftChange: (value: string) => void;
   onCopy: (value: string) => Promise<void>;
   onOpenRequest: () => void;
-  onReloadSchema: () => void;
-  onSaveSchema: () => void;
-  onInferSchema: () => void;
   onDrilldownOutgoing: (entry: { relation: OverviewRelation; value: string | null }) => void;
   onDrilldownIncoming: (entry: { relation: OverviewRelation; value: string | null }) => void;
 }) {
@@ -92,9 +70,6 @@ export function InspectorPanel({
           onClick={() => onTabChange('selection')}
         >
           Selection
-        </button>
-        <button type="button" className={selectedTab === 'schema' ? 'is-active' : ''} onClick={() => onTabChange('schema')}>
-          Schema
         </button>
       </div>
 
@@ -161,23 +136,6 @@ export function InspectorPanel({
             </section>
           )}
         </section>
-      )}
-
-      {selectedTab === 'schema' && (
-        <SchemaEditorPanel
-          draft={schemaDraft}
-          status={schemaStatus}
-          diffSummary={schemaDiffSummary}
-          validationError={schemaValidationError}
-          readonly={readonly}
-          busy={schemaBusy}
-          canSave={canSaveSchema}
-          canInfer={canInferSchema}
-          onChange={onSchemaDraftChange}
-          onReload={onReloadSchema}
-          onSave={onSaveSchema}
-          onInfer={onInferSchema}
-        />
       )}
     </aside>
   );
@@ -449,91 +407,6 @@ function SelectionPanel({
         <pre className="json-viewer">{formatJson(row)}</pre>
       </section>
     </div>
-  );
-}
-
-function SchemaEditorPanel({
-  draft,
-  status,
-  diffSummary,
-  validationError,
-  readonly,
-  busy,
-  canSave,
-  canInfer,
-  onChange,
-  onReload,
-  onSave,
-  onInfer
-}: {
-  draft: string;
-  status: string | null;
-  diffSummary: string[];
-  validationError: string | null;
-  readonly: boolean;
-  busy: boolean;
-  canSave: boolean;
-  canInfer: boolean;
-  onChange: (value: string) => void;
-  onReload: () => void;
-  onSave: () => void;
-  onInfer: () => void;
-}) {
-  return (
-    <section className="inspector-section">
-      <div className="schema-panel-head">
-        <div>
-          <h3 className="text-sm font-semibold text-stoneink-900">Schema editor</h3>
-          <p className="overview-copy">Edit the JSON overlay directly. Save uses `PUT /schema`; infer uses `POST /schema/infer`.</p>
-        </div>
-        {readonly && <span className="status-pill is-warn">Read-only mode</span>}
-      </div>
-
-      <textarea
-        className="schema-editor"
-        value={draft}
-        onChange={(event) => onChange(event.target.value)}
-        readOnly={readonly}
-        spellCheck={false}
-        data-testid="schema-editor"
-      />
-
-      {validationError && <p className="copy-status is-error">{validationError}</p>}
-      {diffSummary.length > 0 && (
-        <div className="schema-diff-summary">
-          <p className="section-title">Diff summary</p>
-          {diffSummary.map((line) => (
-            <p key={line} className="overview-copy">
-              {line}
-            </p>
-          ))}
-        </div>
-      )}
-
-      <div className="schema-editor-actions">
-        <button type="button" className="overview-secondary-button" onClick={onReload}>
-          Reload
-        </button>
-        <button
-          type="button"
-          className="overview-secondary-button"
-          onClick={onInfer}
-          disabled={readonly || !canInfer || busy}
-        >
-          {busy ? 'Working…' : 'Infer from data'}
-        </button>
-        <button
-          type="button"
-          className="overview-secondary-button"
-          onClick={onSave}
-          disabled={readonly || !canSave || busy}
-        >
-          {busy ? 'Working…' : 'Save'}
-        </button>
-      </div>
-
-      {status && <p className="copy-status">{status}</p>}
-    </section>
   );
 }
 

@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use async_graphql::{
     Error as GraphqlError, Request as GraphqlRequest, Value as GraphqlValue,
@@ -25,10 +28,13 @@ use crate::{
     error::AppError,
     query::filters::{
         FilterCondition, FilterOperator, Pagination, SortColumn, filter_collection_refs,
-        paginate_collection_refs, sort_collection_refs,
+        paginate_collection_refs, sort_collection_refs, value_to_filter_string,
     },
-    relations::resolve_related_row,
-    schema::{ColumnSchema, ColumnType, DeclaredTableSchema, TableSchema, primary_key_name},
+    relations::{build_relation_lookup, resolve_related_row_in_lookup},
+    schema::{
+        ColumnSchema, ColumnType, DeclaredTableSchema, ManyToManyRelation, TableSchema,
+        primary_key_name,
+    },
     storage::{find_item_by_key, load_resource, validate_resource_data},
 };
 
@@ -51,6 +57,7 @@ struct ObjectFieldSpec {
 enum ObjectFieldOutput {
     Scalar(ScalarKind),
     Relation { source_column: String, target_type_name: String },
+    ManyToManyList { relation: ManyToManyRelation, target_type_name: String },
 }
 
 #[derive(Clone, Debug)]
@@ -96,6 +103,11 @@ struct PageTypeSpec {
 #[derive(Clone, Debug)]
 struct GraphqlPageValue {
     object: JsonMap<String, JsonValue>,
+}
+
+#[derive(Default)]
+struct GraphqlRelationCache {
+    resources: tokio::sync::Mutex<BTreeMap<String, Arc<JsonValue>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -402,6 +414,40 @@ fn build_collection_object_fields(
         });
     }
 
+    for (relation_name, relation) in &table.many_to_many {
+        if !resource_set.contains(&relation.target_table) {
+            continue;
+        }
+        let Some(target_type_name) = target_type_names.get(&relation.target_table).cloned() else {
+            continue;
+        };
+        let scope = format!("GraphQL fields for resource '{resource}'");
+        let fallback_name = format!("{}_via_{}", relation.target_table, relation.through_table);
+        let graphql_name = register_graphql_name(
+            &mut seen,
+            normalize_graphql_name(relation_name),
+            format!("many-to-many field '{relation_name}'"),
+            &scope,
+        )
+        .or_else(|_| {
+            register_graphql_name(
+                &mut seen,
+                normalize_graphql_name(&fallback_name),
+                format!("many-to-many field '{fallback_name}'"),
+                &scope,
+            )
+        })?;
+        fields.push(ObjectFieldSpec {
+            graphql_name,
+            json_key: relation_name.clone(),
+            output: ObjectFieldOutput::ManyToManyList {
+                relation: relation.clone(),
+                target_type_name,
+            },
+            nullable: false,
+        });
+    }
+
     Ok(fields)
 }
 
@@ -455,6 +501,9 @@ fn build_object_field(
         ObjectFieldOutput::Relation { target_type_name, .. } => {
             named_type_ref(target_type_name, spec.nullable)
         }
+        ObjectFieldOutput::ManyToManyList { target_type_name, .. } => {
+            TypeRef::named_nn_list_nn(target_type_name.clone())
+        }
     };
     let field_name = spec.graphql_name.clone();
     let json_key = spec.json_key.clone();
@@ -477,13 +526,15 @@ fn build_object_field(
             let target_type_name = target_type_name.clone();
             Field::new(field_name, type_ref, move |ctx| {
                 let state = ctx.data_unchecked::<AppState>().clone();
+                let cache = ctx.data_unchecked::<GraphqlRelationCache>();
                 let source_resource = source_resource.clone();
                 let source_column = source_column.clone();
                 let target_type_name = target_type_name.clone();
                 FieldFuture::new(async move {
                     let parent = parent_object_value(&ctx)?;
-                    let related = resolve_related_row(
+                    let related = resolve_graphql_related_row(
                         &state,
+                        cache,
                         &source_resource,
                         &parent.object,
                         &source_column,
@@ -496,6 +547,28 @@ fn build_object_field(
                             .cloned()
                             .map(|object| typed_object_value(&target_type_name, object))
                     }))
+                })
+            })
+        }
+        ObjectFieldOutput::ManyToManyList { relation, target_type_name } => {
+            let relation = relation.clone();
+            let target_type_name = target_type_name.clone();
+            Field::new(field_name, type_ref, move |ctx| {
+                let state = ctx.data_unchecked::<AppState>().clone();
+                let cache = ctx.data_unchecked::<GraphqlRelationCache>();
+                let relation = relation.clone();
+                let target_type_name = target_type_name.clone();
+                FieldFuture::new(async move {
+                    let parent = parent_object_value(&ctx)?;
+                    let values = resolve_graphql_many_to_many_rows(
+                        &state,
+                        cache,
+                        &parent.object,
+                        &relation,
+                        &target_type_name,
+                    )
+                    .await?;
+                    Ok(Some(FieldValue::list(values)))
                 })
             })
         }
@@ -1027,7 +1100,128 @@ async fn execute_graphql_request(state: &AppState, request: GraphqlRequest) -> R
         }
     };
 
+    let request = request.data(GraphqlRelationCache::default());
     GraphQLResponse::from(schema.execute(request).await).into_response()
+}
+
+async fn resolve_graphql_related_row(
+    state: &AppState,
+    cache: &GraphqlRelationCache,
+    resource: &str,
+    source_object: &JsonMap<String, JsonValue>,
+    source_column: &str,
+) -> Result<Option<JsonValue>, AppError> {
+    let table = state.schema_table(resource).ok_or_else(|| {
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            "Relation lookup requires schema metadata with foreign key definitions",
+        )
+    })?;
+    let fk = table.foreign_keys.get(source_column).ok_or_else(|| {
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Cannot resolve relation '{source_column}' for resource '{resource}'"),
+        )
+    })?;
+    let target_resource = load_cached_graphql_resource(cache, state, &fk.target_table).await?;
+    let target_items = target_resource.as_array().ok_or_else(|| {
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Embedded resource '{}' is not a JSON array", fk.target_table),
+        )
+    })?;
+    let lookup = build_relation_lookup(target_items, &fk.target_column);
+    Ok(resolve_related_row_in_lookup(source_object, source_column, &lookup))
+}
+
+async fn load_cached_graphql_resource(
+    cache: &GraphqlRelationCache,
+    state: &AppState,
+    resource: &str,
+) -> Result<Arc<JsonValue>, AppError> {
+    if let Some(value) = cache.resources.lock().await.get(resource).cloned() {
+        return Ok(value);
+    }
+
+    let value = load_resource(state, resource).await?;
+    cache.resources.lock().await.insert(resource.to_string(), value.clone());
+    Ok(value)
+}
+
+async fn resolve_graphql_many_to_many_rows(
+    state: &AppState,
+    cache: &GraphqlRelationCache,
+    parent: &JsonMap<String, JsonValue>,
+    relation: &ManyToManyRelation,
+    target_type_name: &str,
+) -> Result<Vec<FieldValue<'static>>, GraphqlError> {
+    let source_value = match parent.get(&relation.source_target_column) {
+        Some(value) if value.is_null() || value.is_object() || value.is_array() => {
+            return Ok(Vec::new());
+        }
+        Some(value) => value_to_filter_string(value),
+        None => return Ok(Vec::new()),
+    };
+
+    let through_resource = load_cached_graphql_resource(cache, state, &relation.through_table)
+        .await
+        .map_err(app_error_to_graphql)?;
+    validate_resource_data(state, &relation.through_table, through_resource.as_ref())
+        .map_err(app_error_to_graphql)?;
+    let through_items = through_resource.as_array().ok_or_else(|| {
+        GraphqlError::new(format!("Resource '{}' is not a JSON array", relation.through_table))
+    })?;
+
+    let mut target_ids = BTreeSet::new();
+    for row in through_items {
+        let Some(object) = row.as_object() else {
+            continue;
+        };
+        let Some(candidate) = object.get(&relation.source_column) else {
+            continue;
+        };
+        if candidate.is_null() || candidate.is_object() || candidate.is_array() {
+            continue;
+        }
+        if value_to_filter_string(candidate) != source_value {
+            continue;
+        }
+        let Some(target_value) = object.get(&relation.through_target_column) else {
+            continue;
+        };
+        if target_value.is_null() || target_value.is_object() || target_value.is_array() {
+            continue;
+        }
+        target_ids.insert(value_to_filter_string(target_value));
+    }
+
+    if target_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let target_resource = load_cached_graphql_resource(cache, state, &relation.target_table)
+        .await
+        .map_err(app_error_to_graphql)?;
+    validate_resource_data(state, &relation.target_table, target_resource.as_ref())
+        .map_err(app_error_to_graphql)?;
+    let target_items = target_resource.as_array().ok_or_else(|| {
+        GraphqlError::new(format!("Resource '{}' is not a JSON array", relation.target_table))
+    })?;
+
+    let values = target_items
+        .iter()
+        .filter_map(|item| item.as_object())
+        .filter_map(|object| {
+            let id = object.get(&relation.target_column)?;
+            (!id.is_null()
+                && !id.is_object()
+                && !id.is_array()
+                && target_ids.contains(&value_to_filter_string(id)))
+            .then(|| typed_object_value(target_type_name, object.clone()))
+        })
+        .collect::<Vec<_>>();
+
+    Ok(values)
 }
 
 fn graphql_error_response(status: StatusCode, message: impl Into<String>) -> Response {

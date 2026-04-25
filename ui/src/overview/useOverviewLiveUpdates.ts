@@ -26,7 +26,6 @@ export function useOverviewLiveUpdates({
     let active = true;
     let source: EventSource | null = null;
     let retries = 0;
-    let reconnectTimer: number | null = null;
     let refreshTimer: number | null = null;
     let stormPauseNotified = false;
     let eventTimestamps: number[] = [];
@@ -71,7 +70,7 @@ export function useOverviewLiveUpdates({
         return;
       }
 
-      setLiveUpdates(retries === 0 ? 'connecting' : 'reconnecting');
+      setLiveUpdates('connecting');
       source = new EventSource('/events');
 
       source.onopen = () => {
@@ -89,7 +88,6 @@ export function useOverviewLiveUpdates({
       source.addEventListener('resource_changed', handleServerEvent);
       source.addEventListener('schema_changed', handleServerEvent);
       source.onerror = () => {
-        source?.close();
         if (!active) {
           return;
         }
@@ -101,7 +99,6 @@ export function useOverviewLiveUpdates({
         }
 
         setLiveUpdates('reconnecting');
-        reconnectTimer = window.setTimeout(connect, retries * 1_500);
       };
     }
 
@@ -109,14 +106,11 @@ export function useOverviewLiveUpdates({
     return () => {
       active = false;
       source?.close();
-      if (reconnectTimer !== null) {
-        window.clearTimeout(reconnectTimer);
-      }
       if (refreshTimer !== null) {
         window.clearTimeout(refreshTimer);
       }
     };
-  }, [client, pushToast, refreshQueries, streamKey]);
+  }, [client, streamKey]);
 
   return {
     liveUpdates,

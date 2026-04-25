@@ -721,6 +721,7 @@ mod tests {
                 ),
             ]),
             foreign_keys: BTreeMap::new(),
+            many_to_many: BTreeMap::new(),
         };
 
         let parsed = parse_collection_query_params(vec![

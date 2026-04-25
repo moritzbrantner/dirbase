@@ -64,6 +64,7 @@ pub struct ResourceOverview {
     pub columns: Vec<OverviewColumn>,
     pub outgoing_relations: Vec<OverviewRelation>,
     pub incoming_relations: Vec<OverviewRelation>,
+    pub many_to_many_relations: Vec<OverviewManyToManyRelation>,
     pub sample_item_id: Option<String>,
     pub query_capabilities: QueryCapabilities,
     pub mutation_capabilities: MutationCapabilities,
@@ -89,8 +90,22 @@ pub struct OverviewRelation {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct OverviewEdge {
+    pub kind: &'static str,
     pub source_table: String,
     pub source_column: String,
+    pub target_table: String,
+    pub target_column: String,
+    pub through_table: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct OverviewManyToManyRelation {
+    pub label: String,
+    pub source_table: String,
+    pub source_column: String,
+    pub source_target_column: String,
+    pub through_table: String,
+    pub through_target_column: String,
     pub target_table: String,
     pub target_column: String,
 }
@@ -166,7 +181,10 @@ async fn build_overview_page_data(
     let resource_set = resources.iter().cloned().collect::<BTreeSet<_>>();
     let mut incoming_relations: HashMap<String, Vec<OverviewRelation>> = HashMap::new();
     let mut outgoing_relations: HashMap<String, Vec<OverviewRelation>> = HashMap::new();
+    let mut many_to_many_relations: HashMap<String, Vec<OverviewManyToManyRelation>> =
+        HashMap::new();
     let mut edges = Vec::new();
+    let mut many_to_many_edge_keys = BTreeSet::new();
 
     for (source_table, table) in &schema.tables {
         if !resource_set.contains(source_table) {
@@ -187,11 +205,47 @@ async fn build_overview_page_data(
             outgoing_relations.entry(source_table.clone()).or_default().push(relation.clone());
             incoming_relations.entry(fk.target_table.clone()).or_default().push(relation.clone());
             edges.push(OverviewEdge {
+                kind: "foreign_key",
                 source_table: source_table.clone(),
                 source_column: source_column.clone(),
                 target_table: fk.target_table.clone(),
                 target_column: fk.target_column.clone(),
+                through_table: None,
             });
+        }
+
+        for relation in table.many_to_many.values() {
+            if !resource_set.contains(&relation.target_table)
+                || !resource_set.contains(&relation.through_table)
+            {
+                continue;
+            }
+
+            let derived = OverviewManyToManyRelation {
+                label: format!("{} via {}", relation.target_table, relation.through_table),
+                source_table: source_table.clone(),
+                source_column: relation.source_column.clone(),
+                source_target_column: relation.source_target_column.clone(),
+                through_table: relation.through_table.clone(),
+                through_target_column: relation.through_target_column.clone(),
+                target_table: relation.target_table.clone(),
+                target_column: relation.target_column.clone(),
+            };
+            many_to_many_relations.entry(source_table.clone()).or_default().push(derived);
+
+            let left_table = source_table.min(&relation.target_table).clone();
+            let right_table = source_table.max(&relation.target_table).clone();
+            let edge_key = format!("{left_table}:{right_table}:{}", relation.through_table);
+            if many_to_many_edge_keys.insert(edge_key) {
+                edges.push(OverviewEdge {
+                    kind: "many_to_many",
+                    source_table: left_table,
+                    source_column: relation.source_column.clone(),
+                    target_table: right_table,
+                    target_column: relation.target_column.clone(),
+                    through_table: Some(relation.through_table.clone()),
+                });
+            }
         }
     }
 
@@ -226,6 +280,7 @@ async fn build_overview_page_data(
             columns: summary.columns,
             outgoing_relations: outgoing_relations.remove(resource).unwrap_or_default(),
             incoming_relations: incoming_relations.remove(resource).unwrap_or_default(),
+            many_to_many_relations: many_to_many_relations.remove(resource).unwrap_or_default(),
             sample_item_id: summary.sample_item_id,
             query_capabilities: summary.query_capabilities,
             mutation_capabilities: summary.mutation_capabilities,

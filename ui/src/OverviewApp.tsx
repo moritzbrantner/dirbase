@@ -3,7 +3,7 @@ import { type Updater, type VisibilityState } from '@tanstack/react-table';
 import { ReactFlowProvider } from '@xyflow/react';
 import { useDeferredValue, useEffect, useState } from 'react';
 
-import { fetchOverview, fetchResource, fetchSchema, mutateResource } from './api';
+import { fetchOverview, fetchResource, fetchSchemaEditor, mutateResource } from './api';
 import { coerceIncomingRelationValue, coerceRelationValue, getTableRows, isRecord } from './helpers';
 import {
   buildQuerySummaryChips,
@@ -22,9 +22,10 @@ import {
 } from './overview/overviewAppUtils';
 import { invalidateOverviewQueries } from './overview/queryClient';
 import { RelationMap } from './overview/relationMap';
+import { SchemaWorkspace } from './overview/schema/SchemaWorkspace';
 import { ToastViewport, groupResources, renderLiveUpdateLabel } from './overview/shared';
 import { useOverviewLiveUpdates } from './overview/useOverviewLiveUpdates';
-import { useOverviewSchemaEditor } from './overview/useOverviewSchemaEditor';
+import { useOverviewSchemaWorkspace } from './overview/useOverviewSchemaWorkspace';
 import { useOverviewToasts } from './overview/useOverviewToasts';
 import { useOverviewUrlState } from './overview/useOverviewUrlState';
 import type {
@@ -74,9 +75,9 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
     queryKey: ['overview', overviewEndpoint],
     queryFn: () => fetchOverview(overviewEndpoint)
   });
-  const schemaQuery = useQuery({
-    queryKey: ['schema'],
-    queryFn: () => fetchSchema()
+  const schemaEditorQuery = useQuery({
+    queryKey: ['schema-editor'],
+    queryFn: () => fetchSchemaEditor()
   });
 
   const resources = overviewQuery.data?.resources ?? [];
@@ -88,7 +89,7 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
   const resourceQuery = useQuery({
     queryKey: ['resource', requestPath],
     queryFn: () => fetchResource(requestPath),
-    enabled: Boolean(selectedResource)
+    enabled: Boolean(selectedResource && urlState.mode === 'data')
   });
 
   const { liveUpdates, retryLiveUpdates } = useOverviewLiveUpdates({
@@ -96,27 +97,29 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
     onToast: pushToast
   });
   const {
-    schemaDraft,
+    declaredDraft,
+    declaredDraftText,
+    effectiveSchema,
+    inferredSchema,
     schemaStatus,
-    schemaDiffSummary,
+    jsonDraftError,
     schemaValidationError,
-    schemaEdges,
     schemaBusy,
-    updateSchemaDraft,
+    schemaDirty,
+    schemaStale,
+    jsonDrawerOpen,
+    setJsonDrawerOpen,
+    applyDeclaredUpdate,
+    updateDeclaredDraftText,
     reloadSchemaDraft,
+    discardInvalidJsonChanges,
     saveSchema,
     inferSchema,
-    stageRelationship
-  } = useOverviewSchemaEditor({
+    savePath
+  } = useOverviewSchemaWorkspace({
     client,
-    resources,
-    overviewEdges: overviewQuery.data?.edges ?? [],
-    schemaData: schemaQuery.data,
-    onToast: pushToast,
-    onOpenSchemaInspector() {
-      setInspectorTab('schema');
-      setPreferences((current) => ({ ...current, mobileSurface: 'inspector' }));
-    }
+    schemaEditorData: schemaEditorQuery.data,
+    onToast: pushToast
   });
 
   const selectedRow = uiState.selectedRow;
@@ -161,8 +164,8 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
     if (urlState.resource === selectedResource.name) {
       return;
     }
-    commitUrlState(resetTableState(selectedResource.name, urlState.view));
-  }, [commitUrlState, selectedResource, urlState.resource, urlState.view]);
+    commitUrlState(resetTableState(selectedResource.name, urlState.view, urlState.mode));
+  }, [commitUrlState, selectedResource, urlState.mode, urlState.resource, urlState.view]);
 
   useEffect(() => {
     if (!selectedResource || selectedResource.kind === 'table') {
@@ -176,7 +179,7 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
       urlState.sorting.length > 0 ||
       urlState.embeds.length > 0
     ) {
-      commitUrlState(resetTableState(selectedResource.name, urlState.view));
+      commitUrlState(resetTableState(selectedResource.name, urlState.view, urlState.mode));
     }
   }, [
     commitUrlState,
@@ -186,6 +189,7 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
     urlState.page,
     urlState.perPage,
     urlState.sorting.length,
+    urlState.mode,
     urlState.view
   ]);
 
@@ -267,6 +271,22 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
           <code className="overview-source-line">{overviewQuery.data?.source_label ?? 'Loading source...'}</code>
         </div>
         <div className="overview-status-group">
+          <div className="view-toggle" role="tablist" aria-label="Workspace mode">
+            <button
+              type="button"
+              className={urlState.mode === 'data' ? 'is-active' : ''}
+              onClick={() => setOverviewMode('data')}
+            >
+              Data
+            </button>
+            <button
+              type="button"
+              className={urlState.mode === 'schema' ? 'is-active' : ''}
+              onClick={() => setOverviewMode('schema')}
+            >
+              Schema
+            </button>
+          </div>
           <span className="overview-inline-badge">
             {overviewQuery.data?.stats.resource_count ?? 0} resources
           </span>
@@ -284,161 +304,192 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
               Retry live updates
             </button>
           )}
-          <button type="button" className="overview-secondary-button" onClick={() => toggleMobileSurface('map')}>
-            {preferences.mobileSurface === 'map' ? 'Close map' : 'Open map'}
-          </button>
+          {urlState.mode === 'data' && (
+            <button type="button" className="overview-secondary-button" onClick={() => toggleMobileSurface('map')}>
+              {preferences.mobileSurface === 'map' ? 'Close map' : 'Open map'}
+            </button>
+          )}
         </div>
       </section>
 
-      <section className="overview-workspace">
-        <ResourceSidebar
-          groupedResources={groupedResources}
-          loading={overviewQuery.isLoading}
-          search={sidebarSearch}
-          selectedResourceName={selectedResource?.name ?? null}
-          searchNeedle={deferredSidebarSearch}
-          mobileOpen={preferences.mobileSurface === 'resources'}
-          onSearchChange={setSidebarSearch}
-          onSelectResource={selectResource}
-        />
+      {urlState.mode === 'data' ? (
+        <>
+          <section className="overview-workspace">
+            <ResourceSidebar
+              groupedResources={groupedResources}
+              loading={overviewQuery.isLoading}
+              search={sidebarSearch}
+              selectedResourceName={selectedResource?.name ?? null}
+              searchNeedle={deferredSidebarSearch}
+              mobileOpen={preferences.mobileSurface === 'resources'}
+              onSearchChange={setSidebarSearch}
+              onSelectResource={selectResource}
+            />
 
-        <main className="workspace-main shell-card">
-          <ExplorerHeader
-            resource={selectedResource}
-            selectedRow={uiState.selectedRow}
-            readonly={uiState.readonly}
-            view={urlState.view}
-            actions={mutationActions}
-            onChangeView={(view) => commitUrlState({ ...urlState, view })}
-            onOpenCreate={() => openMutationDialog('create')}
-            onOpenEdit={() =>
-              openMutationDialog(selectedResource?.kind === 'object' ? 'editObject' : 'edit')
-            }
-            onOpenDelete={() => openMutationDialog('delete')}
-          />
+            <main className="workspace-main shell-card">
+              <ExplorerHeader
+                resource={selectedResource}
+                selectedRow={uiState.selectedRow}
+                readonly={uiState.readonly}
+                view={urlState.view}
+                actions={mutationActions}
+                onChangeView={(view) => commitUrlState({ ...urlState, view })}
+                onOpenCreate={() => openMutationDialog('create')}
+                onOpenEdit={() =>
+                  openMutationDialog(selectedResource?.kind === 'object' ? 'editObject' : 'edit')
+                }
+                onOpenDelete={() => openMutationDialog('delete')}
+              />
 
-          <QuerySummaryBar
-            chips={querySummaryChips}
-            hasState={hasActiveQuery}
-            onClear={() =>
-              updateTableState((current) => ({
-                ...current,
-                page: 1,
-                filters: [],
-                sorting: [],
-                embeds: []
-              }))
-            }
-            onRemoveChip={(chip) => updateTableState((current) => removeQuerySummaryChip(current, chip))}
-          />
+              <QuerySummaryBar
+                chips={querySummaryChips}
+                hasState={hasActiveQuery}
+                onClear={() =>
+                  updateTableState((current) => ({
+                    ...current,
+                    page: 1,
+                    filters: [],
+                    sorting: [],
+                    embeds: []
+                  }))
+                }
+                onRemoveChip={(chip) => updateTableState((current) => removeQuerySummaryChip(current, chip))}
+              />
 
-          <DataExplorerPanel
-            resource={selectedResource}
-            response={resourceQuery.data}
-            error={resourceQuery.error instanceof Error ? resourceQuery.error : null}
-            isLoading={resourceQuery.isLoading}
-            state={urlState}
-            selectedRow={uiState.selectedRow}
-            rawMode={urlState.view === 'raw'}
-            columnVisibility={columnVisibility}
-            onColumnVisibilityChange={handleColumnVisibilityChange}
-            onStateChange={updateTableState}
-            onRowSelect={(row) => {
-              setUiState((current) => ({
-                ...current,
-                selectedRow: row,
-                inspectorTab: 'selection'
-              }));
-              setPreferences((current) => ({ ...current, mobileSurface: 'inspector' }));
-            }}
-          />
-        </main>
+              <DataExplorerPanel
+                resource={selectedResource}
+                response={resourceQuery.data}
+                error={resourceQuery.error instanceof Error ? resourceQuery.error : null}
+                isLoading={resourceQuery.isLoading}
+                state={urlState}
+                selectedRow={uiState.selectedRow}
+                rawMode={urlState.view === 'raw'}
+                columnVisibility={columnVisibility}
+                onColumnVisibilityChange={handleColumnVisibilityChange}
+                onStateChange={updateTableState}
+                onRowSelect={(row) => {
+                  setUiState((current) => ({
+                    ...current,
+                    selectedRow: row,
+                    inspectorTab: 'selection'
+                  }));
+                  setPreferences((current) => ({ ...current, mobileSurface: 'inspector' }));
+                }}
+              />
+            </main>
 
-        <InspectorPanel
-          resource={selectedResource}
-          response={resourceQuery.data}
-          schemaDraft={schemaDraft}
-          schemaStatus={schemaStatus}
-          schemaDiffSummary={schemaDiffSummary}
-          schemaValidationError={schemaValidationError}
-          selectedRow={uiState.selectedRow}
-          selectedTab={uiState.inspectorTab}
-          outgoingRelations={outgoingRelationLinks}
-          incomingRelations={incomingRelationLinks}
-          readonly={uiState.readonly}
-          mobileOpen={preferences.mobileSurface === 'inspector'}
-          schemaBusy={schemaBusy}
-          canSaveSchema={Boolean(serverCapabilities?.schema_write)}
-          canInferSchema={Boolean(serverCapabilities?.schema_infer)}
-          requestPath={requestPath}
-          requestUrl={requestUrl}
-          onTabChange={setInspectorTab}
-          onSchemaDraftChange={updateSchemaDraft}
-          onCopy={copyText}
-          onOpenRequest={() => window.open(requestUrl, '_blank', 'noopener,noreferrer')}
-          onReloadSchema={reloadSchemaDraft}
-          onSaveSchema={saveSchema}
-          onInferSchema={inferSchema}
-          onDrilldownOutgoing={({ relation, value }) =>
-            selectResource(relation.target_table, [buildDrilldownFilter(relation.target_column, value)])
-          }
-          onDrilldownIncoming={({ relation, value }) =>
-            selectResource(relation.source_table, [buildDrilldownFilter(relation.source_column, value)])
-          }
-        />
-      </section>
+            <InspectorPanel
+              resource={selectedResource}
+              response={resourceQuery.data}
+              selectedRow={uiState.selectedRow}
+              selectedTab={uiState.inspectorTab}
+              outgoingRelations={outgoingRelationLinks}
+              incomingRelations={incomingRelationLinks}
+              readonly={uiState.readonly}
+              mobileOpen={preferences.mobileSurface === 'inspector'}
+              requestPath={requestPath}
+              requestUrl={requestUrl}
+              onTabChange={setInspectorTab}
+              onCopy={copyText}
+              onOpenRequest={() => window.open(requestUrl, '_blank', 'noopener,noreferrer')}
+              onDrilldownOutgoing={({ relation, value }) =>
+                selectResource(relation.target_table, [buildDrilldownFilter(relation.target_column, value)])
+              }
+              onDrilldownIncoming={({ relation, value }) =>
+                selectResource(relation.source_table, [buildDrilldownFilter(relation.source_column, value)])
+              }
+            />
+          </section>
 
-      <section
-        className={`relation-map-panel shell-card ${preferences.mobileSurface === 'map' ? 'mobile-drawer-open' : ''}`}
-      >
-        <div className="grid gap-3">
-          <div className="overview-panel-head">
-            <div>
-              <p className="section-title">Relation map</p>
-              <h2 className="text-xl font-semibold tracking-tight text-stoneink-900">Links across resources</h2>
+          <section
+            className={`relation-map-panel shell-card ${preferences.mobileSurface === 'map' ? 'mobile-drawer-open' : ''}`}
+          >
+            <div className="grid gap-3">
+              <div className="overview-panel-head">
+                <div>
+                  <p className="section-title">Relation map</p>
+                  <h2 className="text-xl font-semibold tracking-tight text-stoneink-900">Links across resources</h2>
+                </div>
+                <button type="button" className="overview-icon-button" onClick={() => toggleMobileSurface('map')}>
+                  Close
+                </button>
+              </div>
+              <p className="overview-copy">
+                Click a node to switch resources. Switch to Schema mode to stage and save relationship edits.
+              </p>
+              <RelationMap
+                overview={overviewQuery.data ?? null}
+                schemaEdges={overviewQuery.data?.edges ?? []}
+                selectedResourceName={selectedResource?.name ?? null}
+                onSelectResource={selectResource}
+                onCreateRelationship={() => {}}
+                connectable={false}
+                loading={overviewQuery.isLoading}
+              />
             </div>
-            <button type="button" className="overview-icon-button" onClick={() => toggleMobileSurface('map')}>
-              Close
+          </section>
+
+          <div className="mobile-sticky-actions">
+            <button
+              type="button"
+              className={preferences.mobileSurface === 'resources' ? 'is-active' : ''}
+              onClick={() => toggleMobileSurface('resources')}
+            >
+              Resources
+            </button>
+            <button
+              type="button"
+              className={preferences.mobileSurface === 'map' ? 'is-active' : ''}
+              onClick={() => toggleMobileSurface('map')}
+            >
+              Map
+            </button>
+            <button
+              type="button"
+              className={preferences.mobileSurface === 'inspector' ? 'is-active' : ''}
+              onClick={() => toggleMobileSurface('inspector')}
+            >
+              Inspector
             </button>
           </div>
-          <p className="overview-copy">
-            Click a node to switch resources. Drag a source column to a target column to stage a schema relationship.
-          </p>
-          <RelationMap
-            overview={overviewQuery.data ?? null}
-            schemaEdges={schemaEdges}
-            selectedResourceName={selectedResource?.name ?? null}
-            onSelectResource={selectResource}
-            onCreateRelationship={stageRelationship}
-            connectable={!schemaValidationError}
-            loading={overviewQuery.isLoading}
-          />
-        </div>
-      </section>
-
-      <div className="mobile-sticky-actions">
-        <button
-          type="button"
-          className={preferences.mobileSurface === 'resources' ? 'is-active' : ''}
-          onClick={() => toggleMobileSurface('resources')}
-        >
-          Resources
-        </button>
-        <button
-          type="button"
-          className={preferences.mobileSurface === 'map' ? 'is-active' : ''}
-          onClick={() => toggleMobileSurface('map')}
-        >
-          Map
-        </button>
-        <button
-          type="button"
-          className={preferences.mobileSurface === 'inspector' ? 'is-active' : ''}
-          onClick={() => toggleMobileSurface('inspector')}
-        >
-          Inspector
-        </button>
-      </div>
+        </>
+      ) : (
+        <SchemaWorkspace
+          resources={resources}
+          inferredSchema={inferredSchema}
+          effectiveSchema={effectiveSchema}
+          declaredDraft={declaredDraft}
+          declaredDraftText={declaredDraftText}
+          schemaDirty={schemaDirty}
+          schemaStale={schemaStale}
+          schemaBusy={schemaBusy}
+          schemaStatus={schemaStatus}
+          jsonDraftError={jsonDraftError}
+          schemaValidationError={schemaValidationError}
+          jsonDrawerOpen={jsonDrawerOpen}
+          savePath={savePath}
+          readonly={uiState.readonly}
+          selectedResourceName={selectedResource?.name ?? null}
+          schemaMobileSurface={preferences.schemaMobileSurface}
+          onSelectResource={(resourceName) => selectResource(resourceName)}
+          onSchemaMobileSurfaceChange={(surface) =>
+            setPreferences((current) => ({ ...current, schemaMobileSurface: surface }))
+          }
+          onToggleJsonDrawer={() => {
+            if (preferences.schemaMobileSurface === 'json') {
+              setPreferences((current) => ({ ...current, schemaMobileSurface: 'graph' }));
+              return;
+            }
+            setJsonDrawerOpen((current) => !current);
+          }}
+          onDeclaredDraftChange={applyDeclaredUpdate}
+          onDeclaredDraftTextChange={updateDeclaredDraftText}
+          onReload={reloadSchemaDraft}
+          onInfer={inferSchema}
+          onSave={saveSchema}
+          onDiscardInvalidJson={discardInvalidJsonChanges}
+        />
+      )}
 
       <MutationDialog
         open={uiState.mutationDialog.open}
@@ -461,7 +512,7 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
 
   function selectResource(resourceName: string, filters: FilterDescriptor[] = []) {
     commitUrlState({
-      ...resetTableState(resourceName, urlState.view),
+      ...resetTableState(resourceName, urlState.view, urlState.mode),
       filters
     });
     setUiState((current) => ({
@@ -470,7 +521,18 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
       selectedRow: null,
       inspectorTab: 'request'
     }));
-    setPreferences((current) => ({ ...current, mobileSurface: 'explorer' }));
+    if (urlState.mode === 'data') {
+      setPreferences((current) => ({ ...current, mobileSurface: 'explorer' }));
+    }
+  }
+
+  function setOverviewMode(mode: 'data' | 'schema') {
+    commitUrlState({ ...urlState, mode });
+    if (mode === 'data') {
+      setPreferences((current) => ({ ...current, mobileSurface: 'explorer' }));
+      return;
+    }
+    setPreferences((current) => ({ ...current, schemaMobileSurface: 'graph' }));
   }
 
   function updateTableState(updater: (state: OverviewUrlState) => OverviewUrlState) {
@@ -536,7 +598,7 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
     } else if (isRecord(result.parsed) && selectedResource?.kind === 'table') {
       setUiState((current) => ({
         ...current,
-        selectedRow: result.parsed,
+        selectedRow: result.parsed as Record<string, unknown>,
         inspectorTab: 'selection'
       }));
     }

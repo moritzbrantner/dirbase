@@ -1,142 +1,71 @@
-const { rm } = require('node:fs/promises');
-const { join } = require('node:path');
 const { expect, test } = require('@playwright/test');
 
-const FIXTURE_SCHEMA_PATH = join(__dirname, 'fixtures', 'schema.json');
-
-const BASE_SCHEMA = {
-  tables: {
-    members: {
-      foreign_keys: {
-        team_id: {
-          target_table: 'teams',
-          target_column: 'id'
-        }
-      }
-    }
-  }
-};
-
-test.describe('schema editor', () => {
-  test.beforeEach(async ({ request }) => {
-    const response = await request.put('/schema', {
-      data: BASE_SCHEMA
-    });
-
-    expect(response.ok()).toBeTruthy();
-  });
-
-  test.afterAll(async () => {
-    await rm(FIXTURE_SCHEMA_PATH, { force: true });
-  });
-
-  test('persists schema edits and reloads them from the server', async ({ page, request }) => {
-    await page.goto('/?resource=members');
-    await page.getByRole('button', { name: 'Schema' }).click();
-
-    const editor = page.locator('.schema-editor');
-    await expect(editor).toHaveValue(/"team_id"/);
-
-    await editor.fill(`{
-  "tables": {
-    "members": {
-      "foreign_keys": {
-        "team_id": {
-          "target_table": "teams",
-          "target_column": "id"
-        },
-        "city": {
-          "target_table": "teams",
-          "target_column": "name"
-        }
-      }
-    }
-  }
-}`);
-
-    const saveResponsePromise = page.waitForResponse(
-      (response) => response.url().endsWith('/schema') && response.request().method() === 'PUT'
-    );
-    await page.getByRole('button', { name: 'Save' }).click();
-    const saveResponse = await saveResponsePromise;
-
-    expect(saveResponse.ok()).toBeTruthy();
-    await expect(page.getByText('Schema saved.')).toBeVisible();
-
-    const schemaResponse = await request.get('/schema');
-    expect(schemaResponse.ok()).toBeTruthy();
-    const schemaPayload = await schemaResponse.json();
-    expect(schemaPayload.tables.members.foreign_keys.city.target_column).toBe('name');
-
-    await page.reload();
-    await page.getByRole('button', { name: 'Schema' }).click();
-    await expect(editor).toHaveValue(/"city"/);
-    await expect(editor).toHaveValue(/"target_column": "name"/);
-  });
-
-  test('reloads the server schema and discards unsaved textarea changes', async ({ page }) => {
-    await page.goto('/?resource=members');
-    await page.getByRole('button', { name: 'Schema' }).click();
-
-    const editor = page.locator('.schema-editor');
-    await expect(editor).toHaveValue(/"team_id"/);
-
-    await editor.fill(`{
-  "tables": {
-    "members": {
-      "foreign_keys": {
-        "city": {
-          "target_table": "teams",
-          "target_column": "name"
-        }
-      }
-    }
-  }
-}`);
-    await expect(editor).toHaveValue(/"city"/);
-
-    await page.getByRole('button', { name: 'Reload' }).click();
-
-    await expect(page.getByText('Schema reloaded from the server.')).toBeVisible();
-    await expect(editor).toHaveValue(/"team_id"/);
-    await expect(editor).not.toHaveValue(
-      /"city":\s*\{\s*"target_table": "teams",\s*"target_column": "name"\s*\}/
-    );
-  });
-
-  test('surfaces schema validation failures without overwriting the saved schema', async ({
+test.describe('schema workspace', () => {
+  test('loads dedicated schema mode and stages structured edits before save', async ({
     page,
     request
   }) => {
-    await page.goto('/?resource=members');
-    await page.getByRole('button', { name: 'Schema' }).click();
+    await page.goto('/?resource=members&mode=schema');
 
-    const editor = page.locator('.schema-editor');
-    await editor.fill(`{
-  "tables": {
-    "members": {
-      "foreign_keys": {
-        "team_id": {
-          "target_table": "missing",
-          "target_column": "id"
-        }
-      }
-    }
-  }
-}`);
+    await expect(page.getByText('Graph-first schema editing')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Schema' })).toHaveClass(/is-active/);
+    await expect(page.locator('.schema-details h3').filter({ hasText: 'members' })).toBeVisible();
 
-    const saveResponsePromise = page.waitForResponse(
-      (response) => response.url().endsWith('/schema') && response.request().method() === 'PUT'
-    );
+    await page.locator('.schema-details .overview-select').first().selectOption('relation');
+
+    const unsavedEditor = await request.get('/schema/editor');
+    const unsavedPayload = await unsavedEditor.json();
+    expect(unsavedPayload.declared.tables.members.kind).toBe('object');
+
     await page.getByRole('button', { name: 'Save' }).click();
-    const saveResponse = await saveResponsePromise;
+    await expect(page.getByText('Schema saved.')).toBeVisible();
+    await expect
+      .poll(async () => {
+        const savedSchema = await request.get('/schema');
+        const savedPayload = await savedSchema.json();
+        return savedPayload.tables.members.kind;
+      })
+      .toBe('relation');
+  });
 
-    expect(saveResponse.status()).toBe(400);
-    await expect(page.getByTestId('inspector-panel').getByText(/targets unknown table 'missing'/)).toBeVisible();
+  test('removes inferred relations by persisting suppression state', async ({ page, request }) => {
+    await page.goto('/?resource=members&mode=schema');
 
-    const schemaResponse = await request.get('/schema');
-    expect(schemaResponse.ok()).toBeTruthy();
-    const schemaPayload = await schemaResponse.json();
-    expect(schemaPayload.tables.members.foreign_keys.team_id.target_table).toBe('teams');
+    await page.getByRole('button', { name: /team_id teams.id/ }).click();
+    await expect(page.getByText('Origin: manual')).toBeVisible();
+    await page.getByRole('button', { name: 'Reset to inferred' }).click();
+    await expect(page.getByText('Origin: inferred')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Remove relation' }).click();
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByText('Schema saved.')).toBeVisible();
+
+    const editorSchema = await request.get('/schema/editor');
+    const editorPayload = await editorSchema.json();
+    expect(editorPayload.declared.tables.members.suppressed_foreign_keys).toEqual(['team_id']);
+
+    const effectiveSchema = await request.get('/schema');
+    const effectivePayload = await effectiveSchema.json();
+    expect(effectivePayload.tables.members.foreign_keys.team_id).toBeUndefined();
+
+    await page.reload();
+    await page.goto('/?resource=members&mode=schema');
+    await expect(page.getByRole('button', { name: /team_id teams.id/ })).toHaveCount(0);
+  });
+
+  test('invalid JSON disables save until the draft is fixed or discarded', async ({ page }) => {
+    await page.goto('/?resource=members&mode=schema');
+
+    await page.getByRole('button', { name: 'JSON' }).click();
+    const editor = page.locator('.schema-json-editor');
+    await editor.fill('{');
+
+    await expect(
+      page.getByTestId('schema-json-drawer').getByText(/JSON Parse error|Expected property name|Expected/)
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    await page.getByRole('button', { name: 'Discard invalid JSON changes' }).click();
+    await expect(editor).toHaveValue(/"tables"/);
   });
 });

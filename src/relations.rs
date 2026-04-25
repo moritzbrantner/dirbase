@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 
-use crate::{
-    app::AppState, error::AppError, query::filters::value_to_filter_string, storage::load_resource,
-};
+use crate::query::filters::value_to_filter_string;
 
 pub fn build_relation_lookup<'a>(
     target_items: &'a [Value],
@@ -33,33 +31,4 @@ pub fn resolve_related_row_in_lookup(
 
     let key = value_to_filter_string(current_value);
     lookup.get(&key).map(|row| (*row).clone())
-}
-
-pub async fn resolve_related_row(
-    state: &AppState,
-    resource: &str,
-    source_object: &Map<String, Value>,
-    source_column: &str,
-) -> Result<Option<Value>, AppError> {
-    let table = state.schema_table(resource).ok_or_else(|| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            "Relation lookup requires schema metadata with foreign key definitions",
-        )
-    })?;
-    let fk = table.foreign_keys.get(source_column).ok_or_else(|| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            format!("Cannot resolve relation '{source_column}' for resource '{resource}'"),
-        )
-    })?;
-    let target_resource = load_resource(state, &fk.target_table).await?;
-    let target_items = target_resource.as_array().ok_or_else(|| {
-        AppError::new(
-            axum::http::StatusCode::BAD_REQUEST,
-            format!("Embedded resource '{}' is not a JSON array", fk.target_table),
-        )
-    })?;
-    let lookup = build_relation_lookup(target_items, &fk.target_column);
-    Ok(resolve_related_row_in_lookup(source_object, source_column, &lookup))
 }

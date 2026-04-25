@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  fetchSchemaEditor,
   fetchOverview,
   fetchResource,
   fetchSchema,
@@ -67,6 +68,26 @@ describe('api client', () => {
 
     mockFetch({ ok: false, status: 503, statusText: 'Unavailable' });
     await expect(fetchSchema()).rejects.toThrow('Schema request failed: 503 Unavailable');
+
+    mockFetch({ ok: false, status: 502, statusText: 'Bad Gateway' });
+    await expect(fetchSchemaEditor()).rejects.toThrow(
+      'Schema editor request failed: 502 Bad Gateway'
+    );
+  });
+
+  it('fetches schema editor payloads', async () => {
+    const payload = {
+      inferred: { tables: {} },
+      declared: null,
+      effective: { tables: {} },
+      save_path: '/tmp/schema.json'
+    };
+    const fetchMock = mockFetch({ ok: true, status: 200, statusText: 'OK', json: payload });
+
+    await expect(fetchSchemaEditor()).resolves.toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith('/schema/editor', {
+      headers: { Accept: 'application/json' }
+    });
   });
 
   it('fetches resources and preserves raw text for non-json responses', async () => {

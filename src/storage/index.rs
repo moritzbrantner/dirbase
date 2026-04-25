@@ -92,6 +92,7 @@ mod tests {
             primary_key: Some(pk_name.to_string()),
             columns,
             foreign_keys: BTreeMap::new(),
+            many_to_many: BTreeMap::new(),
         }
     }
 

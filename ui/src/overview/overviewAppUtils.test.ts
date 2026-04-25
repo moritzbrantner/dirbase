@@ -20,6 +20,7 @@ const resources: ResourceOverview[] = [
     columns: [],
     outgoing_relations: [],
     incoming_relations: [],
+    many_to_many_relations: [],
     sample_item_id: '1',
     query_capabilities: {
       filter: true,
@@ -47,6 +48,7 @@ const resources: ResourceOverview[] = [
     columns: [],
     outgoing_relations: [],
     incoming_relations: [],
+    many_to_many_relations: [],
     sample_item_id: null,
     query_capabilities: {
       filter: false,
@@ -66,6 +68,7 @@ const resources: ResourceOverview[] = [
 ];
 
 const urlState: OverviewUrlState = {
+  mode: 'data',
   resource: 'members',
   view: 'explore',
   page: 2,

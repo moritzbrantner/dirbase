@@ -184,6 +184,14 @@ impl AppState {
         self.schema_store.read().expect("schema store").merged.clone()
     }
 
+    pub fn inferred_schema_snapshot(&self) -> Schema {
+        self.schema_store.read().expect("schema store").inferred.clone()
+    }
+
+    pub fn declared_schema_snapshot(&self) -> Option<DeclaredSchema> {
+        self.schema_store.read().expect("schema store").declared.clone()
+    }
+
     pub fn schema_table(&self, resource: &str) -> Option<TableSchema> {
         self.schema_store.read().expect("schema store").merged.tables.get(resource).cloned()
     }
@@ -312,6 +320,7 @@ mod tests {
                         column("name", ColumnType::String, true),
                     ]),
                     foreign_keys: BTreeMap::new(),
+                    many_to_many: BTreeMap::new(),
                 },
             )]),
         }
@@ -329,6 +338,7 @@ mod tests {
                         column("email", ColumnType::String, false),
                     ]),
                     foreign_keys: BTreeMap::new(),
+                    suppressed_foreign_keys: BTreeSet::new(),
                 },
             )]),
         }
@@ -343,6 +353,7 @@ mod tests {
                     columns: BTreeMap::from([column("email", ColumnType::String, false)]),
                     foreign_keys: BTreeMap::new(),
                     kind: Some(TableKind::Object),
+                    suppressed_foreign_keys: BTreeSet::new(),
                 },
             )]),
         }
@@ -401,6 +412,7 @@ mod tests {
                             column("nickname", ColumnType::String, true),
                         ]),
                         foreign_keys: BTreeMap::new(),
+                        many_to_many: BTreeMap::new(),
                     },
                 )]),
             })
@@ -434,6 +446,7 @@ mod tests {
                                 target_column: "id".to_string(),
                             },
                         )]),
+                        suppressed_foreign_keys: BTreeSet::new(),
                     },
                 )]),
             }))
@@ -545,6 +558,7 @@ mod tests {
                             column("city", ColumnType::String, true),
                         ]),
                         foreign_keys: BTreeMap::new(),
+                        many_to_many: BTreeMap::new(),
                     },
                 )]),
             })

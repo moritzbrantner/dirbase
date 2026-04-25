@@ -77,14 +77,27 @@ export function RelationMap({
     id: `${edge.source_table}:${edge.source_column}:${edge.target_table}:${edge.target_column}`,
     source: edge.source_table,
     target: edge.target_table,
-    sourceHandle: buildSchemaHandleId('source', edge.source_column),
-    targetHandle: buildSchemaHandleId('target', edge.target_column),
-    label: `${edge.source_column} -> ${edge.target_column}`,
+    sourceHandle:
+      edge.kind === 'many_to_many' ? undefined : buildSchemaHandleId('source', edge.source_column),
+    targetHandle:
+      edge.kind === 'many_to_many' ? undefined : buildSchemaHandleId('target', edge.target_column),
+    label:
+      edge.kind === 'many_to_many' && edge.through_table
+        ? `via ${edge.through_table}`
+        : `${edge.source_column} -> ${edge.target_column}`,
     animated: edge.source_table === selectedResourceName || edge.target_table === selectedResourceName,
     style:
-      edge.source_table === selectedResourceName || edge.target_table === selectedResourceName
-        ? { stroke: '#0f766e', strokeWidth: 2.4 }
-        : { stroke: 'rgba(94, 109, 104, 0.42)', strokeWidth: 1.8 },
+      edge.kind === 'many_to_many'
+        ? {
+            stroke: edge.source_table === selectedResourceName || edge.target_table === selectedResourceName
+              ? '#0b7285'
+              : 'rgba(14, 116, 144, 0.55)',
+            strokeWidth: edge.source_table === selectedResourceName || edge.target_table === selectedResourceName ? 2.6 : 2,
+            strokeDasharray: '7 5'
+          }
+        : edge.source_table === selectedResourceName || edge.target_table === selectedResourceName
+          ? { stroke: '#0f766e', strokeWidth: 2.4 }
+          : { stroke: 'rgba(94, 109, 104, 0.42)', strokeWidth: 1.8 },
     labelStyle: { fill: '#39554d', fontWeight: 600 }
   }));
 

@@ -25,6 +25,8 @@ pub struct TableSchema {
     pub columns: BTreeMap<String, ColumnSchema>,
     #[serde(default)]
     pub foreign_keys: BTreeMap<String, ForeignKey>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub many_to_many: BTreeMap<String, ManyToManyRelation>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -43,6 +45,8 @@ pub struct DeclaredTableSchema {
     pub columns: BTreeMap<String, ColumnSchema>,
     #[serde(default)]
     pub foreign_keys: BTreeMap<String, ForeignKey>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub suppressed_foreign_keys: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -58,6 +62,16 @@ pub enum TableKind {
 pub struct ForeignKey {
     pub target_table: String,
     pub target_column: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ManyToManyRelation {
+    pub through_table: String,
+    pub source_column: String,
+    pub source_target_column: String,
+    pub target_table: String,
+    pub target_column: String,
+    pub through_target_column: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -110,10 +124,33 @@ pub fn load_schema(
     parse_schema_file(&path, &raw).map(Some)
 }
 
-pub fn save_schema(path: &Path, schema: &Schema) -> Result<(), String> {
-    let payload =
-        serde_json::to_string_pretty(schema).map_err(|err| format!("{}: {err}", path.display()))?;
-    fs::write(path, format!("{payload}\n")).map_err(|err| format!("{}: {err}", path.display()))
+pub fn export_declared_schema_snapshot(
+    declared: Option<&DeclaredSchema>,
+    effective: &Schema,
+) -> DeclaredSchema {
+    let tables = effective
+        .tables
+        .iter()
+        .map(|(table_name, table)| {
+            let suppressed_foreign_keys = declared
+                .and_then(|schema| schema.tables.get(table_name))
+                .map(|table| table.suppressed_foreign_keys.clone())
+                .unwrap_or_default();
+
+            (
+                table_name.clone(),
+                DeclaredTableSchema {
+                    kind: Some(table.kind.clone()),
+                    primary_key: table.primary_key.clone(),
+                    columns: table.columns.clone(),
+                    foreign_keys: table.foreign_keys.clone(),
+                    suppressed_foreign_keys,
+                },
+            )
+        })
+        .collect();
+
+    DeclaredSchema { tables }
 }
 
 pub fn default_schema_output_path(data_source: &DataSource) -> PathBuf {
@@ -171,10 +208,7 @@ pub fn parse_dbml_schema(input: &str) -> Result<DeclaredSchema, String> {
 
         if let Some((table_name, table)) = current_table.as_mut() {
             if line == "}" {
-                let (name, mut table) = current_table.take().expect("present table");
-                if table.kind.is_none() {
-                    table.kind = infer_kind(table.primary_key.as_ref(), &table.foreign_keys);
-                }
+                let (name, table) = current_table.take().expect("present table");
                 tables.insert(name, table);
                 continue;
             }
@@ -214,9 +248,23 @@ pub fn parse_dbml_schema(input: &str) -> Result<DeclaredSchema, String> {
         return Err(format!("Table '{name}' is missing closing '}}'"));
     }
 
-    for table in tables.values_mut() {
-        if table.kind.is_none() {
-            table.kind = infer_kind(table.primary_key.as_ref(), &table.foreign_keys);
+    let inferred_kinds = tables
+        .iter()
+        .map(|(table_name, table)| {
+            (
+                table_name.clone(),
+                table
+                    .kind
+                    .clone()
+                    .or_else(|| infer_declared_table_kind(table_name, table, &tables)),
+            )
+        })
+        .collect::<Vec<_>>();
+    for (table_name, kind) in inferred_kinds {
+        if let Some(table) = tables.get_mut(&table_name)
+            && table.kind.is_none()
+        {
+            table.kind = kind;
         }
     }
 
@@ -255,7 +303,12 @@ pub fn merge_schemas(
                 .map(|(table_name, table)| {
                     (
                         table_name.clone(),
-                        table.foreign_keys.keys().cloned().collect::<BTreeSet<_>>(),
+                        table
+                            .foreign_keys
+                            .keys()
+                            .cloned()
+                            .chain(table.suppressed_foreign_keys.iter().cloned())
+                            .collect::<BTreeSet<_>>(),
                     )
                 })
                 .collect::<BTreeMap<_, _>>()
@@ -274,19 +327,28 @@ pub fn merge_schemas(
             }
         }
 
+        let inferred_kind = declared
+            .and_then(|schema| schema.tables.get(&table_name))
+            .and_then(|table| table.kind.clone())
+            .or_else(|| {
+                tables.get(&table_name).map(|table| {
+                    let mut next = table.clone();
+                    next.foreign_keys = foreign_keys.clone();
+                    infer_table_kind(&table_name, &next, &tables)
+                })
+            })
+            .unwrap_or(TableKind::Unknown);
+
         if let Some(table) = tables.get_mut(&table_name) {
             table.foreign_keys = foreign_keys;
-            table.kind = declared
-                .and_then(|schema| schema.tables.get(&table_name))
-                .and_then(|table| table.kind.clone())
-                .or_else(|| infer_kind(table.primary_key.as_ref(), &table.foreign_keys))
-                .unwrap_or(TableKind::Unknown);
+            table.many_to_many.clear();
+            table.kind = inferred_kind;
         }
     }
 
     let schema = Schema { tables };
     validate_effective_schema(&schema)?;
-    Ok(schema)
+    Ok(derive_many_to_many_schema(schema))
 }
 
 fn parse_column_line(line: &str) -> Result<(String, ColumnSchema), String> {
@@ -417,7 +479,7 @@ pub fn infer_schema_from_values(values: &BTreeMap<String, Value>) -> Schema {
         let mut table = infer_table_schema(rows);
         table.primary_key = infer_primary_key(table_name, rows);
         table.kind =
-            infer_kind(table.primary_key.as_ref(), &table.foreign_keys).unwrap_or_default();
+            if table.primary_key.is_some() { TableKind::Object } else { TableKind::Unknown };
         tables.insert(table_name.clone(), table);
     }
 
@@ -425,14 +487,21 @@ pub fn infer_schema_from_values(values: &BTreeMap<String, Value>) -> Schema {
     let table_names = tables.keys().cloned().collect::<Vec<_>>();
     for table_name in table_names {
         let foreign_keys = detect_foreign_keys(&table_name, &tables, &aliases, &BTreeSet::new());
+        let inferred_kind = tables
+            .get(&table_name)
+            .map(|table| {
+                let mut next = table.clone();
+                next.foreign_keys = foreign_keys.clone();
+                infer_table_kind(&table_name, &next, &tables)
+            })
+            .unwrap_or(TableKind::Unknown);
         if let Some(table) = tables.get_mut(&table_name) {
             table.foreign_keys = foreign_keys;
-            table.kind =
-                infer_kind(table.primary_key.as_ref(), &table.foreign_keys).unwrap_or_default();
+            table.kind = inferred_kind;
         }
     }
 
-    Schema { tables }
+    derive_many_to_many_schema(Schema { tables })
 }
 
 fn infer_table_schema(rows: &[Value]) -> TableSchema {
@@ -480,6 +549,7 @@ fn infer_table_schema(rows: &[Value]) -> TableSchema {
         primary_key: None,
         columns,
         foreign_keys: BTreeMap::new(),
+        many_to_many: BTreeMap::new(),
     }
 }
 
@@ -618,17 +688,156 @@ fn detect_foreign_keys(
     foreign_keys
 }
 
-fn infer_kind(
-    primary_key: Option<&String>,
-    foreign_keys: &BTreeMap<String, ForeignKey>,
+fn infer_table_kind(
+    table_name: &str,
+    table: &TableSchema,
+    tables: &BTreeMap<String, TableSchema>,
+) -> TableKind {
+    if table.primary_key.is_some() {
+        return TableKind::Object;
+    }
+    if is_strict_junction_table(table_name, table, tables) {
+        return TableKind::Relation;
+    }
+    TableKind::Unknown
+}
+
+fn infer_declared_table_kind(
+    table_name: &str,
+    table: &DeclaredTableSchema,
+    tables: &BTreeMap<String, DeclaredTableSchema>,
 ) -> Option<TableKind> {
-    if primary_key.is_some() {
+    if table.primary_key.is_some() {
         return Some(TableKind::Object);
     }
-    if foreign_keys.len() >= 2 {
+    if is_strict_declared_junction_table(table_name, table, tables) {
         return Some(TableKind::Relation);
     }
     None
+}
+
+fn is_strict_junction_table(
+    source_table_name: &str,
+    table: &TableSchema,
+    tables: &BTreeMap<String, TableSchema>,
+) -> bool {
+    if table.primary_key.is_some() || table.columns.len() != 2 || table.foreign_keys.len() != 2 {
+        return false;
+    }
+    if !table.columns.keys().all(|column_name| table.foreign_keys.contains_key(column_name)) {
+        return false;
+    }
+
+    let foreign_keys = table.foreign_keys.values().collect::<Vec<_>>();
+    if foreign_keys[0].target_table == foreign_keys[1].target_table {
+        return false;
+    }
+
+    foreign_keys.iter().all(|fk| {
+        fk.target_table != source_table_name
+            && tables
+                .get(&fk.target_table)
+                .and_then(|target| target.primary_key.as_deref())
+                .is_some_and(|primary_key| fk.target_column == primary_key)
+    })
+}
+
+fn is_strict_declared_junction_table(
+    source_table_name: &str,
+    table: &DeclaredTableSchema,
+    tables: &BTreeMap<String, DeclaredTableSchema>,
+) -> bool {
+    if table.primary_key.is_some() || table.columns.len() != 2 || table.foreign_keys.len() != 2 {
+        return false;
+    }
+    if !table.columns.keys().all(|column_name| table.foreign_keys.contains_key(column_name)) {
+        return false;
+    }
+
+    let foreign_keys = table.foreign_keys.values().collect::<Vec<_>>();
+    if foreign_keys[0].target_table == foreign_keys[1].target_table {
+        return false;
+    }
+
+    foreign_keys.iter().all(|fk| {
+        fk.target_table != source_table_name
+            && tables
+                .get(&fk.target_table)
+                .and_then(|target| target.primary_key.as_deref())
+                .is_some_and(|primary_key| fk.target_column == primary_key)
+    })
+}
+
+fn derive_many_to_many_schema(mut schema: Schema) -> Schema {
+    for table in schema.tables.values_mut() {
+        table.many_to_many.clear();
+    }
+
+    let table_names = schema.tables.keys().cloned().collect::<Vec<_>>();
+    for through_table_name in table_names {
+        let Some(through_table) = schema.tables.get(&through_table_name).cloned() else {
+            continue;
+        };
+        if !is_strict_junction_table(&through_table_name, &through_table, &schema.tables) {
+            continue;
+        }
+
+        let mut foreign_keys = through_table
+            .foreign_keys
+            .iter()
+            .map(|(column_name, fk)| (column_name.clone(), fk.clone()))
+            .collect::<Vec<_>>();
+        foreign_keys.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let [(left_column, left_fk), (right_column, right_fk)] = foreign_keys.as_slice() else {
+            continue;
+        };
+
+        add_many_to_many_relation(
+            &mut schema.tables,
+            &left_fk.target_table,
+            ManyToManyRelation {
+                through_table: through_table_name.clone(),
+                source_column: left_column.clone(),
+                source_target_column: left_fk.target_column.clone(),
+                target_table: right_fk.target_table.clone(),
+                target_column: right_fk.target_column.clone(),
+                through_target_column: right_column.clone(),
+            },
+        );
+        add_many_to_many_relation(
+            &mut schema.tables,
+            &right_fk.target_table,
+            ManyToManyRelation {
+                through_table: through_table_name,
+                source_column: right_column.clone(),
+                source_target_column: right_fk.target_column.clone(),
+                target_table: left_fk.target_table.clone(),
+                target_column: left_fk.target_column.clone(),
+                through_target_column: left_column.clone(),
+            },
+        );
+    }
+
+    schema
+}
+
+fn add_many_to_many_relation(
+    tables: &mut BTreeMap<String, TableSchema>,
+    source_table_name: &str,
+    relation: ManyToManyRelation,
+) {
+    let Some(source_table) = tables.get_mut(source_table_name) else {
+        return;
+    };
+
+    let preferred_name = relation.target_table.clone();
+    let relation_name = if source_table.many_to_many.contains_key(&preferred_name) {
+        format!("{}_via_{}", relation.target_table, relation.through_table)
+    } else {
+        preferred_name
+    };
+    source_table.many_to_many.insert(relation_name, relation);
 }
 
 fn validate_effective_schema(schema: &Schema) -> Result<(), String> {
@@ -782,6 +991,53 @@ mod tests {
         assert_eq!(relation.kind, TableKind::Relation);
         assert_eq!(relation.foreign_keys["student_id"].target_table, "students");
         assert_eq!(relation.foreign_keys["course_id"].target_table, "courses");
+        assert_eq!(students.many_to_many["courses"].through_table, "student_courses");
+        assert_eq!(students.many_to_many["courses"].source_column, "student_id");
+        assert_eq!(students.many_to_many["courses"].through_target_column, "course_id");
+        assert_eq!(
+            schema.tables["courses"].many_to_many["students"].through_table,
+            "student_courses"
+        );
+    }
+
+    #[test]
+    fn strict_junction_detection_avoids_false_positives() {
+        let schema = infer_schema_from_values(&BTreeMap::from([
+            (
+                "students".to_string(),
+                json!([
+                    {"id": 1, "name": "Ada"},
+                    {"id": 2, "name": "Grace"}
+                ]),
+            ),
+            (
+                "courses".to_string(),
+                json!([
+                    {"id": 10, "title": "Math"},
+                    {"id": 11, "title": "CS"}
+                ]),
+            ),
+            (
+                "student_courses".to_string(),
+                json!([
+                    {"student_id": 1, "course_id": 10, "role": "lead"},
+                    {"student_id": 2, "course_id": 11, "role": "assistant"}
+                ]),
+            ),
+            (
+                "labels".to_string(),
+                json!([
+                    {"student_id": 1, "label": "mentor"},
+                    {"student_id": 2, "label": "helper"}
+                ]),
+            ),
+        ]));
+
+        assert_eq!(schema.tables["student_courses"].kind, TableKind::Unknown);
+        assert!(schema.tables["student_courses"].many_to_many.is_empty());
+        assert_eq!(schema.tables["labels"].kind, TableKind::Unknown);
+        assert!(schema.tables["labels"].foreign_keys.contains_key("student_id"));
+        assert!(schema.tables["labels"].many_to_many.is_empty());
     }
 
     #[test]
@@ -867,6 +1123,56 @@ mod tests {
         let posts = merged.tables.get("posts").expect("posts table");
         assert!(posts.columns.contains_key("title"));
         assert!(posts.columns.contains_key("author_id"));
+    }
+
+    #[test]
+    fn suppressed_foreign_keys_remove_inferred_relations() {
+        let inferred = infer_schema_from_values(&BTreeMap::from([
+            ("users".to_string(), json!([{"id": 1, "name": "Ada"}])),
+            ("posts".to_string(), json!([{"id": 1, "user_id": 1}])),
+        ]));
+        let declared = parse_json_schema(
+            r#"
+            {
+              "tables": {
+                "posts": {
+                  "suppressed_foreign_keys": ["user_id"]
+                }
+              }
+            }
+            "#,
+        )
+        .expect("parse schema");
+
+        let merged = merge_schemas(Some(&declared), &inferred).expect("merge schema");
+        let posts = merged.tables.get("posts").expect("posts table");
+        assert!(posts.foreign_keys.get("user_id").is_none(), "{posts:?}");
+    }
+
+    #[test]
+    fn export_declared_snapshot_preserves_suppressed_foreign_keys() {
+        let effective = infer_schema_from_values(&BTreeMap::from([
+            ("users".to_string(), json!([{"id": 1, "name": "Ada"}])),
+            ("posts".to_string(), json!([{"id": 1, "user_id": 1}])),
+        ]));
+        let declared = parse_json_schema(
+            r#"
+            {
+              "tables": {
+                "posts": {
+                  "suppressed_foreign_keys": ["user_id"]
+                }
+              }
+            }
+            "#,
+        )
+        .expect("parse schema");
+
+        let snapshot = export_declared_schema_snapshot(Some(&declared), &effective);
+        assert_eq!(
+            snapshot.tables["posts"].suppressed_foreign_keys,
+            BTreeSet::from(["user_id".to_string()])
+        );
     }
 
     #[test]

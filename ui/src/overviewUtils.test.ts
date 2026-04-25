@@ -28,6 +28,7 @@ const tableResource: ResourceOverview = {
   columns: [],
   outgoing_relations: [],
   incoming_relations: [],
+  many_to_many_relations: [],
   sample_item_id: '1',
   query_capabilities: {
     filter: true,
@@ -167,7 +168,7 @@ describe('loadOverviewPreferences', () => {
               team_id: false
             }
           },
-          lastInspectorTab: 'schema',
+          lastInspectorTab: 'selection',
           mobileSurface: 'map'
         })
     };
@@ -178,8 +179,9 @@ describe('loadOverviewPreferences', () => {
           team_id: false
         }
       },
-      lastInspectorTab: 'schema',
-      mobileSurface: 'map'
+      lastInspectorTab: 'selection',
+      mobileSurface: 'map',
+      schemaMobileSurface: 'graph'
     });
   });
 });

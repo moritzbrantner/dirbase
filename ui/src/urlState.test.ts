@@ -13,6 +13,7 @@ describe('overview URL state', () => {
     );
 
     expect(state.resource).toBe('posts');
+    expect(state.mode).toBe('data');
     expect(state.view).toBe('raw');
     expect(state.page).toBe(2);
     expect(state.perPage).toBe(50);
@@ -44,6 +45,7 @@ describe('overview URL state', () => {
 
   it('serializes sorting and pagination into the browser query string', () => {
     const queryString = buildBrowserQueryString({
+      mode: 'schema',
       resource: 'users',
       view: 'explore',
       page: 3,
@@ -56,7 +58,9 @@ describe('overview URL state', () => {
       embeds: ['manager_id']
     });
 
-    expect(queryString).toBe('?resource=users&page=3&per_page=100&sort=last_name%2C-age&embed=manager_id');
+    expect(queryString).toBe(
+      '?resource=users&mode=schema&page=3&per_page=100&sort=last_name%2C-age&embed=manager_id'
+    );
   });
 
   it('serializes null operators without a value payload', () => {
@@ -85,6 +89,7 @@ describe('overview URL state', () => {
 
   it('resets table state for a resource and optional view', () => {
     expect(resetTableState('members', 'raw')).toEqual({
+      mode: 'data',
       resource: 'members',
       view: 'raw',
       page: 1,

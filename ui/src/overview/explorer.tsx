@@ -1,12 +1,5 @@
-import {
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-  type ColumnDef,
-  type Updater,
-  type VisibilityState
-} from '@tanstack/react-table';
-import type { MouseEvent } from 'react';
+import type { Updater, VisibilityState } from '@tanstack/react-table';
+import type { KeyboardEvent, MouseEvent } from 'react';
 
 import { formatJson, getColumnNames, getTableRows, isPaginatedResponse } from '../helpers';
 import { FILTER_OPERATOR_LABELS, getVisibleMutationActions } from '../overviewUtils';
@@ -320,39 +313,20 @@ export function DataExplorerPanel({
   const relationColumns = resource?.columns.filter((column) => Boolean(column.relation)) ?? [];
   const primaryKey = resource?.primary_key ?? null;
   const selectedPrimaryValue = primaryKey && selectedRow ? selectedRow[primaryKey] : undefined;
-
-  const columns: ColumnDef<Record<string, unknown>>[] = columnNames.map((columnName) => {
-    const resourceColumn = resource?.columns.find((column) => column.name === columnName);
-    return {
-      id: columnName,
-      accessorFn: (row) => row[columnName],
-      header: () => null,
-      cell: ({ row }) => (
-        <div className={`cell-content ${resourceColumn?.relation ? 'is-relation' : ''}`}>
-          {renderCellValue(row.original[columnName])}
-        </div>
-      )
-    };
-  });
-
-  const table = useReactTable({
-    data: rows,
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-    manualPagination: true,
-    manualSorting: true,
-    state: {
-      columnVisibility,
-      sorting: state.sorting.map((sort) => ({ id: sort.id, desc: sort.desc }))
-    },
-    pageCount: isPaginatedResponse(response?.parsed) ? response.parsed.pages : 1,
-    onColumnVisibilityChange: (updater) => {
+  const visibleColumns = columnNames.filter((columnName) => columnVisibility[columnName] !== false);
+  const columns = columnNames.map((columnName) => ({
+    id: columnName,
+    visible: columnVisibility[columnName] !== false,
+    onToggle: (_event: unknown) => {
       if (!resource) {
         return;
       }
-      onColumnVisibilityChange(resource.name, updater);
+      onColumnVisibilityChange(resource.name, (current) => ({
+        ...current,
+        [columnName]: !(current[columnName] ?? true)
+      }));
     }
-  });
+  }));
 
   if (!resource) {
     return <p className="overview-empty">Choose a resource to start exploring.</p>;
@@ -374,7 +348,7 @@ export function DataExplorerPanel({
           <div className="skeleton skeleton-bar" />
           <div className="skeleton skeleton-bar short" />
         </div>
-        <div className="table-shell">
+        <div className="result-shell">
           <TableSkeleton />
         </div>
       </div>
@@ -390,11 +364,7 @@ export function DataExplorerPanel({
             filters={state.filters}
             relationColumns={relationColumns}
             state={state}
-            columns={table.getAllLeafColumns().map((column) => ({
-              id: column.id,
-              visible: column.getIsVisible(),
-              onToggle: column.getToggleVisibilityHandler()
-            }))}
+            columns={columns}
             onStateChange={onStateChange}
           />
         )}
@@ -419,70 +389,98 @@ export function DataExplorerPanel({
         filters={state.filters}
         relationColumns={relationColumns}
         state={state}
-        columns={table.getAllLeafColumns().map((column) => ({
-          id: column.id,
-          visible: column.getIsVisible(),
-          onToggle: column.getToggleVisibilityHandler()
-        }))}
+        columns={columns}
         onStateChange={onStateChange}
       />
 
-      <div className="table-shell">
-        <table className="data-table">
-          <thead>
-            <tr>
-              {table.getHeaderGroups()[0]?.headers.map((header) => {
-                const sortEntry = state.sorting.find((entry) => entry.id === header.column.id);
-                return (
-                  <th key={header.id}>
-                    <button
-                      type="button"
-                      className="column-header-button"
-                      onClick={(event: MouseEvent<HTMLButtonElement>) =>
-                        onStateChange((current) => ({
-                          ...current,
-                          page: 1,
-                          sorting: nextSorting(current.sorting, header.column.id, event.shiftKey)
-                        }))
-                      }
-                    >
-                      <span>{header.column.id}</span>
-                      <span className="sort-indicator">
-                        {sortEntry ? (sortEntry.desc ? 'desc' : 'asc') : 'sort'}
-                      </span>
-                    </button>
-                  </th>
-                );
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            {table.getRowModel().rows.map((row) => {
-              const isSelected =
-                primaryKey && selectedPrimaryValue !== undefined
-                  ? row.original[primaryKey] === selectedPrimaryValue
-                  : selectedRow === row.original;
+      <div className="result-shell">
+        <div className="result-shell-head">
+          <div>
+            <p className="section-title">Rows</p>
+            <p className="overview-copy">
+              Sort from the header. Shift-click any additional column to keep building a multi-column order.
+            </p>
+          </div>
+          <span className="overview-inline-badge">
+            {isPaginatedResponse(response?.parsed) ? `${response.parsed.items} items` : `${rows.length} items`}
+          </span>
+        </div>
+
+        {visibleColumns.length > 0 ? (
+          <div className="result-header-grid" role="group" aria-label="Sort rows">
+            {visibleColumns.map((columnName) => {
+              const sortIndex = state.sorting.findIndex((entry) => entry.id === columnName);
+              const sortEntry = sortIndex >= 0 ? state.sorting[sortIndex] : null;
               return (
-                <tr
-                  key={row.id}
-                  className={isSelected ? 'is-selected' : ''}
-                  onClick={() => onRowSelect(row.original)}
+                <button
+                  key={columnName}
+                  type="button"
+                  className={`result-header-button ${sortEntry ? 'is-active' : ''}`}
+                  aria-pressed={Boolean(sortEntry)}
+                  onClick={(event: MouseEvent<HTMLButtonElement>) =>
+                    onStateChange((current) => ({
+                      ...current,
+                      page: 1,
+                      sorting: nextSorting(current.sorting, columnName, event.shiftKey)
+                    }))
+                  }
                 >
-                  {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-                  ))}
-                </tr>
+                  <span className="result-header-label">{columnName}</span>
+                  <span className="sort-indicator">{formatSortIndicator(sortEntry, sortIndex)}</span>
+                </button>
               );
             })}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={columnNames.length || 1}>
-                  <p className="overview-empty">No rows match the current query.</p>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+          </div>
+        ) : (
+          <p className="overview-empty">No visible columns. Use the column picker to show fields again.</p>
+        )}
+
+        {rows.length > 0 ? (
+          <div className="result-card-list">
+            {rows.map((row, index) => {
+              const isSelected =
+                primaryKey && selectedPrimaryValue !== undefined
+                  ? row[primaryKey] === selectedPrimaryValue
+                  : selectedRow === row;
+              return (
+                <div
+                  key={buildRowKey(row, index, primaryKey)}
+                  className={`result-card ${isSelected ? 'is-selected' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onRowSelect(row)}
+                  onKeyDown={(event) => handleRowKeyDown(event, row, onRowSelect)}
+                >
+                  <div className="result-card-head">
+                    <div className="result-card-title">
+                      <span className="section-title">Row</span>
+                      <strong className="text-sm font-semibold text-stoneink-900">
+                        {primaryKey ? `${primaryKey}: ${formatRowIdentity(row[primaryKey])}` : `Item ${index + 1}`}
+                      </strong>
+                    </div>
+                    {isSelected && <span className="overview-kind-badge">selected</span>}
+                  </div>
+
+                  <div className="result-card-grid">
+                    {visibleColumns.map((columnName) => {
+                      const resourceColumn = resource.columns.find((column) => column.name === columnName);
+                      return (
+                        <div key={columnName} className="result-cell">
+                          <span className="result-cell-label">{columnName}</span>
+                          <div className={`cell-content ${resourceColumn?.relation ? 'is-relation' : ''}`}>
+                            {renderCellValue(row[columnName])}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="overview-empty">No rows match the current query.</p>
+        )}
       </div>
 
       <div className="pagination-row">
@@ -512,6 +510,49 @@ export function DataExplorerPanel({
   );
 }
 
+function formatSortIndicator(
+  sortEntry: OverviewUrlState['sorting'][number] | null,
+  sortIndex: number
+) {
+  if (!sortEntry) {
+    return 'sort';
+  }
+  const direction = sortEntry.desc ? '↓' : '↑';
+  return sortIndex > 0 ? `${direction} ${sortIndex + 1}` : direction;
+}
+
+function formatRowIdentity(value: unknown) {
+  if (value === null || value === undefined) {
+    return 'null';
+  }
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return formatJson(value);
+}
+
+function buildRowKey(row: Record<string, unknown>, index: number, primaryKey: string | null) {
+  if (primaryKey) {
+    const primaryValue = row[primaryKey];
+    if (typeof primaryValue === 'string' || typeof primaryValue === 'number') {
+      return `${primaryKey}:${primaryValue}`;
+    }
+  }
+  return `row:${index}`;
+}
+
+function handleRowKeyDown(
+  event: KeyboardEvent<HTMLDivElement>,
+  row: Record<string, unknown>,
+  onRowSelect: (row: Record<string, unknown>) => void
+) {
+  if (event.key !== 'Enter' && event.key !== ' ') {
+    return;
+  }
+  event.preventDefault();
+  onRowSelect(row);
+}
+
 function ControlBar({
   fields,
   filters,
@@ -524,7 +565,7 @@ function ControlBar({
   filters: FilterDescriptor[];
   relationColumns: ResourceOverview['columns'];
   state: OverviewUrlState;
-  columns: Array<{ id: string; visible: boolean; onToggle: () => void }>;
+  columns: Array<{ id: string; visible: boolean; onToggle: (event: unknown) => void }>;
   onStateChange: (updater: (state: OverviewUrlState) => OverviewUrlState) => void;
 }) {
   return (

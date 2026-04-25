@@ -27,7 +27,8 @@ export const FILTER_OPERATOR_LABELS: Record<FilterOperator, string> = {
 export const DEFAULT_PREFERENCES: OverviewPreferences = {
   columnVisibility: {},
   lastInspectorTab: 'request',
-  mobileSurface: 'explorer'
+  mobileSurface: 'explorer',
+  schemaMobileSurface: 'graph'
 };
 
 export function buildQuerySummaryChips({
@@ -208,8 +209,10 @@ export function loadOverviewPreferences(storage: Storage | Pick<Storage, 'getIte
     const parsed = JSON.parse(raw) as Partial<OverviewPreferences>;
     return {
       columnVisibility: parsed.columnVisibility ?? {},
-      lastInspectorTab: parsed.lastInspectorTab ?? DEFAULT_PREFERENCES.lastInspectorTab,
-      mobileSurface: parsed.mobileSurface ?? DEFAULT_PREFERENCES.mobileSurface
+      lastInspectorTab:
+        parsed.lastInspectorTab === 'selection' ? 'selection' : DEFAULT_PREFERENCES.lastInspectorTab,
+      mobileSurface: parsed.mobileSurface ?? DEFAULT_PREFERENCES.mobileSurface,
+      schemaMobileSurface: parsed.schemaMobileSurface ?? DEFAULT_PREFERENCES.schemaMobileSurface
     };
   } catch {
     return DEFAULT_PREFERENCES;

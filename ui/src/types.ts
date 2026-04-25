@@ -50,6 +50,7 @@ export interface ResourceOverview {
   columns: OverviewColumn[];
   outgoing_relations: OverviewRelation[];
   incoming_relations: OverviewRelation[];
+  many_to_many_relations: OverviewManyToManyRelation[];
   sample_item_id: string | null;
   query_capabilities: QueryCapabilities;
   mutation_capabilities: MutationCapabilities;
@@ -72,8 +73,21 @@ export interface OverviewRelation {
 }
 
 export interface OverviewEdge {
+  kind?: 'foreign_key' | 'many_to_many';
   source_table: string;
   source_column: string;
+  target_table: string;
+  target_column: string;
+  through_table?: string | null;
+}
+
+export interface OverviewManyToManyRelation {
+  label: string;
+  source_table: string;
+  source_column: string;
+  source_target_column: string;
+  through_table: string;
+  through_target_column: string;
   target_table: string;
   target_column: string;
 }
@@ -107,8 +121,10 @@ export interface SortDescriptor {
 }
 
 export type OverviewView = 'explore' | 'raw';
+export type OverviewMode = 'data' | 'schema';
 
 export interface OverviewUrlState {
+  mode: OverviewMode;
   resource: string | null;
   view: OverviewView;
   page: number;
@@ -142,6 +158,17 @@ export interface SchemaForeignKey {
   target_column: string;
 }
 
+export interface DeclaredSchemaForeignKey extends SchemaForeignKey {}
+
+export interface SchemaManyToManyRelation {
+  through_table: string;
+  source_column: string;
+  source_target_column: string;
+  target_table: string;
+  target_column: string;
+  through_target_column: string;
+}
+
 export interface SchemaColumn {
   column_type?: string;
   nullable?: boolean;
@@ -153,6 +180,7 @@ export interface SchemaTable {
   primary_key?: string | null;
   kind?: string | null;
   foreign_keys?: Record<string, SchemaForeignKey>;
+  many_to_many?: Record<string, SchemaManyToManyRelation>;
   [key: string]: unknown;
 }
 
@@ -161,11 +189,49 @@ export interface SchemaResponse {
   [key: string]: unknown;
 }
 
-export type InspectorTab = 'request' | 'selection' | 'schema';
+export interface DeclaredSchemaTable {
+  columns?: Record<string, SchemaColumn>;
+  primary_key?: string | null;
+  kind?: string | null;
+  foreign_keys?: Record<string, DeclaredSchemaForeignKey>;
+  suppressed_foreign_keys?: string[];
+  [key: string]: unknown;
+}
+
+export interface DeclaredSchemaResponse {
+  tables?: Record<string, DeclaredSchemaTable>;
+  [key: string]: unknown;
+}
+
+export interface SchemaEditorPayload {
+  inferred: SchemaResponse;
+  declared: DeclaredSchemaResponse | null;
+  effective: SchemaResponse;
+  save_path: string;
+}
+
+export type SchemaWorkspaceSelection =
+  | {
+      kind: 'table';
+      tableName: string;
+    }
+  | {
+      kind: 'column';
+      tableName: string;
+      columnName: string;
+    }
+  | {
+      kind: 'relation';
+      tableName: string;
+      relationSourceColumn: string;
+    };
+
+export type InspectorTab = 'request' | 'selection';
 
 export type LiveUpdateStatus = 'connecting' | 'live' | 'reconnecting' | 'paused';
 
 export type MobileSurface = 'explorer' | 'resources' | 'map' | 'inspector';
+export type SchemaMobileSurface = 'tables' | 'graph' | 'details' | 'json';
 
 export type MutationMode = 'create' | 'edit' | 'delete' | 'editObject';
 
@@ -186,6 +252,7 @@ export interface OverviewPreferences {
   columnVisibility: Record<string, Record<string, boolean>>;
   lastInspectorTab: InspectorTab;
   mobileSurface: MobileSurface;
+  schemaMobileSurface: SchemaMobileSurface;
 }
 
 export interface QuerySummaryChip {

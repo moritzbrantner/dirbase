@@ -1,9 +1,9 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { InspectorPanel, MutationDialog } from './overview/inspector';
-import { QuerySummaryBar, ResourceSidebar } from './overview/explorer';
-import type { ResourceOverview } from './types';
+import { DataExplorerPanel, QuerySummaryBar, ResourceSidebar } from './overview/explorer';
+import type { OverviewUrlState, ResourceOverview, ResourceResponse } from './types';
 
 const tableResource: ResourceOverview = {
   name: 'members',
@@ -19,6 +19,7 @@ const tableResource: ResourceOverview = {
   ],
   outgoing_relations: [],
   incoming_relations: [],
+  many_to_many_relations: [],
   sample_item_id: '1',
   query_capabilities: {
     filter: true,
@@ -59,43 +60,31 @@ describe('MutationDialog', () => {
   });
 });
 
-describe('InspectorPanel schema editor', () => {
-  it('disables schema write controls in read-only mode', () => {
+describe('InspectorPanel', () => {
+  it('renders request controls in read-only mode', () => {
     render(
       <InspectorPanel
         resource={tableResource}
         response={undefined}
-        schemaDraft='{"tables":{}}'
-        schemaStatus={null}
-        schemaDiffSummary={[]}
-        schemaValidationError={null}
         selectedRow={null}
-        selectedTab="schema"
+        selectedTab="request"
         outgoingRelations={[]}
         incomingRelations={[]}
         readonly
         mobileOpen={false}
-        schemaBusy={false}
-        canSaveSchema
-        canInferSchema
         requestPath="/members"
         requestUrl="http://localhost/members"
         onTabChange={vi.fn()}
-        onSchemaDraftChange={vi.fn()}
         onCopy={vi.fn()}
         onOpenRequest={vi.fn()}
-        onReloadSchema={vi.fn()}
-        onSaveSchema={vi.fn()}
-        onInferSchema={vi.fn()}
         onDrilldownOutgoing={vi.fn()}
         onDrilldownIncoming={vi.fn()}
       />
     );
 
-    expect(screen.getByTestId('schema-editor')).toHaveAttribute('readonly');
-    expect(screen.getByRole('button', { name: 'Infer from data' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Reload' })).toBeEnabled();
+    expect(screen.getByText('Read-only')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy URL' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Open request' })).toBeEnabled();
   });
 });
 
@@ -166,5 +155,66 @@ describe('ResourceSidebar', () => {
     expect(screen.getAllByText('object').length).toBeGreaterThan(0);
     expect(onSearchChange).toHaveBeenCalledWith('team');
     expect(onSelectResource).toHaveBeenCalledWith('settings');
+  });
+});
+
+describe('DataExplorerPanel', () => {
+  it('renders row cards instead of a table and preserves multi-column sorting', () => {
+    const onStateChange = vi.fn();
+    const state: OverviewUrlState = {
+      mode: 'data',
+      resource: 'members',
+      view: 'explore',
+      page: 1,
+      perPage: 25,
+      filters: [],
+      sorting: [{ id: 'name', desc: false }],
+      embeds: []
+    };
+    const response: ResourceResponse = {
+      status: 200,
+      statusText: 'OK',
+      url: 'http://localhost/members',
+      rawText: '[{"id":1,"name":"Ada"},{"id":2,"name":"Grace"}]',
+      parsed: [
+        { id: 1, name: 'Ada', team_id: 7 },
+        { id: 2, name: 'Grace', team_id: 3 }
+      ]
+    };
+
+    render(
+      <DataExplorerPanel
+        resource={tableResource}
+        response={response}
+        error={null}
+        isLoading={false}
+        state={state}
+        selectedRow={null}
+        rawMode={false}
+        columnVisibility={{}}
+        onColumnVisibilityChange={vi.fn()}
+        onStateChange={onStateChange}
+        onRowSelect={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.getByText(/Shift-click any additional column/i)).toBeInTheDocument();
+
+    const sortGroup = screen.getByRole('group', { name: 'Sort rows' });
+    expect(within(sortGroup).getByText('↑')).toBeInTheDocument();
+
+    fireEvent.click(within(sortGroup).getByRole('button', { name: /team_id/i }), {
+      shiftKey: true
+    });
+
+    const updater = onStateChange.mock.calls[0]?.[0] as
+      | ((current: OverviewUrlState) => OverviewUrlState)
+      | undefined;
+    expect(updater).toBeTypeOf('function');
+    expect(updater?.(state).sorting).toEqual([
+      { id: 'name', desc: false },
+      { id: 'team_id', desc: false }
+    ]);
   });
 });

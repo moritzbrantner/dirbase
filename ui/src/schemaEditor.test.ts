@@ -35,6 +35,7 @@ const postsResource: ResourceOverview = {
   ],
   outgoing_relations: [],
   incoming_relations: [],
+  many_to_many_relations: [],
   sample_item_id: '1',
   query_capabilities: {
     filter: true,

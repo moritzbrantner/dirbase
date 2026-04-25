@@ -1,6 +1,7 @@
 import type {
   FilterDescriptor,
   FilterOperator,
+  OverviewMode,
   OverviewUrlState,
   OverviewView,
   ResourceOverview,
@@ -22,7 +23,7 @@ export const FILTER_OPERATORS: FilterOperator[] = [
   'isNotNull'
 ];
 
-const RESERVED_KEYS = new Set(['resource', 'view', 'sort', '_sort', 'page', '_page', 'per_page', '_per_page', 'embed', '_embed']);
+const RESERVED_KEYS = new Set(['mode', 'resource', 'view', 'sort', '_sort', 'page', '_page', 'per_page', '_per_page', 'embed', '_embed']);
 
 export const DEFAULT_PER_PAGE = 25;
 export const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
@@ -48,6 +49,7 @@ export function parseOverviewState(search: string): OverviewUrlState {
   }
 
   return {
+    mode: normalizeMode(params.get('mode')),
     resource: params.get('resource'),
     view,
     page: parsePositiveInt(params.get('page') ?? params.get('_page'), 1),
@@ -62,6 +64,9 @@ export function buildBrowserQueryString(state: OverviewUrlState): string {
   const params = new URLSearchParams();
   if (state.resource) {
     params.set('resource', state.resource);
+  }
+  if (state.mode !== 'data') {
+    params.set('mode', state.mode);
   }
   if (state.view !== 'explore') {
     params.set('view', state.view);
@@ -119,8 +124,13 @@ export function buildResourceRequestPath(resource: ResourceOverview | null | und
     : `/${encodeURIComponent(resource.name)}`;
 }
 
-export function resetTableState(resource: string, view: OverviewView = 'explore'): OverviewUrlState {
+export function resetTableState(
+  resource: string,
+  view: OverviewView = 'explore',
+  mode: OverviewMode = 'data'
+): OverviewUrlState {
   return {
+    mode,
     resource,
     view,
     page: 1,
@@ -208,6 +218,10 @@ function isFilterOperator(value: string): value is FilterOperator {
 
 function normalizeView(value: string | null): OverviewView {
   return value === 'raw' ? 'raw' : 'explore';
+}
+
+function normalizeMode(value: string | null): OverviewMode {
+  return value === 'schema' ? 'schema' : 'data';
 }
 
 function parsePositiveInt(value: string | null, fallback: number): number {

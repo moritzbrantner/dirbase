@@ -229,6 +229,60 @@ fn graphql_keeps_relation_tables_as_explicit_collections() {
 }
 
 #[test]
+fn graphql_exposes_derived_many_to_many_fields_and_deduplicates_results() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("students.json"),
+        r#"[
+  {"id": 1, "name": "Ada"},
+  {"id": 2, "name": "Grace"}
+]
+"#,
+    )
+    .expect("write students");
+    fs::write(
+        temp.path().join("courses.json"),
+        r#"[
+  {"id": 10, "title": "Math"},
+  {"id": 11, "title": "CS"}
+]
+"#,
+    )
+    .expect("write courses");
+    fs::write(
+        temp.path().join("student_courses.json"),
+        r#"[
+  {"student_id": 1, "course_id": 10},
+  {"student_id": 1, "course_id": 10},
+  {"student_id": 1, "course_id": 11},
+  {"student_id": 2, "course_id": 11}
+]
+"#,
+    )
+    .expect("write relation");
+
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
+
+    let payload = graphql_json(
+        &bind_addr,
+        r#"{ students { id name courses { id title } } courses { id title students { id name } } __type(name: "StudentsRecord") { fields { name } } }"#,
+    );
+
+    let student_fields = payload["data"]["__type"]["fields"].as_array().expect("student fields");
+    assert!(student_fields.iter().any(|field| field["name"] == "courses"));
+
+    let ada_courses = payload["data"]["students"][0]["courses"].as_array().expect("ada courses");
+    assert_eq!(ada_courses.len(), 2, "{payload}");
+    assert_eq!(ada_courses[0]["id"], 10);
+    assert_eq!(ada_courses[1]["id"], 11);
+
+    let math_students =
+        payload["data"]["courses"][0]["students"].as_array().expect("math students");
+    assert_eq!(math_students.len(), 1, "{payload}");
+    assert_eq!(math_students[0]["name"], "Ada");
+}
+
+#[test]
 fn graphql_types_top_level_object_resources() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(

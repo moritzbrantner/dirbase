@@ -52,6 +52,14 @@ fn schema_endpoint_infers_tables_and_can_persist_schema_json() {
         schema_payload["tables"]["student_courses"]["foreign_keys"]["course_id"]["target_table"],
         "courses"
     );
+    assert_eq!(
+        schema_payload["tables"]["students"]["many_to_many"]["courses"]["through_table"],
+        "student_courses"
+    );
+    assert_eq!(
+        schema_payload["tables"]["courses"]["many_to_many"]["students"]["through_table"],
+        "student_courses"
+    );
 
     let save_response = http_request(&bind_addr, "POST", "/schema", None);
     assert!(save_response.starts_with("HTTP/1.1 200 OK\r\n"), "{save_response}");
@@ -62,6 +70,7 @@ fn schema_endpoint_infers_tables_and_can_persist_schema_json() {
         serde_json::from_str(&fs::read_to_string(&saved).expect("read schema.json"))
             .expect("saved schema json");
     assert_eq!(saved_payload["tables"]["student_courses"]["kind"], "relation");
+    assert!(saved_payload["tables"]["students"]["many_to_many"].is_null(), "{saved_payload}");
 
     let root_response = http_request(&bind_addr, "GET", "/", None);
     assert!(root_response.starts_with("HTTP/1.1 200 OK\r\n"), "{root_response}");
@@ -349,5 +358,127 @@ fn schema_put_validates_and_persists_declared_schema() {
     assert_eq!(
         schema_payload["tables"]["posts"]["foreign_keys"]["author_id"]["target_table"],
         "users"
+    );
+}
+
+#[test]
+fn schema_editor_endpoint_returns_inferred_declared_and_effective_schema() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("schema.json"),
+        r#"{
+  "tables": {
+    "posts": {
+      "foreign_keys": {
+        "author_ref": {
+          "target_table": "users",
+          "target_column": "user_id"
+        }
+      }
+    }
+  }
+}
+"#,
+    )
+    .expect("write schema");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"user_id": 1, "name": "Ada"}
+]
+"#,
+    )
+    .expect("write users");
+    fs::write(
+        temp.path().join("posts.json"),
+        r#"[
+  {"id": 1, "author_ref": 1}
+]
+"#,
+    )
+    .expect("write posts");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    let response = http_request(&bind_addr, "GET", "/schema/editor", None);
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    let payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&response)).expect("schema editor json");
+
+    assert_eq!(
+        payload["inferred"]["tables"]["posts"]["columns"]["author_ref"]["column_type"],
+        "integer"
+    );
+    assert_eq!(
+        payload["declared"]["tables"]["posts"]["foreign_keys"]["author_ref"]["target_table"],
+        "users"
+    );
+    assert_eq!(
+        payload["effective"]["tables"]["posts"]["foreign_keys"]["author_ref"]["target_column"],
+        "user_id"
+    );
+    assert_eq!(payload["save_path"], temp.path().join("schema.json").display().to_string());
+}
+
+#[test]
+fn schema_post_preserves_suppressed_inferred_relations_across_reload() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("schema.json"),
+        r#"{
+  "tables": {
+    "posts": {
+      "suppressed_foreign_keys": ["user_id"]
+    }
+  }
+}
+"#,
+    )
+    .expect("write schema");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"id": 1, "name": "Ada"}
+]
+"#,
+    )
+    .expect("write users");
+    fs::write(
+        temp.path().join("posts.json"),
+        r#"[
+  {"id": 1, "user_id": 1, "title": "Hello"}
+]
+"#,
+    )
+    .expect("write posts");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    let before = http_request(&bind_addr, "GET", "/schema", None);
+    let before_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&before)).expect("schema json before");
+    assert!(
+        before_payload["tables"]["posts"]["foreign_keys"].get("user_id").is_none(),
+        "{before_payload}"
+    );
+
+    let save_response = http_request(&bind_addr, "POST", "/schema", None);
+    assert!(save_response.starts_with("HTTP/1.1 200 OK\r\n"), "{save_response}");
+
+    let saved_payload: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join("schema.json")).expect("read"))
+            .expect("saved schema json");
+    assert_eq!(
+        saved_payload["tables"]["posts"]["suppressed_foreign_keys"],
+        serde_json::json!(["user_id"])
+    );
+
+    let (_child_reloaded, bind_addr_reloaded) = spawn_folder_server(temp.path(), false);
+    let after = http_request(&bind_addr_reloaded, "GET", "/schema", None);
+    let after_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&after)).expect("schema json after");
+    assert!(
+        after_payload["tables"]["posts"]["foreign_keys"].get("user_id").is_none(),
+        "{after_payload}"
     );
 }

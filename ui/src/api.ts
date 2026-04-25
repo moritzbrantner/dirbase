@@ -1,4 +1,4 @@
-import type { OverviewPageData, ResourceResponse, SchemaResponse } from './types';
+import type { OverviewPageData, ResourceResponse, SchemaEditorPayload, SchemaResponse } from './types';
 
 export async function fetchOverview(overviewEndpoint: string): Promise<OverviewPageData> {
   const response = await fetch(overviewEndpoint, {
@@ -44,6 +44,18 @@ export async function fetchSchema(): Promise<SchemaResponse> {
     throw new Error(`Schema request failed: ${response.status} ${response.statusText}`);
   }
   return response.json() as Promise<SchemaResponse>;
+}
+
+export async function fetchSchemaEditor(): Promise<SchemaEditorPayload> {
+  const response = await fetch('/schema/editor', {
+    headers: {
+      Accept: 'application/json'
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`Schema editor request failed: ${response.status} ${response.statusText}`);
+  }
+  return response.json() as Promise<SchemaEditorPayload>;
 }
 
 export async function saveSchemaDocument(schema: string): Promise<void> {

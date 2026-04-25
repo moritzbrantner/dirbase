@@ -1,0 +1,102 @@
+{
+  "tables": {
+    "classes": {
+      "kind": "object",
+      "primary_key": "id",
+      "columns": {
+        "code": {
+          "column_type": "string",
+          "nullable": false
+        },
+        "credits": {
+          "column_type": "integer",
+          "nullable": false
+        },
+        "id": {
+          "column_type": "integer",
+          "nullable": false
+        },
+        "professor_id": {
+          "column_type": "integer",
+          "nullable": false
+        },
+        "semester": {
+          "column_type": "string",
+          "nullable": false
+        },
+        "student_ids": {
+          "column_type": "json",
+          "nullable": false
+        },
+        "title": {
+          "column_type": "string",
+          "nullable": false
+        }
+      },
+      "foreign_keys": {
+        "professor_id": {
+          "target_table": "professors",
+          "target_column": "id"
+        }
+      }
+    },
+    "professors": {
+      "kind": "object",
+      "primary_key": "id",
+      "columns": {
+        "department": {
+          "column_type": "string",
+          "nullable": false
+        },
+        "email": {
+          "column_type": "string",
+          "nullable": false
+        },
+        "id": {
+          "column_type": "integer",
+          "nullable": false
+        },
+        "name": {
+          "column_type": "string",
+          "nullable": false
+        },
+        "tenured": {
+          "column_type": "boolean",
+          "nullable": false
+        }
+      },
+      "foreign_keys": {}
+    },
+    "students": {
+      "kind": "object",
+      "primary_key": "id",
+      "columns": {
+        "email": {
+          "column_type": "string",
+          "nullable": false
+        },
+        "gpa": {
+          "column_type": "float",
+          "nullable": false
+        },
+        "id": {
+          "column_type": "integer",
+          "nullable": false
+        },
+        "major": {
+          "column_type": "string",
+          "nullable": false
+        },
+        "name": {
+          "column_type": "string",
+          "nullable": false
+        },
+        "year": {
+          "column_type": "integer",
+          "nullable": false
+        }
+      },
+      "foreign_keys": {}
+    }
+  }
+}
