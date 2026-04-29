@@ -164,6 +164,58 @@ fn export_sql_respects_schema_when_present() {
 }
 
 #[test]
+fn export_sql_maps_extended_schema_types() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(
+        temp.path().join("appointments.json"),
+        r#"[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "starts_on": "2026-04-29",
+    "starts_at": "2026-04-29T12:30:00Z",
+    "counter": "9223372036854775808",
+    "amount": "123.45"
+  }
+]"#,
+    )
+    .expect("write appointments");
+    std::fs::write(
+        temp.path().join("schema.json"),
+        r#"{
+  "tables": {
+    "appointments": {
+      "columns": {
+        "id": {"column_type": "uuid", "nullable": false},
+        "starts_on": {"column_type": "date", "nullable": false},
+        "starts_at": {"column_type": "datetime", "nullable": false},
+        "counter": {"column_type": "big_integer", "nullable": false},
+        "amount": {"column_type": "decimal", "nullable": false}
+      }
+    }
+  }
+}"#,
+    )
+    .expect("write schema");
+
+    let (_child, bind_addr) = start_server(temp.path(), false);
+    let pg = http_get(&bind_addr, "/export.sql");
+    let pg_body = parse_http_body(&pg);
+    assert!(pg_body.contains("\"id\" UUID NOT NULL"), "{pg_body}");
+    assert!(pg_body.contains("\"starts_on\" DATE NOT NULL"), "{pg_body}");
+    assert!(pg_body.contains("\"starts_at\" TIMESTAMPTZ NOT NULL"), "{pg_body}");
+    assert!(pg_body.contains("\"counter\" BIGINT NOT NULL"), "{pg_body}");
+    assert!(pg_body.contains("\"amount\" NUMERIC NOT NULL"), "{pg_body}");
+
+    let sqlite = http_get(&bind_addr, "/export.sql?dialect=sqlite");
+    let sqlite_body = parse_http_body(&sqlite);
+    assert!(sqlite_body.contains("\"id\" TEXT NOT NULL"), "{sqlite_body}");
+    assert!(sqlite_body.contains("\"starts_on\" TEXT NOT NULL"), "{sqlite_body}");
+    assert!(sqlite_body.contains("\"starts_at\" TEXT NOT NULL"), "{sqlite_body}");
+    assert!(sqlite_body.contains("\"counter\" INTEGER NOT NULL"), "{sqlite_body}");
+    assert!(sqlite_body.contains("\"amount\" TEXT NOT NULL"), "{sqlite_body}");
+}
+
+#[test]
 fn readonly_mode_allows_sql_and_export_and_rejects_post_sql() {
     let temp = tempfile::tempdir().expect("create temp directory");
     std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)

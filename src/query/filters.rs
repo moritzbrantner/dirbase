@@ -446,7 +446,7 @@ fn coerce_actual_value(actual: &Value, column: Option<&ColumnSchema>) -> Option<
 }
 fn coerce_actual_for_column(actual: &Value, column: &ColumnSchema) -> Option<ComparableValue> {
     match column.column_type {
-        ColumnType::Integer | ColumnType::Float => {
+        ColumnType::Integer | ColumnType::Float | ColumnType::BigInteger | ColumnType::Decimal => {
             if let Some(number) = actual.as_f64() {
                 Some(ComparableValue::Number(number))
             } else {
@@ -466,9 +466,11 @@ fn coerce_actual_for_column(actual: &Value, column: &ColumnSchema) -> Option<Com
                     .map(ComparableValue::Bool)
             }
         }
-        ColumnType::String | ColumnType::Json => {
-            Some(ComparableValue::String(value_to_filter_string(actual)))
-        }
+        ColumnType::String
+        | ColumnType::Json
+        | ColumnType::Date
+        | ColumnType::DateTime
+        | ColumnType::Uuid => Some(ComparableValue::String(value_to_filter_string(actual))),
     }
 }
 fn coerce_expected_value(expected: &str, column: Option<&ColumnSchema>) -> Option<ComparableValue> {
@@ -477,13 +479,16 @@ fn coerce_expected_value(expected: &str, column: Option<&ColumnSchema>) -> Optio
     }
     if let Some(column) = column {
         return match column.column_type {
-            ColumnType::Integer | ColumnType::Float => {
-                expected.parse::<f64>().ok().map(ComparableValue::Number)
-            }
+            ColumnType::Integer
+            | ColumnType::Float
+            | ColumnType::BigInteger
+            | ColumnType::Decimal => expected.parse::<f64>().ok().map(ComparableValue::Number),
             ColumnType::Boolean => expected.parse::<bool>().ok().map(ComparableValue::Bool),
-            ColumnType::String | ColumnType::Json => {
-                Some(ComparableValue::String(expected.to_string()))
-            }
+            ColumnType::String
+            | ColumnType::Json
+            | ColumnType::Date
+            | ColumnType::DateTime
+            | ColumnType::Uuid => Some(ComparableValue::String(expected.to_string())),
         };
     }
     if let Ok(number) = expected.parse::<f64>() {
@@ -700,25 +705,17 @@ mod tests {
     #[test]
     fn schema_aware_filtering_coerces_expected_values_by_column_type() {
         let data = json!([
-            {"id": "1", "age": "10", "active": "true", "code": "010"},
-            {"id": "2", "age": "20", "active": "false", "code": "20"}
+            {"id": "1", "age": "10", "active": "true", "code": "010", "amount": "12.50"},
+            {"id": "2", "age": "20", "active": "false", "code": "20", "amount": "100.25"}
         ]);
         let table = TableSchema {
             kind: TableKind::Unknown,
             primary_key: Some("id".to_string()),
             columns: BTreeMap::from([
-                (
-                    "age".to_string(),
-                    ColumnSchema { column_type: ColumnType::Integer, nullable: false },
-                ),
-                (
-                    "active".to_string(),
-                    ColumnSchema { column_type: ColumnType::Boolean, nullable: false },
-                ),
-                (
-                    "code".to_string(),
-                    ColumnSchema { column_type: ColumnType::String, nullable: false },
-                ),
+                ("age".to_string(), ColumnSchema::new(ColumnType::Integer, false)),
+                ("active".to_string(), ColumnSchema::new(ColumnType::Boolean, false)),
+                ("code".to_string(), ColumnSchema::new(ColumnType::String, false)),
+                ("amount".to_string(), ColumnSchema::new(ColumnType::Decimal, false)),
             ]),
             foreign_keys: BTreeMap::new(),
             many_to_many: BTreeMap::new(),
@@ -729,12 +726,16 @@ mod tests {
             ("age:lt".to_string(), "20".to_string()),
             ("active:eq".to_string(), "true".to_string()),
             ("code:eq".to_string(), "010".to_string()),
+            ("amount:lt".to_string(), "20".to_string()),
         ])
         .expect("parse filters");
 
         let filtered =
             filter_collection_data(data, &parsed.filters, Some(&table)).expect("filter data");
-        assert_eq!(filtered, json!([{"id": "1", "age": "10", "active": "true", "code": "010"}]));
+        assert_eq!(
+            filtered,
+            json!([{"id": "1", "age": "10", "active": "true", "code": "010", "amount": "12.50"}])
+        );
     }
 
     #[test]

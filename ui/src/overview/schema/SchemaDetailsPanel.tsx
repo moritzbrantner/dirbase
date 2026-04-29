@@ -8,6 +8,8 @@ import {
 } from '../../schemaWorkspace';
 import type {
   DeclaredSchemaResponse,
+  SchemaColumn,
+  SchemaColumnOverrideInput,
   SchemaResponse,
   SchemaWorkspaceSelection
 } from '../../types';
@@ -25,6 +27,7 @@ export function SchemaDetailsPanel({
   onSetTableKind,
   onSetPrimaryKey,
   onSetColumnOverride,
+  onSetUniqueConstraints,
   onUpdateRelation,
   onRemoveRelation,
   onResetRelation
@@ -43,8 +46,9 @@ export function SchemaDetailsPanel({
   onSetColumnOverride: (
     tableName: string,
     columnName: string,
-    next: { columnType: string | null; nullable: boolean | null }
+    next: SchemaColumnOverrideInput
   ) => void;
+  onSetUniqueConstraints: (tableName: string, unique: string[][]) => void;
   onUpdateRelation: (
     tableName: string,
     sourceColumn: string,
@@ -99,10 +103,12 @@ export function SchemaDetailsPanel({
         <TableDetails
           tableName={selection.tableName}
           table={table}
+          unique={declaredDraft.tables?.[selection.tableName]?.unique ?? []}
           disabled={disabled}
           onSelectRelation={onSelectRelation}
           onSetTableKind={onSetTableKind}
           onSetPrimaryKey={onSetPrimaryKey}
+          onSetUniqueConstraints={onSetUniqueConstraints}
         />
       )}
 
@@ -138,17 +144,21 @@ export function SchemaDetailsPanel({
 function TableDetails({
   tableName,
   table,
+  unique,
   disabled,
   onSelectRelation,
   onSetTableKind,
-  onSetPrimaryKey
+  onSetPrimaryKey,
+  onSetUniqueConstraints
 }: {
   tableName: string;
   table: NonNullable<SchemaResponse['tables']>[string];
+  unique: string[][];
   disabled: boolean;
   onSelectRelation: (tableName: string, sourceColumn: string) => void;
   onSetTableKind: (tableName: string, kind: string | null) => void;
   onSetPrimaryKey: (tableName: string, primaryKey: string | null) => void;
+  onSetUniqueConstraints: (tableName: string, unique: string[][]) => void;
 }) {
   const columnNames = Object.keys(table.columns ?? {}).sort();
   const relationNames = Object.keys(table.foreign_keys ?? {}).sort();
@@ -190,6 +200,17 @@ function TableDetails({
             </option>
           ))}
         </select>
+      </label>
+
+      <label className="schema-field">
+        <span className="schema-field-label">Unique constraints</span>
+        <textarea
+          className="overview-input"
+          value={unique.map((constraint) => constraint.join(', ')).join('\n')}
+          onChange={(event) => onSetUniqueConstraints(tableName, parseUniqueConstraints(event.target.value))}
+          disabled={disabled}
+          rows={3}
+        />
       </label>
 
       <div className="schema-info-card">
@@ -262,13 +283,13 @@ function ColumnDetails({
 }: {
   tableName: string;
   columnName: string;
-  column: { column_type?: string; nullable?: boolean } | undefined;
+  column: SchemaColumn | undefined;
   overridden: boolean;
   disabled: boolean;
   onSetColumnOverride: (
     tableName: string,
     columnName: string,
-    next: { columnType: string | null; nullable: boolean | null }
+    next: SchemaColumnOverrideInput
   ) => void;
 }) {
   if (!column) {
@@ -304,6 +325,11 @@ function ColumnDetails({
           <option value="boolean">Boolean</option>
           <option value="string">String</option>
           <option value="json">Json</option>
+          <option value="date">Date</option>
+          <option value="datetime">DateTime</option>
+          <option value="uuid">Uuid</option>
+          <option value="big_integer">Big integer</option>
+          <option value="decimal">Decimal</option>
         </select>
       </label>
 
@@ -328,8 +354,166 @@ function ColumnDetails({
           <option value="nullable">Nullable</option>
         </select>
       </label>
+
+      {column.column_type === 'string' ? (
+        <label className="schema-field">
+          <span className="schema-field-label">Enum values</span>
+          <input
+            className="overview-input"
+            value={column.enum_values?.join(', ') ?? ''}
+            onChange={(event) =>
+              onSetColumnOverride(tableName, columnName, {
+                columnType: column.column_type ?? 'string',
+                nullable: column.nullable ?? true,
+                enumValues: event.target.value
+                  .split(',')
+                  .map((value) => value.trim())
+                  .filter(Boolean)
+              })
+            }
+            disabled={disabled}
+          />
+        </label>
+      ) : null}
+
+      {isBoundedColumnType(column.column_type ?? 'string') ? (
+        <div className="schema-field-grid">
+          <label className="schema-field">
+            <span className="schema-field-label">Min</span>
+            <input
+              className="overview-input"
+              type={boundInputType(column.column_type ?? 'string')}
+              value={column.min ?? ''}
+              onChange={(event) =>
+                onSetColumnOverride(tableName, columnName, {
+                  columnType: column.column_type ?? 'string',
+                  nullable: column.nullable ?? true,
+                  min: cleanBoundInputValue(column.column_type ?? 'string', event.target.value)
+                })
+              }
+              disabled={disabled}
+            />
+          </label>
+          <label className="schema-field">
+            <span className="schema-field-label">Max</span>
+            <input
+              className="overview-input"
+              type={boundInputType(column.column_type ?? 'string')}
+              value={column.max ?? ''}
+              onChange={(event) =>
+                onSetColumnOverride(tableName, columnName, {
+                  columnType: column.column_type ?? 'string',
+                  nullable: column.nullable ?? true,
+                  max: cleanBoundInputValue(column.column_type ?? 'string', event.target.value)
+                })
+              }
+              disabled={disabled}
+            />
+          </label>
+        </div>
+      ) : null}
+
+      {isStringBackedColumnType(column.column_type ?? 'string') ? (
+        <>
+          <div className="schema-field-grid">
+            <label className="schema-field">
+              <span className="schema-field-label">Min length</span>
+              <input
+                className="overview-input"
+                type="number"
+                min="0"
+                value={column.min_length ?? ''}
+                onChange={(event) =>
+                  onSetColumnOverride(tableName, columnName, {
+                    columnType: column.column_type ?? 'string',
+                    nullable: column.nullable ?? true,
+                    minLength: event.target.value === '' ? null : Number(event.target.value)
+                  })
+                }
+                disabled={disabled}
+              />
+            </label>
+            <label className="schema-field">
+              <span className="schema-field-label">Max length</span>
+              <input
+                className="overview-input"
+                type="number"
+                min="0"
+                value={column.max_length ?? ''}
+                onChange={(event) =>
+                  onSetColumnOverride(tableName, columnName, {
+                    columnType: column.column_type ?? 'string',
+                    nullable: column.nullable ?? true,
+                    maxLength: event.target.value === '' ? null : Number(event.target.value)
+                  })
+                }
+                disabled={disabled}
+              />
+            </label>
+          </div>
+          <label className="schema-field">
+            <span className="schema-field-label">Pattern</span>
+            <input
+              className="overview-input"
+              value={column.pattern ?? ''}
+              onChange={(event) =>
+                onSetColumnOverride(tableName, columnName, {
+                  columnType: column.column_type ?? 'string',
+                  nullable: column.nullable ?? true,
+                  pattern: event.target.value || null
+                })
+              }
+              disabled={disabled}
+            />
+          </label>
+        </>
+      ) : null}
     </div>
   );
+}
+
+function isNumericColumnType(columnType: string): boolean {
+  return ['integer', 'float', 'big_integer', 'decimal'].includes(columnType);
+}
+
+function isBoundedColumnType(columnType: string): boolean {
+  return isNumericColumnType(columnType) || ['date', 'datetime'].includes(columnType);
+}
+
+function boundInputType(columnType: string): 'number' | 'date' | 'text' {
+  if (isNumericColumnType(columnType)) {
+    return 'number';
+  }
+  if (columnType === 'date') {
+    return 'date';
+  }
+  return 'text';
+}
+
+function cleanBoundInputValue(columnType: string, value: string): number | string | null {
+  if (value === '') {
+    return null;
+  }
+  if (isNumericColumnType(columnType)) {
+    return Number(value);
+  }
+  return value;
+}
+
+function isStringBackedColumnType(columnType: string): boolean {
+  return ['string', 'date', 'datetime', 'uuid', 'big_integer', 'decimal'].includes(columnType);
+}
+
+function parseUniqueConstraints(value: string): string[][] {
+  return value
+    .split('\n')
+    .map((line) =>
+      line
+        .split(',')
+        .map((column) => column.trim())
+        .filter(Boolean)
+    )
+    .filter((constraint) => constraint.length > 0);
 }
 
 function RelationDetails({

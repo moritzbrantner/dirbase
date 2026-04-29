@@ -10,6 +10,7 @@ import {
   setDeclaredColumnOverride,
   setDeclaredPrimaryKey,
   setDeclaredTableKind,
+  setDeclaredUniqueConstraints,
   stageRelationshipFromConnection,
   upsertDeclaredRelationship
 } from '../../schemaWorkspace';
@@ -259,6 +260,9 @@ export function SchemaWorkspace({
           }
           onSetPrimaryKey={(tableName, primaryKey) =>
             onDeclaredDraftChange(setDeclaredPrimaryKey(declaredDraft, tableName, primaryKey))
+          }
+          onSetUniqueConstraints={(tableName, unique) =>
+            onDeclaredDraftChange(setDeclaredUniqueConstraints(declaredDraft, tableName, unique))
           }
           onSetColumnOverride={(tableName, columnName, next) =>
             onDeclaredDraftChange(

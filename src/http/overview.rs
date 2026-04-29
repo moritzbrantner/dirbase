@@ -455,13 +455,7 @@ fn path_segment_value(value: &Value) -> Option<String> {
 }
 
 fn column_type_label(column_type: &ColumnType) -> &'static str {
-    match column_type {
-        ColumnType::Integer => "integer",
-        ColumnType::Float => "float",
-        ColumnType::Boolean => "boolean",
-        ColumnType::String => "string",
-        ColumnType::Json => "json",
-    }
+    column_type.label()
 }
 
 fn sample_table_resource(page: &OverviewPageData) -> Option<&ResourceOverview> {

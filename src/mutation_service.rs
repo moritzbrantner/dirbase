@@ -248,7 +248,7 @@ mod tests {
         column_type: ColumnType,
         nullable: bool,
     ) -> (String, ColumnSchema) {
-        (name.to_string(), ColumnSchema { column_type, nullable })
+        (name.to_string(), ColumnSchema::new(column_type, nullable))
     }
 
     #[tokio::test]

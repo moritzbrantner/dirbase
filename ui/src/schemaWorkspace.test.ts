@@ -10,6 +10,7 @@ import {
   setDeclaredColumnOverride,
   setDeclaredPrimaryKey,
   setDeclaredTableKind,
+  setDeclaredUniqueConstraints,
   upsertDeclaredRelationship,
   validateSchemaDraft
 } from './schemaWorkspace';
@@ -345,6 +346,53 @@ describe('schema workspace helpers', () => {
       nullable: null
     });
     expect(declared.tables?.users).toBeUndefined();
+  });
+
+  it('preserves extended column types and constraints in declared overrides', () => {
+    let declared: DeclaredSchemaResponse = { tables: {} };
+    declared = setDeclaredColumnOverride(declared, inferredSchema, 'users', 'name', {
+      columnType: 'uuid',
+      nullable: false,
+      minLength: 36,
+      maxLength: 36,
+      pattern: '^[0-9a-f-]+$'
+    });
+
+    expect(declared.tables?.users.columns?.name).toEqual({
+      column_type: 'uuid',
+      nullable: false,
+      min_length: 36,
+      max_length: 36,
+      pattern: '^[0-9a-f-]+$'
+    });
+  });
+
+  it('validates enum and unique constraint declarations', () => {
+    let declared: DeclaredSchemaResponse = { tables: {} };
+    declared = setDeclaredColumnOverride(declared, inferredSchema, 'users', 'name', {
+      columnType: 'string',
+      nullable: false,
+      enumValues: ['Ada', 'Grace']
+    });
+    declared = setDeclaredUniqueConstraints(declared, 'users', [['name']]);
+
+    expect(validateSchemaDraft(inferredSchema, declared)).toBeNull();
+
+    const invalidEnum: DeclaredSchemaResponse = {
+      tables: {
+        users: {
+          columns: {
+            name: { column_type: 'integer', nullable: false, enum_values: ['Ada'] }
+          }
+        }
+      }
+    };
+    expect(validateSchemaDraft(inferredSchema, invalidEnum)).toContain('enum_values on non-string');
+
+    const invalidUnique = setDeclaredUniqueConstraints({ tables: {} }, 'users', [['missing']]);
+    expect(validateSchemaDraft(inferredSchema, invalidUnique)).toContain(
+      "unique constraint references unknown column 'missing'"
+    );
   });
 
   it('removes manual relations and suppresses inferred ones', () => {

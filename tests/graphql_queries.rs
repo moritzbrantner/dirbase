@@ -138,6 +138,60 @@ fn graphql_collection_query_fields_support_filter_sort_and_pagination() {
 }
 
 #[test]
+fn graphql_exposes_extended_schema_types_as_strings() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("schema.json"),
+        r#"{
+  "tables": {
+    "appointments": {
+      "columns": {
+        "id": {"column_type": "uuid", "nullable": false},
+        "starts_on": {"column_type": "date", "nullable": false},
+        "starts_at": {"column_type": "datetime", "nullable": false},
+        "counter": {"column_type": "big_integer", "nullable": false},
+        "amount": {"column_type": "decimal", "nullable": false}
+      }
+    }
+  }
+}
+"#,
+    )
+    .expect("write schema");
+    fs::write(
+        temp.path().join("appointments.json"),
+        r#"[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "starts_on": "2026-04-29",
+    "starts_at": "2026-04-29T12:30:00Z",
+    "counter": "9223372036854775808",
+    "amount": "123.45"
+  }
+]
+"#,
+    )
+    .expect("write events");
+
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
+    let payload = graphql_json(
+        &bind_addr,
+        r#"{ appointments { id starts_on starts_at counter amount } __type(name: "AppointmentsRecord") { fields { name type { kind name ofType { kind name } } } } }"#,
+    );
+
+    assert_eq!(payload["data"]["appointments"][0]["id"], "550e8400-e29b-41d4-a716-446655440000");
+    let fields = payload["data"]["__type"]["fields"].as_array().expect("fields");
+    for name in ["id", "starts_on", "starts_at", "counter", "amount"] {
+        let field = fields
+            .iter()
+            .find(|field| field["name"] == name)
+            .unwrap_or_else(|| panic!("missing field {name}: {fields:?}"));
+        assert_eq!(field["type"]["kind"], "NON_NULL");
+        assert_eq!(field["type"]["ofType"]["name"], "String");
+    }
+}
+
+#[test]
 fn graphql_respects_declared_primary_keys_and_manual_relations() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(

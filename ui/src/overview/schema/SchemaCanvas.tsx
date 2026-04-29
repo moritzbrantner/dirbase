@@ -368,5 +368,6 @@ function isValidSchemaConnection(
 }
 
 function columnTypesAreCompatible(left: string, right: string): boolean {
-  return left === right || (left === 'integer' && right === 'float') || (left === 'float' && right === 'integer');
+  const numericTypes = new Set(['integer', 'float', 'big_integer', 'decimal']);
+  return left === right || (numericTypes.has(left) && numericTypes.has(right));
 }

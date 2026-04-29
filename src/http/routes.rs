@@ -903,13 +903,7 @@ fn create_form_fields(items: &[Value], table: Option<&TableSchema>) -> Vec<Creat
 }
 
 fn create_form_column_type(column_type: &ColumnType) -> &'static str {
-    match column_type {
-        ColumnType::Integer => "integer",
-        ColumnType::Float => "float",
-        ColumnType::Boolean => "boolean",
-        ColumnType::String => "string",
-        ColumnType::Json => "json",
-    }
+    column_type.label()
 }
 
 fn infer_create_form_field_type(value: &Value) -> &'static str {

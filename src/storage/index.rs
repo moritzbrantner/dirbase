@@ -85,7 +85,7 @@ mod tests {
     fn table_with_pk(pk_name: &str, column_type: Option<ColumnType>) -> TableSchema {
         let mut columns = BTreeMap::new();
         if let Some(column_type) = column_type {
-            columns.insert(pk_name.to_string(), ColumnSchema { column_type, nullable: false });
+            columns.insert(pk_name.to_string(), ColumnSchema::new(column_type, false));
         }
         TableSchema {
             kind: TableKind::Object,

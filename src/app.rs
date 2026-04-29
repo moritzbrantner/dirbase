@@ -305,7 +305,7 @@ mod tests {
     };
 
     fn column(name: &str, column_type: ColumnType, nullable: bool) -> (String, ColumnSchema) {
-        (name.to_string(), ColumnSchema { column_type, nullable })
+        (name.to_string(), ColumnSchema::new(column_type, nullable))
     }
 
     fn inferred_schema() -> Schema {
@@ -339,6 +339,7 @@ mod tests {
                     ]),
                     foreign_keys: BTreeMap::new(),
                     suppressed_foreign_keys: BTreeSet::new(),
+                    unique: Vec::new(),
                 },
             )]),
         }
@@ -354,6 +355,7 @@ mod tests {
                     foreign_keys: BTreeMap::new(),
                     kind: Some(TableKind::Object),
                     suppressed_foreign_keys: BTreeSet::new(),
+                    unique: Vec::new(),
                 },
             )]),
         }
@@ -447,6 +449,7 @@ mod tests {
                             },
                         )]),
                         suppressed_foreign_keys: BTreeSet::new(),
+                        unique: Vec::new(),
                     },
                 )]),
             }))

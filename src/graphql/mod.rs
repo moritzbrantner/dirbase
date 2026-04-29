@@ -938,7 +938,12 @@ fn scalar_kind_from_column(column: &ColumnSchema) -> ScalarKind {
         ColumnType::Integer => ScalarKind::Int,
         ColumnType::Float => ScalarKind::Float,
         ColumnType::Boolean => ScalarKind::Boolean,
-        ColumnType::String => ScalarKind::String,
+        ColumnType::String
+        | ColumnType::Date
+        | ColumnType::DateTime
+        | ColumnType::Uuid
+        | ColumnType::BigInteger
+        | ColumnType::Decimal => ScalarKind::String,
         ColumnType::Json => ScalarKind::Json,
     }
 }

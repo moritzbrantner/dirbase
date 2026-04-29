@@ -63,11 +63,21 @@ impl SqlExportDialect {
     fn type_name(self, column_type: &ColumnType) -> &'static str {
         match (self, column_type) {
             (_, ColumnType::Integer) => "INTEGER",
+            (Self::Postgres, ColumnType::BigInteger) => "BIGINT",
+            (Self::Sqlite, ColumnType::BigInteger) => "INTEGER",
             (_, ColumnType::Float) => "REAL",
+            (Self::Postgres, ColumnType::Decimal) => "NUMERIC",
+            (Self::Sqlite, ColumnType::Decimal) => "TEXT",
             (_, ColumnType::Boolean) => "BOOLEAN",
             (Self::Sqlite, ColumnType::Json) => "TEXT",
             (Self::Postgres, ColumnType::Json) => "JSONB",
-            (_, ColumnType::String) => "TEXT",
+            (Self::Postgres, ColumnType::Date) => "DATE",
+            (Self::Postgres, ColumnType::DateTime) => "TIMESTAMPTZ",
+            (Self::Postgres, ColumnType::Uuid) => "UUID",
+            (
+                _,
+                ColumnType::String | ColumnType::Date | ColumnType::DateTime | ColumnType::Uuid,
+            ) => "TEXT",
         }
     }
 }
@@ -852,10 +862,16 @@ fn resolve_export_columns(
     let mut inferred = BTreeMap::<String, ColumnSchema>::new();
     for row in rows {
         for (key, value) in row {
-            let inferred_type = infer_column_type(value);
+            let inferred_type = ColumnType::infer_json(value);
             let entry = inferred.entry(key.clone()).or_insert(ColumnSchema {
                 column_type: inferred_type.clone().unwrap_or(ColumnType::String),
                 nullable: false,
+                enum_values: None,
+                min: None,
+                max: None,
+                min_length: None,
+                max_length: None,
+                pattern: None,
             });
             if let Some(it) = inferred_type
                 && entry.column_type != it
@@ -880,25 +896,6 @@ fn resolve_export_columns(
         }
     }
     Ok(inferred.into_iter().collect())
-}
-
-fn infer_column_type(value: &Value) -> Option<ColumnType> {
-    if value.is_i64() || value.is_u64() {
-        return Some(ColumnType::Integer);
-    }
-    if value.is_number() {
-        return Some(ColumnType::Float);
-    }
-    if value.is_boolean() {
-        return Some(ColumnType::Boolean);
-    }
-    if value.is_array() || value.is_object() {
-        return Some(ColumnType::Json);
-    }
-    if value.is_null() {
-        return None;
-    }
-    Some(ColumnType::String)
 }
 
 fn build_create_table_statement(

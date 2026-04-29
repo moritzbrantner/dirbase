@@ -7,6 +7,7 @@ import type {
   DeclaredSchemaTable,
   ResourceOverview,
   SchemaColumn,
+  SchemaColumnOverrideInput,
   SchemaEditorPayload,
   SchemaForeignKey,
   SchemaManyToManyRelation,
@@ -15,7 +16,18 @@ import type {
 } from './types';
 
 const EMPTY_DECLARED_SCHEMA: DeclaredSchemaResponse = { tables: {} };
-const COLUMN_TYPES = new Set(['integer', 'float', 'boolean', 'string', 'json']);
+const COLUMN_TYPES = new Set([
+  'integer',
+  'float',
+  'boolean',
+  'string',
+  'json',
+  'date',
+  'datetime',
+  'uuid',
+  'big_integer',
+  'decimal'
+]);
 const TABLE_KINDS = new Set(['object', 'relation', 'unknown']);
 const SCHEMA_GRAPH_NODE_WIDTH = 260;
 const SCHEMA_GRAPH_NODE_GAP_X = 88;
@@ -144,11 +156,18 @@ export function validateSchemaDraft(
   declaredInput: DeclaredSchemaResponse | null
 ): string | null {
   const effective = mergeSchemaEditorPayload(inferredInput, declaredInput);
+  const declared = normalizeDeclaredSchema(declaredInput);
 
   for (const [tableName, tableValue] of Object.entries(effective.tables ?? {})) {
     const table = normalizeSchemaTable(tableValue);
     if (table.primary_key && !table.columns?.[table.primary_key]) {
       return `table '${tableName}' declares primary key '${table.primary_key}' but no such column exists`;
+    }
+    for (const [columnName, column] of Object.entries(table.columns ?? {})) {
+      const columnError = validateSchemaColumnConstraints(tableName, columnName, column);
+      if (columnError) {
+        return columnError;
+      }
     }
 
     for (const [sourceColumn, foreignKeyValue] of Object.entries(table.foreign_keys ?? {})) {
@@ -175,6 +194,29 @@ export function validateSchemaDraft(
       ) {
         return `table '${tableName}' foreign key '${sourceColumn}' is incompatible with '${foreignKeyValue.target_table}.${foreignKeyValue.target_column}'`;
       }
+    }
+
+    const declaredTable = normalizeDeclaredTable(declared.tables?.[tableName]);
+    const seenUnique = new Set<string>();
+    for (const unique of declaredTable.unique ?? []) {
+      if (unique.length === 0) {
+        return `table '${tableName}' declares an empty unique constraint`;
+      }
+      const seenColumns = new Set<string>();
+      for (const columnName of unique) {
+        if (seenColumns.has(columnName)) {
+          return `table '${tableName}' unique constraint contains duplicate column '${columnName}'`;
+        }
+        seenColumns.add(columnName);
+        if (!table.columns?.[columnName]) {
+          return `table '${tableName}' unique constraint references unknown column '${columnName}'`;
+        }
+      }
+      const key = [...unique].sort().join('\u001f');
+      if (seenUnique.has(key)) {
+        return `table '${tableName}' declares duplicate unique constraints`;
+      }
+      seenUnique.add(key);
     }
   }
 
@@ -220,12 +262,22 @@ export function setDeclaredPrimaryKey(
   });
 }
 
+export function setDeclaredUniqueConstraints(
+  declaredInput: DeclaredSchemaResponse,
+  tableName: string,
+  unique: string[][]
+): DeclaredSchemaResponse {
+  return updateDeclaredTable(declaredInput, tableName, (table) => {
+    table.unique = unique.length > 0 ? unique : undefined;
+  });
+}
+
 export function setDeclaredColumnOverride(
   declaredInput: DeclaredSchemaResponse,
   effectiveInput: SchemaResponse,
   tableName: string,
   columnName: string,
-  next: { columnType: string | null; nullable: boolean | null }
+  next: SchemaColumnOverrideInput
 ): DeclaredSchemaResponse {
   const effectiveTable = normalizeSchemaTable(effectiveInput.tables?.[tableName]);
   const effectiveColumn = normalizeSchemaColumn(effectiveTable.columns?.[columnName]);
@@ -234,25 +286,60 @@ export function setDeclaredColumnOverride(
 
   return updateDeclaredTable(declaredInput, tableName, (table) => {
     const columns = { ...(table.columns ?? {}) };
+    const existing = cleanSchemaColumn(columns[columnName]);
     const nextColumnType = next.columnType ?? inferredType;
     const nextNullable = next.nullable ?? inferredNullable;
-
-    if (next.columnType === null && next.nullable === null) {
-      delete columns[columnName];
-      table.columns = columns;
-      return;
-    }
-
-    if (nextColumnType === inferredType && nextNullable === inferredNullable) {
-      delete columns[columnName];
-      table.columns = columns;
-      return;
-    }
-
-    columns[columnName] = {
+    const nextColumn: SchemaColumn = {
+      ...existing,
       column_type: nextColumnType,
       nullable: nextNullable
     };
+
+    if ('enumValues' in next) {
+      if (!Array.isArray(next.enumValues) || next.enumValues.length === 0) {
+        delete nextColumn.enum_values;
+      } else {
+        nextColumn.enum_values = next.enumValues;
+      }
+    }
+    if ('min' in next) {
+      if (typeof next.min !== 'number' && typeof next.min !== 'string') delete nextColumn.min;
+      else nextColumn.min = next.min;
+    }
+    if ('max' in next) {
+      if (typeof next.max !== 'number' && typeof next.max !== 'string') delete nextColumn.max;
+      else nextColumn.max = next.max;
+    }
+    if ('minLength' in next) {
+      if (typeof next.minLength !== 'number') delete nextColumn.min_length;
+      else nextColumn.min_length = next.minLength;
+    }
+    if ('maxLength' in next) {
+      if (typeof next.maxLength !== 'number') delete nextColumn.max_length;
+      else nextColumn.max_length = next.maxLength;
+    }
+    if ('pattern' in next) {
+      if (next.pattern === null || next.pattern === '') delete nextColumn.pattern;
+      else nextColumn.pattern = next.pattern;
+    }
+
+    if (next.columnType === null && next.nullable === null && onlyTypeAndNullability(next)) {
+      delete columns[columnName];
+      table.columns = columns;
+      return;
+    }
+
+    if (
+      nextColumnType === inferredType &&
+      nextNullable === inferredNullable &&
+      !hasColumnConstraintOverrides(nextColumn)
+    ) {
+      delete columns[columnName];
+      table.columns = columns;
+      return;
+    }
+
+    columns[columnName] = nextColumn;
     table.columns = columns;
   });
 }
@@ -635,6 +722,7 @@ function cleanDeclaredTable(table: DeclaredSchemaTable): DeclaredSchemaTable {
     }
   }
   const suppressed_foreign_keys = [...new Set((table.suppressed_foreign_keys ?? []).filter(Boolean))].sort();
+  const unique = cleanUniqueConstraints(table.unique);
 
   return {
     ...table,
@@ -644,12 +732,20 @@ function cleanDeclaredTable(table: DeclaredSchemaTable): DeclaredSchemaTable {
     columns: Object.keys(columns).length > 0 ? columns : undefined,
     foreign_keys: Object.keys(foreignKeys).length > 0 ? foreignKeys : undefined,
     suppressed_foreign_keys:
-      suppressed_foreign_keys.length > 0 ? suppressed_foreign_keys : undefined
+      suppressed_foreign_keys.length > 0 ? suppressed_foreign_keys : undefined,
+    unique: unique.length > 0 ? unique : undefined
   };
 }
 
 function isDeclaredTableEmpty(table: DeclaredSchemaTable): boolean {
-  return !table.kind && !table.primary_key && !table.columns && !table.foreign_keys && !table.suppressed_foreign_keys;
+  return (
+    !table.kind &&
+    !table.primary_key &&
+    !table.columns &&
+    !table.foreign_keys &&
+    !table.suppressed_foreign_keys &&
+    !table.unique
+  );
 }
 
 function cleanSchemaTable(table: SchemaTable): SchemaTable {
@@ -681,6 +777,7 @@ function cleanSchemaTable(table: SchemaTable): SchemaTable {
       };
     }
   }
+  const unique = cleanUniqueConstraints(table.unique);
 
   return {
     ...table,
@@ -716,6 +813,7 @@ function normalizeDeclaredTable(table: unknown): DeclaredSchemaTable {
       }
     }
   }
+  const unique = cleanUniqueConstraints(table.unique);
 
   return {
     ...table,
@@ -726,7 +824,8 @@ function normalizeDeclaredTable(table: unknown): DeclaredSchemaTable {
     foreign_keys: Object.keys(foreignKeys).length > 0 ? foreignKeys : undefined,
     suppressed_foreign_keys: Array.isArray(table.suppressed_foreign_keys)
       ? table.suppressed_foreign_keys.filter((value): value is string => typeof value === 'string')
-      : undefined
+      : undefined,
+    unique: unique.length > 0 ? unique : undefined
   };
 }
 
@@ -786,11 +885,78 @@ function cleanSchemaColumn(column: unknown): SchemaColumn {
     return {};
   }
 
+  const enumValues = Array.isArray(column.enum_values)
+    ? column.enum_values.filter((value): value is string => typeof value === 'string')
+    : undefined;
   return {
     ...column,
     column_type: normalizeColumnType(column.column_type) ?? undefined,
-    nullable: typeof column.nullable === 'boolean' ? column.nullable : undefined
+    nullable: typeof column.nullable === 'boolean' ? column.nullable : undefined,
+    enum_values: enumValues && enumValues.length > 0 ? enumValues : undefined,
+    min: cleanBoundValue(column.min),
+    max: cleanBoundValue(column.max),
+    min_length:
+      typeof column.min_length === 'number' && Number.isInteger(column.min_length) && column.min_length >= 0
+        ? column.min_length
+        : undefined,
+    max_length:
+      typeof column.max_length === 'number' && Number.isInteger(column.max_length) && column.max_length >= 0
+        ? column.max_length
+        : undefined,
+    pattern: typeof column.pattern === 'string' && column.pattern ? column.pattern : undefined
   };
+}
+
+function onlyTypeAndNullability(next: SchemaColumnOverrideInput): boolean {
+  return !(
+    'enumValues' in next ||
+    'min' in next ||
+    'max' in next ||
+    'minLength' in next ||
+    'maxLength' in next ||
+    'pattern' in next
+  );
+}
+
+function hasColumnConstraintOverrides(column: SchemaColumn): boolean {
+  return Boolean(
+    column.enum_values?.length ||
+      column.min !== undefined ||
+      column.max !== undefined ||
+      column.min_length !== undefined ||
+      column.max_length !== undefined ||
+      column.pattern
+  );
+}
+
+function cleanBoundValue(value: unknown): number | string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value) {
+    return value;
+  }
+  return undefined;
+}
+
+function cleanUniqueConstraints(value: unknown): string[][] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .flatMap((constraint) => {
+      if (!Array.isArray(constraint)) {
+        return [];
+      }
+      const columns = [
+        ...new Set(
+          constraint
+            .filter((column): column is string => typeof column === 'string' && Boolean(column.trim()))
+            .map((column) => column.trim())
+        )
+      ];
+      return columns.length > 0 ? [columns] : [];
+    });
 }
 
 function normalizeSchemaColumn(column: unknown): SchemaColumn {
@@ -823,12 +989,100 @@ function columnTypesAreCompatible(left: string, right: string): boolean {
   return (
     left === right ||
     (left === 'integer' && right === 'float') ||
-    (left === 'float' && right === 'integer')
+    (left === 'float' && right === 'integer') ||
+    (isNumericLikeColumnType(left) && isNumericLikeColumnType(right))
   );
 }
 
 function isKnownComparableColumnType(columnType: string): boolean {
   return COLUMN_TYPES.has(columnType);
+}
+
+function validateSchemaColumnConstraints(
+  tableName: string,
+  columnName: string,
+  column: SchemaColumn
+): string | null {
+  const columnType = column.column_type ?? 'string';
+  if (column.enum_values !== undefined) {
+    if (columnType !== 'string') {
+      return `table '${tableName}' column '${columnName}' declares enum_values on non-string type`;
+    }
+    if (column.enum_values.length === 0) {
+      return `table '${tableName}' column '${columnName}' declares empty enum_values`;
+    }
+    if (new Set(column.enum_values).size !== column.enum_values.length) {
+      return `table '${tableName}' column '${columnName}' declares duplicate enum value`;
+    }
+  }
+  if ((column.min !== undefined || column.max !== undefined) && !isBoundedColumnType(columnType)) {
+    return `table '${tableName}' column '${columnName}' declares min/max on unsupported type '${columnType}'`;
+  }
+  const minBound = comparableBoundValue(columnType, column.min);
+  const maxBound = comparableBoundValue(columnType, column.max);
+  if (column.min !== undefined && minBound === null) {
+    return `table '${tableName}' column '${columnName}' declares invalid min`;
+  }
+  if (column.max !== undefined && maxBound === null) {
+    return `table '${tableName}' column '${columnName}' declares invalid max`;
+  }
+  if (minBound !== undefined && minBound !== null && maxBound !== undefined && maxBound !== null && minBound > maxBound) {
+    return `table '${tableName}' column '${columnName}' declares min greater than max`;
+  }
+  if (
+    (column.min_length !== undefined || column.max_length !== undefined) &&
+    !isStringBackedColumnType(columnType)
+  ) {
+    return `table '${tableName}' column '${columnName}' declares length constraints on unsupported type '${columnType}'`;
+  }
+  if (
+    column.min_length !== undefined &&
+    column.max_length !== undefined &&
+    column.min_length > column.max_length
+  ) {
+    return `table '${tableName}' column '${columnName}' declares min_length greater than max_length`;
+  }
+  if (column.pattern !== undefined) {
+    if (!isStringBackedColumnType(columnType)) {
+      return `table '${tableName}' column '${columnName}' declares pattern on unsupported type '${columnType}'`;
+    }
+    try {
+      new RegExp(column.pattern);
+    } catch {
+      return `table '${tableName}' column '${columnName}' declares invalid pattern`;
+    }
+  }
+  return null;
+}
+
+function isNumericLikeColumnType(columnType: string): boolean {
+  return ['integer', 'float', 'big_integer', 'decimal'].includes(columnType);
+}
+
+function isBoundedColumnType(columnType: string): boolean {
+  return isNumericLikeColumnType(columnType) || ['date', 'datetime'].includes(columnType);
+}
+
+function isStringBackedColumnType(columnType: string): boolean {
+  return ['string', 'date', 'datetime', 'uuid', 'big_integer', 'decimal'].includes(columnType);
+}
+
+function comparableBoundValue(columnType: string, value: number | string | undefined): number | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (isNumericLikeColumnType(columnType)) {
+    return typeof value === 'number' ? value : null;
+  }
+  if (columnType === 'date' && typeof value === 'string') {
+    const timestamp = Date.parse(`${value}T00:00:00Z`);
+    return Number.isNaN(timestamp) ? null : timestamp;
+  }
+  if (columnType === 'datetime' && typeof value === 'string') {
+    const timestamp = Date.parse(value);
+    return Number.isNaN(timestamp) ? null : timestamp;
+  }
+  return null;
 }
 
 function buildSchemaGraphTableAliases(tableNames: string[]): Map<string, string> {

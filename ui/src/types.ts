@@ -172,6 +172,12 @@ export interface SchemaManyToManyRelation {
 export interface SchemaColumn {
   column_type?: string;
   nullable?: boolean;
+  enum_values?: string[];
+  min?: number | string;
+  max?: number | string;
+  min_length?: number;
+  max_length?: number;
+  pattern?: string;
   [key: string]: unknown;
 }
 
@@ -195,7 +201,19 @@ export interface DeclaredSchemaTable {
   kind?: string | null;
   foreign_keys?: Record<string, DeclaredSchemaForeignKey>;
   suppressed_foreign_keys?: string[];
+  unique?: string[][];
   [key: string]: unknown;
+}
+
+export interface SchemaColumnOverrideInput {
+  columnType?: string | null;
+  nullable?: boolean | null;
+  enumValues?: string[] | null;
+  min?: number | string | null;
+  max?: number | string | null;
+  minLength?: number | null;
+  maxLength?: number | null;
+  pattern?: string | null;
 }
 
 export interface DeclaredSchemaResponse {

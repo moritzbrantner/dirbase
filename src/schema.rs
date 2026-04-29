@@ -47,6 +47,8 @@ pub struct DeclaredTableSchema {
     pub foreign_keys: BTreeMap<String, ForeignKey>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub suppressed_foreign_keys: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unique: Vec<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -78,6 +80,18 @@ pub struct ManyToManyRelation {
 pub struct ColumnSchema {
     pub column_type: ColumnType,
     pub nullable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enum_values: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -88,6 +102,118 @@ pub enum ColumnType {
     Boolean,
     String,
     Json,
+    Date,
+    #[serde(rename = "datetime")]
+    DateTime,
+    Uuid,
+    BigInteger,
+    Decimal,
+}
+
+impl ColumnSchema {
+    pub fn new(column_type: ColumnType, nullable: bool) -> Self {
+        Self {
+            column_type,
+            nullable,
+            enum_values: None,
+            min: None,
+            max: None,
+            min_length: None,
+            max_length: None,
+            pattern: None,
+        }
+    }
+}
+
+impl ColumnType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ColumnType::Integer => "integer",
+            ColumnType::Float => "float",
+            ColumnType::Boolean => "boolean",
+            ColumnType::String => "string",
+            ColumnType::Json => "json",
+            ColumnType::Date => "date",
+            ColumnType::DateTime => "datetime",
+            ColumnType::Uuid => "uuid",
+            ColumnType::BigInteger => "big_integer",
+            ColumnType::Decimal => "decimal",
+        }
+    }
+
+    pub fn from_dbml_type(raw: &str) -> Self {
+        match raw.split('(').next().unwrap_or(raw).to_ascii_lowercase().as_str() {
+            "int" | "integer" | "smallint" | "serial" => ColumnType::Integer,
+            "bigint" | "bigserial" => ColumnType::BigInteger,
+            "float" | "double" | "real" => ColumnType::Float,
+            "decimal" | "numeric" => ColumnType::Decimal,
+            "bool" | "boolean" => ColumnType::Boolean,
+            "json" | "jsonb" => ColumnType::Json,
+            "date" => ColumnType::Date,
+            "datetime" | "timestamp" | "timestamptz" => ColumnType::DateTime,
+            "uuid" => ColumnType::Uuid,
+            _ => ColumnType::String,
+        }
+    }
+
+    pub fn infer_json(value: &Value) -> Option<Self> {
+        if value.is_i64() || value.is_u64() {
+            return Some(ColumnType::Integer);
+        }
+        if value.is_number() {
+            return Some(ColumnType::Float);
+        }
+        if value.is_boolean() {
+            return Some(ColumnType::Boolean);
+        }
+        if value.is_array() || value.is_object() {
+            return Some(ColumnType::Json);
+        }
+        if value.is_null() {
+            return None;
+        }
+        Some(ColumnType::String)
+    }
+
+    pub fn is_compatible_with(&self, other: &Self) -> bool {
+        self == other
+            || matches!(
+                (self, other),
+                (ColumnType::Integer, ColumnType::Float)
+                    | (ColumnType::Float, ColumnType::Integer)
+                    | (ColumnType::Integer, ColumnType::BigInteger)
+                    | (ColumnType::BigInteger, ColumnType::Integer)
+                    | (ColumnType::Integer, ColumnType::Decimal)
+                    | (ColumnType::Decimal, ColumnType::Integer)
+                    | (ColumnType::Float, ColumnType::Decimal)
+                    | (ColumnType::Decimal, ColumnType::Float)
+                    | (ColumnType::BigInteger, ColumnType::Decimal)
+                    | (ColumnType::Decimal, ColumnType::BigInteger)
+            )
+    }
+
+    pub fn is_string_backed(&self) -> bool {
+        matches!(
+            self,
+            ColumnType::String
+                | ColumnType::Date
+                | ColumnType::DateTime
+                | ColumnType::Uuid
+                | ColumnType::BigInteger
+                | ColumnType::Decimal
+        )
+    }
+
+    pub fn is_numeric_like(&self) -> bool {
+        matches!(
+            self,
+            ColumnType::Integer | ColumnType::Float | ColumnType::BigInteger | ColumnType::Decimal
+        )
+    }
+
+    pub fn is_orderable_with_bounds(&self) -> bool {
+        self.is_numeric_like() || matches!(self, ColumnType::Date | ColumnType::DateTime)
+    }
 }
 
 pub fn is_valid_identifier(name: &str) -> bool {
@@ -136,6 +262,10 @@ pub fn export_declared_schema_snapshot(
                 .and_then(|schema| schema.tables.get(table_name))
                 .map(|table| table.suppressed_foreign_keys.clone())
                 .unwrap_or_default();
+            let unique = declared
+                .and_then(|schema| schema.tables.get(table_name))
+                .map(|table| table.unique.clone())
+                .unwrap_or_default();
 
             (
                 table_name.clone(),
@@ -145,6 +275,7 @@ pub fn export_declared_schema_snapshot(
                     columns: table.columns.clone(),
                     foreign_keys: table.foreign_keys.clone(),
                     suppressed_foreign_keys,
+                    unique,
                 },
             )
         })
@@ -348,6 +479,7 @@ pub fn merge_schemas(
 
     let schema = Schema { tables };
     validate_effective_schema(&schema)?;
+    validate_declared_schema(declared, &schema)?;
     Ok(derive_many_to_many_schema(schema))
 }
 
@@ -362,16 +494,9 @@ fn parse_column_line(line: &str) -> Result<(String, ColumnSchema), String> {
     let attrs = parts.next().unwrap_or_default().to_ascii_lowercase();
     let nullable = !attrs.contains("not null") && !attrs.contains("pk");
 
-    let normalized_type = raw_type.split('(').next().unwrap_or(raw_type).to_ascii_lowercase();
-    let column_type = match normalized_type.as_str() {
-        "int" | "integer" | "smallint" | "bigint" | "serial" | "bigserial" => ColumnType::Integer,
-        "float" | "double" | "decimal" | "real" | "numeric" => ColumnType::Float,
-        "bool" | "boolean" => ColumnType::Boolean,
-        "json" | "jsonb" => ColumnType::Json,
-        _ => ColumnType::String,
-    };
+    let column_type = ColumnType::from_dbml_type(raw_type);
 
-    Ok((normalize_identifier(name), ColumnSchema { column_type, nullable }))
+    Ok((normalize_identifier(name), ColumnSchema::new(column_type, nullable)))
 }
 
 fn parse_inline_reference(line: &str) -> Option<ForeignKey> {
@@ -513,10 +638,16 @@ fn infer_table_schema(rows: &[Value]) -> TableSchema {
         };
 
         for (column_name, value) in object {
-            let inferred_type = infer_column_type(value);
+            let inferred_type = ColumnType::infer_json(value);
             let entry = columns.entry(column_name.clone()).or_insert(ColumnSchema {
                 column_type: inferred_type.clone().unwrap_or(ColumnType::String),
                 nullable: false,
+                enum_values: None,
+                min: None,
+                max: None,
+                min_length: None,
+                max_length: None,
+                pattern: None,
             });
 
             if let Some(inferred_type) = inferred_type
@@ -551,25 +682,6 @@ fn infer_table_schema(rows: &[Value]) -> TableSchema {
         foreign_keys: BTreeMap::new(),
         many_to_many: BTreeMap::new(),
     }
-}
-
-fn infer_column_type(value: &Value) -> Option<ColumnType> {
-    if value.is_i64() || value.is_u64() {
-        return Some(ColumnType::Integer);
-    }
-    if value.is_number() {
-        return Some(ColumnType::Float);
-    }
-    if value.is_boolean() {
-        return Some(ColumnType::Boolean);
-    }
-    if value.is_array() || value.is_object() {
-        return Some(ColumnType::Json);
-    }
-    if value.is_null() {
-        return None;
-    }
-    Some(ColumnType::String)
 }
 
 fn infer_primary_key(table_name: &str, rows: &[Value]) -> Option<String> {
@@ -879,17 +991,207 @@ fn validate_effective_schema(schema: &Schema) -> Result<(), String> {
                 ));
             }
         }
+
+        for (column_name, column) in &table.columns {
+            validate_column_constraints(table_name, column_name, column)?;
+        }
     }
 
     Ok(())
 }
 
 fn column_types_are_compatible(left: &ColumnType, right: &ColumnType) -> bool {
-    left == right
-        || matches!(
-            (left, right),
-            (ColumnType::Integer, ColumnType::Float) | (ColumnType::Float, ColumnType::Integer)
-        )
+    left.is_compatible_with(right)
+}
+
+fn validate_declared_schema(
+    declared: Option<&DeclaredSchema>,
+    effective: &Schema,
+) -> Result<(), String> {
+    let Some(declared) = declared else {
+        return Ok(());
+    };
+
+    for (table_name, declared_table) in &declared.tables {
+        let Some(effective_table) = effective.tables.get(table_name) else {
+            continue;
+        };
+        let mut seen_constraints = BTreeSet::new();
+        for unique in &declared_table.unique {
+            if unique.is_empty() {
+                return Err(format!("table '{table_name}' declares an empty unique constraint"));
+            }
+            let mut seen_columns = BTreeSet::new();
+            for column_name in unique {
+                if !seen_columns.insert(column_name.clone()) {
+                    return Err(format!(
+                        "table '{table_name}' unique constraint contains duplicate column '{column_name}'"
+                    ));
+                }
+                if !effective_table.columns.contains_key(column_name) {
+                    return Err(format!(
+                        "table '{table_name}' unique constraint references unknown column '{column_name}'"
+                    ));
+                }
+            }
+            let mut normalized = unique.clone();
+            normalized.sort();
+            let key = normalized.join("\x1f");
+            if !seen_constraints.insert(key) {
+                return Err(format!("table '{table_name}' declares duplicate unique constraints"));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_column_constraints(
+    table_name: &str,
+    column_name: &str,
+    column: &ColumnSchema,
+) -> Result<(), String> {
+    if let Some(values) = &column.enum_values {
+        if !matches!(column.column_type, ColumnType::String) {
+            return Err(format!(
+                "table '{table_name}' column '{column_name}' declares enum_values on non-string type"
+            ));
+        }
+        if values.is_empty() {
+            return Err(format!(
+                "table '{table_name}' column '{column_name}' declares empty enum_values"
+            ));
+        }
+        let mut seen = BTreeSet::new();
+        for value in values {
+            if !seen.insert(value) {
+                return Err(format!(
+                    "table '{table_name}' column '{column_name}' declares duplicate enum value '{value}'"
+                ));
+            }
+        }
+    }
+
+    if (column.min.is_some() || column.max.is_some())
+        && !column.column_type.is_orderable_with_bounds()
+    {
+        return Err(format!(
+            "table '{table_name}' column '{column_name}' declares min/max on unsupported type '{}'",
+            column.column_type.label()
+        ));
+    }
+    if let Some(min) = &column.min {
+        validate_bound_value(table_name, column_name, &column.column_type, "min", min)?;
+    }
+    if let Some(max) = &column.max {
+        validate_bound_value(table_name, column_name, &column.column_type, "max", max)?;
+    }
+    if let (Some(min), Some(max)) = (&column.min, &column.max)
+        && compare_bound_values(&column.column_type, min, max)
+            .is_some_and(|ordering| ordering.is_gt())
+    {
+        return Err(format!(
+            "table '{table_name}' column '{column_name}' declares min greater than max"
+        ));
+    }
+
+    if (column.min_length.is_some() || column.max_length.is_some())
+        && !column.column_type.is_string_backed()
+    {
+        return Err(format!(
+            "table '{table_name}' column '{column_name}' declares length constraints on unsupported type '{}'",
+            column.column_type.label()
+        ));
+    }
+    if let (Some(min), Some(max)) = (column.min_length, column.max_length)
+        && min > max
+    {
+        return Err(format!(
+            "table '{table_name}' column '{column_name}' declares min_length greater than max_length"
+        ));
+    }
+
+    if let Some(pattern) = &column.pattern {
+        if !column.column_type.is_string_backed() {
+            return Err(format!(
+                "table '{table_name}' column '{column_name}' declares pattern on unsupported type '{}'",
+                column.column_type.label()
+            ));
+        }
+        regex::Regex::new(pattern).map_err(|err| {
+            format!("table '{table_name}' column '{column_name}' declares invalid pattern: {err}")
+        })?;
+    }
+
+    Ok(())
+}
+
+fn validate_bound_value(
+    table_name: &str,
+    column_name: &str,
+    column_type: &ColumnType,
+    bound_name: &str,
+    value: &Value,
+) -> Result<(), String> {
+    match column_type {
+        ColumnType::Integer | ColumnType::Float | ColumnType::BigInteger | ColumnType::Decimal => {
+            if value.as_f64().is_some() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "table '{table_name}' column '{column_name}' declares non-numeric {bound_name}"
+                ))
+            }
+        }
+        ColumnType::Date => {
+            let Some(text) = value.as_str() else {
+                return Err(format!(
+                    "table '{table_name}' column '{column_name}' declares non-string {bound_name}"
+                ));
+            };
+            chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d").map(|_| ()).map_err(|err| {
+                format!(
+                    "table '{table_name}' column '{column_name}' declares invalid {bound_name}: {err}"
+                )
+            })
+        }
+        ColumnType::DateTime => {
+            let Some(text) = value.as_str() else {
+                return Err(format!(
+                    "table '{table_name}' column '{column_name}' declares non-string {bound_name}"
+                ));
+            };
+            chrono::DateTime::parse_from_rfc3339(text).map(|_| ()).map_err(|err| {
+                format!(
+                    "table '{table_name}' column '{column_name}' declares invalid {bound_name}: {err}"
+                )
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
+fn compare_bound_values(
+    column_type: &ColumnType,
+    left: &Value,
+    right: &Value,
+) -> Option<std::cmp::Ordering> {
+    match column_type {
+        ColumnType::Integer | ColumnType::Float | ColumnType::BigInteger | ColumnType::Decimal => {
+            left.as_f64()?.partial_cmp(&right.as_f64()?)
+        }
+        ColumnType::Date => {
+            let left = chrono::NaiveDate::parse_from_str(left.as_str()?, "%Y-%m-%d").ok()?;
+            let right = chrono::NaiveDate::parse_from_str(right.as_str()?, "%Y-%m-%d").ok()?;
+            Some(left.cmp(&right))
+        }
+        ColumnType::DateTime => {
+            let left = chrono::DateTime::parse_from_rfc3339(left.as_str()?).ok()?;
+            let right = chrono::DateTime::parse_from_rfc3339(right.as_str()?).ok()?;
+            Some(left.cmp(&right))
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -917,6 +1219,109 @@ mod tests {
         assert!(!users.columns["id"].nullable);
         assert_eq!(users.kind, Some(TableKind::Object));
         assert_eq!(users.primary_key.as_deref(), Some("id"));
+    }
+
+    #[test]
+    fn parses_extended_dbml_column_types() {
+        let schema = parse_dbml_schema(
+            r#"
+            Table events {
+              id uuid [pk]
+              starts_on date
+              starts_at timestamptz
+              amount numeric
+              counter bigint
+            }
+            "#,
+        )
+        .expect("parse schema");
+
+        let events = schema.tables.get("events").expect("events table");
+        assert_eq!(events.columns["id"].column_type, ColumnType::Uuid);
+        assert_eq!(events.columns["starts_on"].column_type, ColumnType::Date);
+        assert_eq!(events.columns["starts_at"].column_type, ColumnType::DateTime);
+        assert_eq!(events.columns["amount"].column_type, ColumnType::Decimal);
+        assert_eq!(events.columns["counter"].column_type, ColumnType::BigInteger);
+    }
+
+    #[test]
+    fn validates_declared_column_constraints() {
+        let inferred = infer_schema_from_values(&BTreeMap::from([(
+            "posts".to_string(),
+            json!([{"id": 1, "status": "draft", "slug": "hello", "score": 3, "published_on": "2026-04-29"}]),
+        )]));
+        let mut status = ColumnSchema::new(ColumnType::String, false);
+        status.enum_values = Some(vec!["draft".to_string(), "published".to_string()]);
+        let mut slug = ColumnSchema::new(ColumnType::String, false);
+        slug.min_length = Some(3);
+        slug.max_length = Some(20);
+        slug.pattern = Some("^[a-z0-9-]+$".to_string());
+        let mut score = ColumnSchema::new(ColumnType::Integer, false);
+        score.min = Some(Value::from(1));
+        score.max = Some(Value::from(5));
+        let mut published_on = ColumnSchema::new(ColumnType::Date, false);
+        published_on.min = Some(Value::from("2026-01-01"));
+        published_on.max = Some(Value::from("2026-12-31"));
+
+        let declared = DeclaredSchema {
+            tables: BTreeMap::from([(
+                "posts".to_string(),
+                DeclaredTableSchema {
+                    columns: BTreeMap::from([
+                        ("status".to_string(), status),
+                        ("slug".to_string(), slug),
+                        ("score".to_string(), score),
+                        ("published_on".to_string(), published_on),
+                    ]),
+                    unique: vec![vec!["slug".to_string()]],
+                    ..DeclaredTableSchema::default()
+                },
+            )]),
+        };
+
+        merge_schemas(Some(&declared), &inferred).expect("valid constraints");
+    }
+
+    #[test]
+    fn rejects_invalid_declared_constraints() {
+        let inferred = infer_schema_from_values(&BTreeMap::from([(
+            "posts".to_string(),
+            json!([{"id": 1, "status": "draft"}]),
+        )]));
+        let mut status = ColumnSchema::new(ColumnType::String, false);
+        status.enum_values = Some(vec!["draft".to_string(), "draft".to_string()]);
+        let declared = DeclaredSchema {
+            tables: BTreeMap::from([(
+                "posts".to_string(),
+                DeclaredTableSchema {
+                    columns: BTreeMap::from([("status".to_string(), status)]),
+                    ..DeclaredTableSchema::default()
+                },
+            )]),
+        };
+
+        let err = merge_schemas(Some(&declared), &inferred).expect_err("invalid constraints");
+        assert!(err.contains("duplicate enum value"));
+    }
+
+    #[test]
+    fn rejects_invalid_unique_constraints() {
+        let inferred = infer_schema_from_values(&BTreeMap::from([(
+            "posts".to_string(),
+            json!([{"id": 1, "slug": "hello"}]),
+        )]));
+        let declared = DeclaredSchema {
+            tables: BTreeMap::from([(
+                "posts".to_string(),
+                DeclaredTableSchema {
+                    unique: vec![vec!["missing".to_string()]],
+                    ..DeclaredTableSchema::default()
+                },
+            )]),
+        };
+
+        let err = merge_schemas(Some(&declared), &inferred).expect_err("invalid unique");
+        assert!(err.contains("unique constraint references unknown column 'missing'"));
     }
 
     #[test]
