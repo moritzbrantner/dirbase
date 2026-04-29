@@ -17,6 +17,7 @@ use serde_json::{Map, Value};
 use crate::{
     app::{AppState, DataSource},
     error::AppError,
+    http::html::escape_html,
     schema::{ColumnType, TableSchema, primary_key_name},
     storage::load_resource,
 };
@@ -802,19 +803,4 @@ fn render_overview_html(page: &OverviewPageData) -> String {
     html.push_str("<script type=\"module\" src=\"/assets/overview.js\"></script>");
     html.push_str("</main></body></html>");
     html
-}
-
-fn escape_html(input: &str) -> String {
-    let mut escaped = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&#39;"),
-            _ => escaped.push(ch),
-        }
-    }
-    escaped
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  columnTypesAreCompatible,
   deriveSchemaGraphRelations,
   deriveSchemaGraphTables,
   getSchemaGraphAutoLayout,
@@ -179,6 +180,14 @@ const graphResources: ResourceOverview[] = [
     }
   }
 ];
+
+describe('schema column type compatibility', () => {
+  it('treats numeric schema types as compatible without accepting unrelated types', () => {
+    expect(columnTypesAreCompatible('integer', 'decimal')).toBe(true);
+    expect(columnTypesAreCompatible('big_integer', 'float')).toBe(true);
+    expect(columnTypesAreCompatible('uuid', 'string')).toBe(false);
+  });
+});
 
 const arrayIdSchema: SchemaResponse = {
   tables: {

@@ -17,6 +17,7 @@ import {
 
 import { buildSchemaHandleId } from '../../schemaEditor';
 import {
+  columnTypesAreCompatible,
   deriveSchemaGraphRelations,
   deriveSchemaGraphTables,
   getSchemaGraphAutoLayout
@@ -365,9 +366,4 @@ function isValidSchemaConnection(
       targetColumn.is_primary_key &&
       columnTypesAreCompatible(sourceColumn.column_type, targetColumn.column_type)
   );
-}
-
-function columnTypesAreCompatible(left: string, right: string): boolean {
-  const numericTypes = new Set(['integer', 'float', 'big_integer', 'decimal']);
-  return left === right || (numericTypes.has(left) && numericTypes.has(right));
 }

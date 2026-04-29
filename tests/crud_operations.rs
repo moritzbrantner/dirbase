@@ -129,10 +129,7 @@ fn school_example_schema_covers_many_to_many_and_nullable_cases() {
         true
     );
     assert_eq!(schema_payload["tables"]["students"]["columns"]["gpa"]["nullable"], true);
-    assert_eq!(
-        schema_payload["tables"]["classes"]["columns"]["professor_id"]["nullable"],
-        true
-    );
+    assert_eq!(schema_payload["tables"]["classes"]["columns"]["professor_id"]["nullable"], true);
 
     let student_response = http_request(&bind_addr, "GET", "/students/5", None);
     assert!(student_response.starts_with("HTTP/1.1 200 OK\r\n"), "{student_response}");

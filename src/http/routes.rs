@@ -32,6 +32,7 @@ use crate::{
     app::AppState,
     error::AppError,
     graphql::{graphql_get, graphql_post},
+    http::html::{encode_path_segment, escape_html},
     http::overview,
     mutation_service,
     query::filters::{
@@ -1331,22 +1332,6 @@ fn render_create_item_form_html(
 </html>
 "#
     )
-}
-
-fn encode_path_segment(segment: &str) -> String {
-    let mut encoded = String::with_capacity(segment.len());
-    for byte in segment.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            encoded.push(byte as char);
-        } else {
-            encoded.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    encoded
-}
-
-fn escape_html(value: &str) -> String {
-    value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 pub async fn replace_item(

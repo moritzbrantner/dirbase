@@ -1671,7 +1671,7 @@ mod tests {
 
         let merged = merge_schemas(Some(&declared), &inferred).expect("merge schema");
         let posts = merged.tables.get("posts").expect("posts table");
-        assert!(posts.foreign_keys.get("user_id").is_none(), "{posts:?}");
+        assert!(!posts.foreign_keys.contains_key("user_id"), "{posts:?}");
     }
 
     #[test]

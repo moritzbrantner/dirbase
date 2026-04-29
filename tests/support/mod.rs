@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+// Integration tests compile as separate crates, so each crate uses a different subset of these helpers.
+
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
@@ -43,12 +46,7 @@ pub fn spawn_folder_server(folder: &Path, readonly: bool) -> (ChildGuard, String
 pub fn spawn_file_server(file: &Path) -> (ChildGuard, String) {
     spawn_with_retry(|bind_addr| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_dirbase"));
-        command
-            .arg(file)
-            .arg("--bind")
-            .arg(bind_addr)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+        command.arg(file).arg("--bind").arg(bind_addr).stdout(Stdio::null()).stderr(Stdio::null());
         command
     })
 }
@@ -160,8 +158,7 @@ fn is_transient_network_error(err: &std::io::Error) -> bool {
     matches!(
         err.kind(),
         std::io::ErrorKind::ConnectionRefused
-            |
-        std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionReset
             | std::io::ErrorKind::ConnectionAborted
             | std::io::ErrorKind::BrokenPipe
             | std::io::ErrorKind::TimedOut

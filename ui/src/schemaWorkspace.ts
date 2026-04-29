@@ -985,7 +985,7 @@ function inferSchemaKind(
   return 'unknown';
 }
 
-function columnTypesAreCompatible(left: string, right: string): boolean {
+export function columnTypesAreCompatible(left: string, right: string): boolean {
   return (
     left === right ||
     (left === 'integer' && right === 'float') ||
