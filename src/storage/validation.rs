@@ -535,6 +535,29 @@ mod tests {
     }
 
     #[test]
+    fn validate_resource_data_rejects_invalid_extended_scalar_literals() {
+        for (column_type, value) in [
+            (ColumnType::Date, json!("2026-02-30")),
+            (ColumnType::DateTime, json!("2026-04-29 12:30:00")),
+            (ColumnType::BigInteger, json!("12.5")),
+            (ColumnType::Decimal, json!("12.")),
+        ] {
+            let state = test_state_with_declared_schema(
+                "events",
+                DeclaredTableSchema {
+                    columns: BTreeMap::from([column("value", column_type, false)]),
+                    ..DeclaredTableSchema::default()
+                },
+            );
+
+            let err = validate_resource_data(&state, "events", &json!([{ "value": value }]))
+                .expect_err("invalid extended scalar");
+            assert_eq!(err.status, StatusCode::BAD_REQUEST);
+            assert!(err.message.contains("invalid type for 'value'"), "{}", err.message);
+        }
+    }
+
+    #[test]
     fn validate_resource_data_enforces_enum_and_scalar_constraints() {
         let mut status = ColumnSchema::new(ColumnType::String, false);
         status.enum_values = Some(vec!["draft".to_string(), "published".to_string()]);

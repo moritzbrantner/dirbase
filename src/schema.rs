@@ -183,6 +183,8 @@ impl ColumnType {
                     | (ColumnType::Float, ColumnType::Integer)
                     | (ColumnType::Integer, ColumnType::BigInteger)
                     | (ColumnType::BigInteger, ColumnType::Integer)
+                    | (ColumnType::Float, ColumnType::BigInteger)
+                    | (ColumnType::BigInteger, ColumnType::Float)
                     | (ColumnType::Integer, ColumnType::Decimal)
                     | (ColumnType::Decimal, ColumnType::Integer)
                     | (ColumnType::Float, ColumnType::Decimal)
@@ -1245,6 +1247,74 @@ mod tests {
     }
 
     #[test]
+    fn column_types_use_stable_wire_names() {
+        let cases = [
+            (ColumnType::Integer, "integer"),
+            (ColumnType::Float, "float"),
+            (ColumnType::Boolean, "boolean"),
+            (ColumnType::String, "string"),
+            (ColumnType::Json, "json"),
+            (ColumnType::Date, "date"),
+            (ColumnType::DateTime, "datetime"),
+            (ColumnType::Uuid, "uuid"),
+            (ColumnType::BigInteger, "big_integer"),
+            (ColumnType::Decimal, "decimal"),
+        ];
+
+        for (column_type, wire_name) in cases {
+            assert_eq!(column_type.label(), wire_name);
+            assert_eq!(
+                serde_json::to_value(&column_type).expect("serialize type"),
+                Value::from(wire_name)
+            );
+            assert_eq!(
+                serde_json::from_value::<ColumnType>(Value::from(wire_name))
+                    .expect("deserialize type"),
+                column_type
+            );
+        }
+    }
+
+    #[test]
+    fn maps_dbml_type_aliases_and_parameterized_types() {
+        let cases = [
+            ("smallint", ColumnType::Integer),
+            ("serial", ColumnType::Integer),
+            ("bigserial", ColumnType::BigInteger),
+            ("double", ColumnType::Float),
+            ("real", ColumnType::Float),
+            ("numeric(20,6)", ColumnType::Decimal),
+            ("decimal(10,2)", ColumnType::Decimal),
+            ("boolean", ColumnType::Boolean),
+            ("jsonb", ColumnType::Json),
+            ("timestamp", ColumnType::DateTime),
+            ("timestamptz", ColumnType::DateTime),
+            ("varchar(255)", ColumnType::String),
+        ];
+
+        for (raw_type, expected) in cases {
+            assert_eq!(ColumnType::from_dbml_type(raw_type), expected, "{raw_type}");
+        }
+    }
+
+    #[test]
+    fn numeric_schema_types_are_foreign_key_compatible() {
+        let numeric_types =
+            [ColumnType::Integer, ColumnType::Float, ColumnType::BigInteger, ColumnType::Decimal];
+
+        for left in &numeric_types {
+            for right in &numeric_types {
+                assert!(left.is_compatible_with(right), "{left:?} should accept {right:?}");
+            }
+        }
+
+        assert!(ColumnType::Uuid.is_compatible_with(&ColumnType::Uuid));
+        assert!(!ColumnType::Uuid.is_compatible_with(&ColumnType::String));
+        assert!(!ColumnType::Boolean.is_compatible_with(&ColumnType::Integer));
+        assert!(!ColumnType::Date.is_compatible_with(&ColumnType::DateTime));
+    }
+
+    #[test]
     fn validates_declared_column_constraints() {
         let inferred = infer_schema_from_values(&BTreeMap::from([(
             "posts".to_string(),
@@ -1302,6 +1372,56 @@ mod tests {
 
         let err = merge_schemas(Some(&declared), &inferred).expect_err("invalid constraints");
         assert!(err.contains("duplicate enum value"));
+    }
+
+    #[test]
+    fn rejects_type_specific_constraint_mismatches() {
+        let inferred = infer_schema_from_values(&BTreeMap::from([(
+            "posts".to_string(),
+            json!([{"id": 1, "title": "Hello", "metadata": {}}]),
+        )]));
+
+        fn expect_constraint_error(
+            inferred: &Schema,
+            column_name: &str,
+            column: ColumnSchema,
+            expected: &str,
+        ) {
+            let declared = DeclaredSchema {
+                tables: BTreeMap::from([(
+                    "posts".to_string(),
+                    DeclaredTableSchema {
+                        columns: BTreeMap::from([(column_name.to_string(), column)]),
+                        ..DeclaredTableSchema::default()
+                    },
+                )]),
+            };
+
+            let err = merge_schemas(Some(&declared), inferred).expect_err("invalid constraint");
+            assert!(err.contains(expected), "{err}");
+        }
+
+        let mut uuid = ColumnSchema::new(ColumnType::Uuid, false);
+        uuid.min = Some(Value::from("00000000-0000-0000-0000-000000000000"));
+        expect_constraint_error(&inferred, "id", uuid, "min/max on unsupported type 'uuid'");
+
+        let mut metadata = ColumnSchema::new(ColumnType::Json, true);
+        metadata.pattern = Some(".*".to_string());
+        expect_constraint_error(
+            &inferred,
+            "metadata",
+            metadata,
+            "pattern on unsupported type 'json'",
+        );
+
+        let mut date = ColumnSchema::new(ColumnType::Date, false);
+        date.min = Some(Value::from("2026-12-31"));
+        date.max = Some(Value::from("2026-01-01"));
+        expect_constraint_error(&inferred, "published_on", date, "min greater than max");
+
+        let mut timestamp = ColumnSchema::new(ColumnType::DateTime, false);
+        timestamp.min = Some(Value::from("not-a-date-time"));
+        expect_constraint_error(&inferred, "published_at", timestamp, "declares invalid min");
     }
 
     #[test]
