@@ -4,9 +4,14 @@
     "title": "Intro to Programming",
     "code": "CS101",
     "professor_id": 1,
-    "student_ids": [1, 2],
+    "student_ids": [1, 2, 5],
     "credits": 3,
-    "semester": "Fall"
+    "semester": "Fall 2026",
+    "room": "ENG-101",
+    "max_students": 30,
+    "meeting_days": ["Mon", "Wed"],
+    "has_lab": true,
+    "archived": false
   },
   {
     "id": 205,
@@ -15,16 +20,26 @@
     "professor_id": 2,
     "student_ids": [1, 2, 3],
     "credits": 4,
-    "semester": "Spring"
+    "semester": "Spring 2026",
+    "room": "MTH-220",
+    "max_students": 40,
+    "meeting_days": ["Tue", "Thu"],
+    "has_lab": false,
+    "archived": false
   },
   {
     "id": 310,
     "title": "Computational Physics",
     "code": "PHYS310",
-    "professor_id": 1,
+    "professor_id": null,
     "student_ids": [3],
     "credits": 3,
-    "semester": "Fall"
+    "semester": "Fall 2026",
+    "room": "SCI-301",
+    "max_students": 20,
+    "meeting_days": ["Fri"],
+    "has_lab": true,
+    "archived": false
   },
   {
     "id": 150,
@@ -33,6 +48,25 @@
     "professor_id": 3,
     "student_ids": [4],
     "credits": 3,
-    "semester": "Spring"
+    "semester": "Spring 2026",
+    "room": null,
+    "max_students": 24,
+    "meeting_days": ["Mon", "Thu"],
+    "has_lab": true,
+    "archived": false
+  },
+  {
+    "id": 499,
+    "title": "Special Topics in History",
+    "code": "HIST499",
+    "professor_id": null,
+    "student_ids": [],
+    "credits": 2,
+    "semester": "Summer 2026",
+    "room": null,
+    "max_students": 15,
+    "meeting_days": [],
+    "has_lab": false,
+    "archived": true
   }
 ]

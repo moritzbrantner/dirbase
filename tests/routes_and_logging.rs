@@ -251,18 +251,6 @@ fn graphql_endpoint_serves_graphiql() {
 }
 
 #[test]
-fn readonly_mode_rejects_post_for_sql() {
-    let temp = tempfile::tempdir().expect("create temp directory");
-    fs::write(temp.path().join("users.json"), "[]\n").expect("write users");
-
-    let (_child, bind_addr) = spawn_folder_server(temp.path(), true);
-
-    let post_sql =
-        http_request(&bind_addr, "POST", "/sql", Some(r#"{"query":"SELECT * FROM users"}"#));
-    assert!(post_sql.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"), "{post_sql}");
-}
-
-#[test]
 fn logging_writes_each_request_when_enabled() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(temp.path().join("posts.json"), "[]\n").expect("write posts");

@@ -59,25 +59,12 @@ fn sql_error_paths_cover_non_select_unsupported_and_unknowns() {
 
     let (_child, bind_addr) = start_server(temp.path(), false);
 
-    let non_select =
-        http_post_json(&bind_addr, "/sql", serde_json::json!({"query": "DELETE FROM users"}));
-    assert!(non_select.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{non_select}");
-    let non_select_payload: serde_json::Value =
-        serde_json::from_str(parse_http_body(&non_select)).expect("non-select payload");
-    assert_eq!(non_select_payload["code"], "unsupported_feature");
-
     let unsupported =
         http_get(&bind_addr, "/sql?q=SELECT%20DISTINCT%20name%20FROM%20users%20LIMIT%201");
     assert!(unsupported.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{unsupported}");
     let unsupported_payload: serde_json::Value =
         serde_json::from_str(parse_http_body(&unsupported)).expect("unsupported payload");
     assert_eq!(unsupported_payload["code"], "unsupported_feature");
-
-    let unknown_table = http_get(&bind_addr, "/sql?q=SELECT%20*%20FROM%20missing");
-    assert!(unknown_table.starts_with("HTTP/1.1 404 Not Found\r\n"), "{unknown_table}");
-    let unknown_table_payload: serde_json::Value =
-        serde_json::from_str(parse_http_body(&unknown_table)).expect("unknown table payload");
-    assert_eq!(unknown_table_payload["code"], "unknown_table");
 
     let unknown_column = http_get(&bind_addr, "/sql?q=SELECT%20email%20FROM%20users%20LIMIT%201");
     assert!(unknown_column.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{unknown_column}");

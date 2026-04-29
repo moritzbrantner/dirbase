@@ -5,7 +5,14 @@
     "email": "alice.johnson@example.edu",
     "year": 2,
     "major": "Computer Science",
-    "gpa": 3.8
+    "minor": "Mathematics",
+    "advisor_professor_id": 1,
+    "enrollment_status": "active",
+    "gpa": 3.8,
+    "emergency_contact": {
+      "name": "Mary Johnson",
+      "phone": "+1-555-0101"
+    }
   },
   {
     "id": 2,
@@ -13,7 +20,11 @@
     "email": "ben.carter@example.edu",
     "year": 1,
     "major": "Mathematics",
-    "gpa": 3.5
+    "minor": null,
+    "advisor_professor_id": 2,
+    "enrollment_status": "active",
+    "gpa": 3.5,
+    "emergency_contact": null
   },
   {
     "id": 3,
@@ -21,7 +32,14 @@
     "email": "carla.nguyen@example.edu",
     "year": 3,
     "major": "Physics",
-    "gpa": 3.9
+    "minor": "Computer Science",
+    "advisor_professor_id": 1,
+    "enrollment_status": "active",
+    "gpa": 3.9,
+    "emergency_contact": {
+      "name": "Minh Nguyen",
+      "phone": "+1-555-0103"
+    }
   },
   {
     "id": 4,
@@ -29,6 +47,25 @@
     "email": "diego.morales@example.edu",
     "year": 4,
     "major": "Biology",
-    "gpa": 3.6
+    "minor": null,
+    "advisor_professor_id": null,
+    "enrollment_status": "probation",
+    "gpa": 3.6,
+    "emergency_contact": {
+      "name": "Rosa Morales",
+      "phone": "+1-555-0104"
+    }
+  },
+  {
+    "id": 5,
+    "name": "Eva Kim",
+    "email": "eva.kim@example.edu",
+    "year": 1,
+    "major": "Undeclared",
+    "minor": null,
+    "advisor_professor_id": null,
+    "enrollment_status": "leave_of_absence",
+    "gpa": null,
+    "emergency_contact": null
   }
 ]

@@ -16,6 +16,7 @@ import type { OverviewColumn, OverviewEdge, OverviewPageData, ResourceOverview }
 
 interface RelationNodeData extends Record<string, unknown> {
   resource: ResourceOverview;
+  connectable: boolean;
   selected: boolean;
 }
 
@@ -67,6 +68,7 @@ export function RelationMap({
       draggable: false,
       data: {
         resource,
+        connectable,
         selected: resource.name === selectedResourceName
       },
       selectable: false
@@ -144,12 +146,14 @@ function RelationNodeCard({ data }: NodeProps<RelationFlowNode>) {
               key={column.name}
               className={`graph-column-row ${column.is_primary_key ? 'is-primary' : ''}`}
             >
-              <Handle
-                type="target"
-                position={Position.Left}
-                id={buildSchemaHandleId('target', column.name)}
-                className="graph-column-handle is-target"
-              />
+              {data.connectable ? (
+                <Handle
+                  type="target"
+                  position={Position.Left}
+                  id={buildSchemaHandleId('target', column.name)}
+                  className="graph-column-handle is-target"
+                />
+              ) : null}
               <div className="graph-column-copy">
                 <span className="graph-column-name">{column.name}</span>
                 <span className="graph-column-meta">
@@ -158,12 +162,14 @@ function RelationNodeCard({ data }: NodeProps<RelationFlowNode>) {
                   {column.relation ? ' · fk' : ''}
                 </span>
               </div>
-              <Handle
-                type="source"
-                position={Position.Right}
-                id={buildSchemaHandleId('source', column.name)}
-                className="graph-column-handle is-source"
-              />
+              {data.connectable ? (
+                <Handle
+                  type="source"
+                  position={Position.Right}
+                  id={buildSchemaHandleId('source', column.name)}
+                  className="graph-column-handle is-source"
+                />
+              ) : null}
             </div>
           ))}
         </div>

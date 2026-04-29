@@ -1,4 +1,4 @@
-const { expect, test } = require('@playwright/test');
+import { expect, test } from '@playwright/test';
 
 test.describe('schema workspace', () => {
   test('loads dedicated schema mode and stages structured edits before save', async ({

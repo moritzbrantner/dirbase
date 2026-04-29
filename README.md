@@ -310,7 +310,24 @@ Before committing or opening a PR, always run linting and tests:
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features -- --test-threads=1
+bash scripts/run_repo_tests.sh
 ```
+
+Canonical test commands:
+
+```bash
+cargo test -- --test-threads=1
+
+cd ui
+bun run test
+bun run test:coverage
+bun run test:e2e
+
+cd ../js
+bun test
+```
+
+Do not use `cd ui && bun test` in this repository. That invokes Bun's test runner instead of Vitest, bypasses the `jsdom` setup in [`ui/vitest.config.ts`](./ui/vitest.config.ts), and produces false failures around globals such as `vi.stubGlobal`, `document`, and `EventSource`.
 
 Maintainers only: the checked-in `ui/dist/overview.css` and `ui/dist/overview.js` assets are used by default. Rebuild them explicitly when the overview UI changes:
 

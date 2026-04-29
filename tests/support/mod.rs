@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
@@ -43,7 +41,16 @@ pub fn spawn_folder_server(folder: &Path, readonly: bool) -> (ChildGuard, String
 }
 
 pub fn spawn_file_server(file: &Path) -> (ChildGuard, String) {
-    spawn_file_server_with_args(file, &[])
+    spawn_with_retry(|bind_addr| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_dirbase"));
+        command
+            .arg(file)
+            .arg("--bind")
+            .arg(bind_addr)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command
+    })
 }
 
 pub fn spawn_folder_server_with_args(folder: &Path, extra_args: &[&str]) -> (ChildGuard, String) {
@@ -52,20 +59,6 @@ pub fn spawn_folder_server_with_args(folder: &Path, extra_args: &[&str]) -> (Chi
         command
             .arg("--folder")
             .arg(folder)
-            .arg("--bind")
-            .arg(bind_addr)
-            .args(extra_args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        command
-    })
-}
-
-pub fn spawn_file_server_with_args(file: &Path, extra_args: &[&str]) -> (ChildGuard, String) {
-    spawn_with_retry(|bind_addr| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_dirbase"));
-        command
-            .arg(file)
             .arg("--bind")
             .arg(bind_addr)
             .args(extra_args)
@@ -166,6 +159,8 @@ fn try_http_request_with_headers(
 fn is_transient_network_error(err: &std::io::Error) -> bool {
     matches!(
         err.kind(),
+        std::io::ErrorKind::ConnectionRefused
+            |
         std::io::ErrorKind::ConnectionReset
             | std::io::ErrorKind::ConnectionAborted
             | std::io::ErrorKind::BrokenPipe

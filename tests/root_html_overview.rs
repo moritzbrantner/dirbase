@@ -1,22 +1,8 @@
-use std::{
-    fs,
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
-    process::{Child, Command, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
+use std::fs;
 
-struct ChildGuard {
-    child: Child,
-}
+mod support;
 
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
+use support::{http_request_with_headers, spawn_folder_server, spawn_folder_server_with_args};
 
 #[test]
 fn root_serves_html_overview_for_browser_requests() {
@@ -55,21 +41,14 @@ Table posts {
     )
     .expect("write schema");
 
-    let bind_addr = reserve_bind_addr();
-    let child = Command::new(env!("CARGO_BIN_EXE_dirbase"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg(&bind_addr)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start dirbase");
-    let _child = ChildGuard { child };
-
-    wait_for_server(&bind_addr, Duration::from_secs(5));
-
-    let response = http_get(&bind_addr, "/", Some("Accept: text/html,application/xhtml+xml\r\n"));
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+    let response = http_request_with_headers(
+        &bind_addr,
+        "GET",
+        "/",
+        Some("Accept: text/html,application/xhtml+xml\r\n"),
+        None,
+    );
 
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(response.contains("content-type: text/html; charset=utf-8"), "{response}");
@@ -100,56 +79,15 @@ fn readonly_root_html_calls_out_disabled_mutations() {
     fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
         .expect("write users");
 
-    let bind_addr = reserve_bind_addr();
-    let child = Command::new(env!("CARGO_BIN_EXE_dirbase"))
-        .arg("--folder")
-        .arg(temp.path())
-        .arg("--bind")
-        .arg(&bind_addr)
-        .arg("--readonly")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start dirbase");
-    let _child = ChildGuard { child };
-
-    wait_for_server(&bind_addr, Duration::from_secs(5));
-
-    let response = http_get(&bind_addr, "/", Some("Accept: text/html,application/xhtml+xml\r\n"));
+    let (_child, bind_addr) = spawn_folder_server_with_args(temp.path(), &["--readonly"]);
+    let response = http_request_with_headers(
+        &bind_addr,
+        "GET",
+        "/",
+        Some("Accept: text/html,application/xhtml+xml\r\n"),
+        None,
+    );
 
     assert!(response.contains("This server is in readonly mode."), "{response}");
     assert!(response.contains("mutations and schema writes are disabled"), "{response}");
-}
-
-fn reserve_bind_addr() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind to an ephemeral local port");
-    let addr = listener.local_addr().expect("read ephemeral bind address");
-    format!("127.0.0.1:{}", addr.port())
-}
-
-fn wait_for_server(addr: &str, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        match TcpStream::connect(addr) {
-            Ok(_) => return,
-            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
-            Err(err) => panic!("server at {addr} did not start in time: {err}"),
-        }
-    }
-}
-
-fn http_get(addr: &str, path: &str, extra_headers: Option<&str>) -> String {
-    let mut stream = TcpStream::connect(addr).expect("connect to server");
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{}\r\n",
-        extra_headers.unwrap_or("")
-    );
-
-    stream.write_all(request.as_bytes()).expect("write request");
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-
-    response
 }

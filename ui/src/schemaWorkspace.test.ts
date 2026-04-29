@@ -488,6 +488,7 @@ describe('schema workspace helpers', () => {
     const layout = getSchemaGraphAutoLayout(graphResources, inferredSchema.tables ?? {});
 
     expect(layout.users.x).toBeLessThan(layout.teams.x);
+    expect(layout.audit_logs.y).toBeGreaterThan(layout.users.y + 200);
     expect(layout.audit_logs.x).toBeGreaterThanOrEqual(0);
   });
 
@@ -495,6 +496,7 @@ describe('schema workspace helpers', () => {
     const layout = getSchemaGraphAutoLayout(arrayIdResources, arrayIdSchema.tables ?? {});
 
     expect(layout.classes.x).toBeLessThan(layout.students.x);
+    expect(layout.students.x - layout.classes.x).toBeGreaterThanOrEqual(340);
     expect(layout.teams.x).toBeLessThan(layout.members.x);
   });
 });

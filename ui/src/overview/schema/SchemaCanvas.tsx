@@ -11,6 +11,7 @@ import {
   type Edge,
   type Node,
   type NodeProps,
+  useUpdateNodeInternals,
   useNodesState
 } from '@xyflow/react';
 
@@ -27,10 +28,12 @@ interface SchemaNodeData extends Record<string, unknown> {
   table: SchemaTable;
   columns: ReturnType<typeof deriveSchemaGraphTables>[string]['columns'];
   relationCount: number;
+  minimized: boolean;
   selected: boolean;
   selectedColumn: string | null;
   onSelectTable: (tableName: string) => void;
   onSelectColumn: (tableName: string, columnName: string) => void;
+  onToggleMinimized: (tableName: string) => void;
 }
 
 type SchemaFlowNode = Node<SchemaNodeData, 'schemaWorkspaceTable'>;
@@ -78,12 +81,23 @@ export function SchemaCanvas({
     }
     return counts;
   }, [graphRelations]);
+  const [minimizedNodeIds, setMinimizedNodeIds] = useState<string[]>([]);
+  const minimizedNodeSet = useMemo(() => new Set(minimizedNodeIds), [minimizedNodeIds]);
   const autoLayout = useMemo(
-    () => getSchemaGraphAutoLayout(resources, effectiveTables),
-    [effectiveTables, resources]
+    () =>
+      getSchemaGraphAutoLayout(resources, effectiveTables, {
+        minimizedTables: minimizedNodeSet
+      }),
+    [effectiveTables, minimizedNodeSet, resources]
   );
   const [flow, setFlow] = useState<ReactFlowInstance<SchemaFlowNode, SchemaFlowEdge> | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<SchemaFlowNode>([]);
+
+  useEffect(() => {
+    setMinimizedNodeIds((current) =>
+      current.filter((tableName) => resources.some((resource) => resource.name === tableName))
+    );
+  }, [resources]);
 
   useEffect(() => {
     setNodes((currentNodes) => {
@@ -93,13 +107,20 @@ export function SchemaCanvas({
         table: effectiveTables[resource.name] ?? {},
         columns: graphTables[resource.name]?.columns ?? [],
         relationCount: relationCounts.get(resource.name) ?? 0,
+        minimized: minimizedNodeSet.has(resource.name),
         selection,
         onSelectTable,
         onSelectColumn,
+        onToggleMinimized: (tableName) =>
+          setMinimizedNodeIds((current) =>
+            current.includes(tableName)
+              ? current.filter((currentTableName) => currentTableName !== tableName)
+              : [...current, tableName]
+          ),
         position: existingPositions.get(resource.name) ?? autoLayout[resource.name] ?? { x: 0, y: 0 }
       }));
     });
-  }, [autoLayout, effectiveTables, graphTables, onSelectColumn, onSelectTable, relationCounts, resources, selection, setNodes]);
+  }, [autoLayout, effectiveTables, graphTables, minimizedNodeSet, onSelectColumn, onSelectTable, relationCounts, resources, selection, setNodes]);
 
   useEffect(() => {
     setNodes((currentNodes) =>
@@ -183,67 +204,95 @@ export function SchemaCanvas({
 
 function SchemaWorkspaceNode({ data }: NodeProps<SchemaFlowNode>) {
   const columns = data.columns;
+  const updateNodeInternals = useUpdateNodeInternals();
+
+  useEffect(() => {
+    updateNodeInternals(data.resource.name);
+  }, [data.columns, data.minimized, data.resource.name, updateNodeInternals]);
 
   return (
-    <div className={`schema-node-card ${data.selected ? 'is-selected' : ''}`}>
+    <div className={`schema-node-card ${data.selected ? 'is-selected' : ''} ${data.minimized ? 'is-minimized' : ''}`}>
       <div className="schema-node-head">
         <button type="button" className="schema-node-title" onClick={() => data.onSelectTable(data.resource.name)}>
           {data.resource.name}
         </button>
-        <span className="overview-kind-badge">{data.table.kind ?? data.resource.kind}</span>
+        <div className="schema-node-head-actions">
+          <span className="overview-kind-badge">{data.table.kind ?? data.resource.kind}</span>
+          <button
+            type="button"
+            className="schema-node-toggle"
+            aria-label={data.minimized ? `Expand ${data.resource.name}` : `Minify ${data.resource.name}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              data.onToggleMinimized(data.resource.name);
+            }}
+          >
+            {data.minimized ? 'Expand' : 'Minify'}
+          </button>
+        </div>
       </div>
       <div className="schema-node-summary">
         <span>{data.resource.row_count !== null ? `${data.resource.row_count} rows` : 'resource'}</span>
         <span>{data.relationCount} relations</span>
       </div>
-      <div className="schema-node-columns">
-        {columns.length > 0 ? (
-          columns.map((column) => {
-            const selected = data.selectedColumn === column.name;
-            return (
-              <div key={column.name} className={`schema-node-column ${selected ? 'is-selected' : ''}`}>
-                <Handle
-                  type="target"
-                  position={Position.Left}
-                  id={buildSchemaHandleId('target', column.name)}
-                  className="graph-column-handle is-target"
-                  isConnectable={column.canTarget}
-                  data-testid={`${data.resource.name}:${column.name}:target-handle`}
-                />
-                <button
-                  type="button"
-                  className="schema-node-column-button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    data.onSelectColumn(data.resource.name, column.name);
-                  }}
-                >
-                  <span className="schema-node-column-name">{column.name}</span>
-                  <span className="schema-node-column-meta">
-                    {column.column_type}
-                    {column.is_primary_key ? ' · pk' : ''}
-                    {column.relation === 'foreign'
-                      ? ' · fk'
-                      : column.relation === 'one_to_many'
-                        ? ' · 1:n'
-                        : ''}
-                  </span>
-                </button>
-                <Handle
-                  type="source"
-                  position={Position.Right}
-                  id={buildSchemaHandleId('source', column.name)}
-                  className="graph-column-handle is-source"
-                  isConnectable={column.canSource}
-                  data-testid={`${data.resource.name}:${column.name}:source-handle`}
-                />
-              </div>
-            );
-          })
-        ) : (
-          <div className="graph-node-empty">No compatible key columns are available in this table.</div>
-        )}
-      </div>
+      {data.minimized ? (
+        <div className="schema-node-minified-copy">
+          {columns.length === 1 ? '1 compatible column hidden' : `${columns.length} compatible columns hidden`}
+        </div>
+      ) : (
+        <div className="schema-node-columns">
+          {columns.length > 0 ? (
+            columns.map((column) => {
+              const selected = data.selectedColumn === column.name;
+              return (
+                <div key={column.name} className={`schema-node-column ${selected ? 'is-selected' : ''}`}>
+                  {column.canTarget ? (
+                    <Handle
+                      type="target"
+                      position={Position.Left}
+                      id={buildSchemaHandleId('target', column.name)}
+                      className="graph-column-handle is-target"
+                      isConnectable
+                      data-testid={`${data.resource.name}:${column.name}:target-handle`}
+                    />
+                  ) : null}
+                  <button
+                    type="button"
+                    className="schema-node-column-button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      data.onSelectColumn(data.resource.name, column.name);
+                    }}
+                  >
+                    <span className="schema-node-column-name">{column.name}</span>
+                    <span className="schema-node-column-meta">
+                      {column.column_type}
+                      {column.is_primary_key ? ' · pk' : ''}
+                      {column.relation === 'foreign'
+                        ? ' · fk'
+                        : column.relation === 'one_to_many'
+                          ? ' · 1:n'
+                          : ''}
+                    </span>
+                  </button>
+                  {column.canSource ? (
+                    <Handle
+                      type="source"
+                      position={Position.Right}
+                      id={buildSchemaHandleId('source', column.name)}
+                      className="graph-column-handle is-source"
+                      isConnectable
+                      data-testid={`${data.resource.name}:${column.name}:source-handle`}
+                    />
+                  ) : null}
+                </div>
+              );
+            })
+          ) : (
+            <div className="graph-node-empty">No compatible key columns are available in this table.</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -253,18 +302,22 @@ function buildSchemaNode({
   table,
   columns,
   relationCount,
+  minimized,
   selection,
   onSelectTable,
   onSelectColumn,
+  onToggleMinimized,
   position
 }: {
   resource: ResourceOverview;
   table: SchemaTable;
   columns: ReturnType<typeof deriveSchemaGraphTables>[string]['columns'];
   relationCount: number;
+  minimized: boolean;
   selection: SchemaWorkspaceSelection | null;
   onSelectTable: (tableName: string) => void;
   onSelectColumn: (tableName: string, columnName: string) => void;
+  onToggleMinimized: (tableName: string) => void;
   position: { x: number; y: number };
 }): SchemaFlowNode {
   return {
@@ -278,6 +331,7 @@ function buildSchemaNode({
       table,
       columns,
       relationCount,
+      minimized,
       selected: selection?.tableName === resource.name,
       selectedColumn:
         selection?.kind === 'column' && selection.tableName === resource.name
@@ -286,7 +340,8 @@ function buildSchemaNode({
             ? selection.relationSourceColumn
             : null,
       onSelectTable,
-      onSelectColumn
+      onSelectColumn,
+      onToggleMinimized
     }
   };
 }

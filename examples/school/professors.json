@@ -4,6 +4,8 @@
     "name": "Dr. Elena Rivera",
     "department": "Computer Science",
     "email": "elena.rivera@example.edu",
+    "office": "ENG-201",
+    "research_areas": ["distributed systems", "databases"],
     "tenured": true
   },
   {
@@ -11,6 +13,8 @@
     "name": "Dr. Marcus Lee",
     "department": "Mathematics",
     "email": "marcus.lee@example.edu",
+    "office": null,
+    "research_areas": ["algebra", "logic"],
     "tenured": true
   },
   {
@@ -18,6 +22,17 @@
     "name": "Dr. Priya Shah",
     "department": "Biology",
     "email": "priya.shah@example.edu",
+    "office": "SCI-144",
+    "research_areas": null,
+    "tenured": false
+  },
+  {
+    "id": 4,
+    "name": "Prof. Ava Brooks",
+    "department": "Humanities",
+    "email": "ava.brooks@example.edu",
+    "office": null,
+    "research_areas": [],
     "tenured": false
   }
 ]

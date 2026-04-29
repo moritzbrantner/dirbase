@@ -6,4 +6,4 @@ Add new example folders here when tests need representative file trees.
 
 ## Available examples
 
-- `school/`: Expanded dataset with `students.json`, `professors.json`, and `classes.json` resources. Includes enough rows and attributes for integration tests that exercise full CRUD flows.
+- `school/`: Richer school fixture with nullable fields, JSON columns, one-to-many relations, a true many-to-many `enrollments.json` junction table, and a legacy denormalized `student_ids` array on classes for edge-case coverage.

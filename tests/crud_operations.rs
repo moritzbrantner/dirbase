@@ -23,7 +23,7 @@ fn school_examples_support_students_crud_end_to_end() {
         "POST",
         "/students",
         Some(
-            r#"{"name":"Dina Patel","email":"dina.patel@example.edu","year":4,"major":"Biology"}"#,
+            r#"{"name":"Dina Patel","email":"dina.patel@example.edu","year":4,"major":"Biology","enrollment_status":"active"}"#,
         ),
     );
     assert!(post_response.starts_with("HTTP/1.1 201 Created\r\n"), "{post_response}");
@@ -36,7 +36,7 @@ fn school_examples_support_students_crud_end_to_end() {
         "PUT",
         &format!("/students/{created_id}"),
         Some(&format!(
-            r#"{{"id":{created_id},"name":"Dina Patel","email":"dina.patel@example.edu","year":4,"major":"Data Science"}}"#
+            r#"{{"id":{created_id},"name":"Dina Patel","email":"dina.patel@example.edu","year":4,"major":"Data Science","enrollment_status":"active"}}"#
         )),
     );
     assert!(put_response.starts_with("HTTP/1.1 200 OK\r\n"), "{put_response}");
@@ -100,6 +100,53 @@ fn school_examples_support_students_crud_end_to_end() {
         )
         .expect("example students json")
     );
+}
+
+#[test]
+fn school_example_schema_covers_many_to_many_and_nullable_cases() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    copy_example_folder("school", temp.path());
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+    wait_for_server(&bind_addr, Duration::from_secs(5));
+
+    let schema_response = http_request(&bind_addr, "GET", "/schema", None);
+    assert!(schema_response.starts_with("HTTP/1.1 200 OK\r\n"), "{schema_response}");
+    let schema_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&schema_response)).expect("schema json");
+
+    assert_eq!(schema_payload["tables"]["enrollments"]["kind"], "relation");
+    assert_eq!(
+        schema_payload["tables"]["students"]["many_to_many"]["classes"]["through_table"],
+        "enrollments"
+    );
+    assert_eq!(
+        schema_payload["tables"]["classes"]["many_to_many"]["students"]["through_table"],
+        "enrollments"
+    );
+    assert_eq!(
+        schema_payload["tables"]["students"]["columns"]["advisor_professor_id"]["nullable"],
+        true
+    );
+    assert_eq!(schema_payload["tables"]["students"]["columns"]["gpa"]["nullable"], true);
+    assert_eq!(
+        schema_payload["tables"]["classes"]["columns"]["professor_id"]["nullable"],
+        true
+    );
+
+    let student_response = http_request(&bind_addr, "GET", "/students/5", None);
+    assert!(student_response.starts_with("HTTP/1.1 200 OK\r\n"), "{student_response}");
+    let student_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&student_response)).expect("student json");
+    assert!(student_payload["gpa"].is_null(), "{student_payload}");
+    assert!(student_payload["advisor_professor_id"].is_null(), "{student_payload}");
+
+    let class_response = http_request(&bind_addr, "GET", "/classes/499", None);
+    assert!(class_response.starts_with("HTTP/1.1 200 OK\r\n"), "{class_response}");
+    let class_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&class_response)).expect("class json");
+    assert!(class_payload["professor_id"].is_null(), "{class_payload}");
+    assert_eq!(class_payload["student_ids"], serde_json::json!([]));
 }
 
 fn copy_example_folder(example_name: &str, destination: &Path) {

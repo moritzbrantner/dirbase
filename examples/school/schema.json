@@ -4,6 +4,10 @@
       "kind": "object",
       "primary_key": "id",
       "columns": {
+        "archived": {
+          "column_type": "boolean",
+          "nullable": false
+        },
         "code": {
           "column_type": "string",
           "nullable": false
@@ -12,13 +16,29 @@
           "column_type": "integer",
           "nullable": false
         },
+        "has_lab": {
+          "column_type": "boolean",
+          "nullable": false
+        },
         "id": {
           "column_type": "integer",
           "nullable": false
         },
-        "professor_id": {
+        "max_students": {
           "column_type": "integer",
           "nullable": false
+        },
+        "meeting_days": {
+          "column_type": "json",
+          "nullable": false
+        },
+        "professor_id": {
+          "column_type": "integer",
+          "nullable": true
+        },
+        "room": {
+          "column_type": "string",
+          "nullable": true
         },
         "semester": {
           "column_type": "string",
@@ -36,6 +56,29 @@
       "foreign_keys": {
         "professor_id": {
           "target_table": "professors",
+          "target_column": "id"
+        }
+      }
+    },
+    "enrollments": {
+      "kind": "relation",
+      "columns": {
+        "class_id": {
+          "column_type": "integer",
+          "nullable": false
+        },
+        "student_id": {
+          "column_type": "integer",
+          "nullable": false
+        }
+      },
+      "foreign_keys": {
+        "class_id": {
+          "target_table": "classes",
+          "target_column": "id"
+        },
+        "student_id": {
+          "target_table": "students",
           "target_column": "id"
         }
       }
@@ -60,6 +103,14 @@
           "column_type": "string",
           "nullable": false
         },
+        "office": {
+          "column_type": "string",
+          "nullable": true
+        },
+        "research_areas": {
+          "column_type": "json",
+          "nullable": true
+        },
         "tenured": {
           "column_type": "boolean",
           "nullable": false
@@ -75,17 +126,33 @@
           "column_type": "string",
           "nullable": false
         },
+        "emergency_contact": {
+          "column_type": "json",
+          "nullable": true
+        },
         "gpa": {
           "column_type": "float",
-          "nullable": false
+          "nullable": true
         },
         "id": {
           "column_type": "integer",
           "nullable": false
         },
+        "advisor_professor_id": {
+          "column_type": "integer",
+          "nullable": true
+        },
+        "enrollment_status": {
+          "column_type": "string",
+          "nullable": false
+        },
         "major": {
           "column_type": "string",
           "nullable": false
+        },
+        "minor": {
+          "column_type": "string",
+          "nullable": true
         },
         "name": {
           "column_type": "string",
@@ -96,7 +163,12 @@
           "nullable": false
         }
       },
-      "foreign_keys": {}
+      "foreign_keys": {
+        "advisor_professor_id": {
+          "target_table": "professors",
+          "target_column": "id"
+        }
+      }
     }
   }
 }

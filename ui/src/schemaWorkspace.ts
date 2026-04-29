@@ -18,8 +18,8 @@ const EMPTY_DECLARED_SCHEMA: DeclaredSchemaResponse = { tables: {} };
 const COLUMN_TYPES = new Set(['integer', 'float', 'boolean', 'string', 'json']);
 const TABLE_KINDS = new Set(['object', 'relation', 'unknown']);
 const SCHEMA_GRAPH_NODE_WIDTH = 260;
-const SCHEMA_GRAPH_NODE_GAP_X = 64;
-const SCHEMA_GRAPH_NODE_GAP_Y = 28;
+const SCHEMA_GRAPH_NODE_GAP_X = 88;
+const SCHEMA_GRAPH_NODE_GAP_Y = 40;
 const SCHEMA_GRAPH_MAX_ROWS_PER_LANE = 6;
 
 export interface SchemaGraphColumn {
@@ -426,7 +426,6 @@ export function deriveSchemaGraphTables(
 
   return Object.fromEntries(
     resources.map((resource) => {
-      const table = normalizeSchemaTable(effectiveTables[resource.name]);
       const columns = (baseColumnsByTable[resource.name] ?? []).map((column) => {
         const isExistingTarget = targetedColumns.get(resource.name)?.has(column.name) ?? false;
         const hasCompatiblePrimaryTarget =
@@ -489,9 +488,11 @@ export function deriveSchemaGraphTables(
 
 export function getSchemaGraphAutoLayout(
   resources: ResourceOverview[],
-  effectiveTables: Record<string, SchemaTable>
+  effectiveTables: Record<string, SchemaTable>,
+  options?: { minimizedTables?: Iterable<string> }
 ): Record<string, { x: number; y: number }> {
   const graphTables = deriveSchemaGraphTables(resources, effectiveTables);
+  const minimizedTables = new Set(options?.minimizedTables ?? []);
   const tableNames = resources.map((resource) => resource.name);
   const groupedByRank = rankSchemaGraphTables(resources, effectiveTables);
   const positions: Record<string, { x: number; y: number }> = {};
@@ -508,7 +509,9 @@ export function getSchemaGraphAutoLayout(
         x: xCursor + laneIndex * (SCHEMA_GRAPH_NODE_WIDTH + SCHEMA_GRAPH_NODE_GAP_X),
         y: laneHeights[laneIndex]
       };
-      laneHeights[laneIndex] += estimateSchemaNodeHeight(columns.length) + SCHEMA_GRAPH_NODE_GAP_Y;
+      laneHeights[laneIndex] +=
+        estimateSchemaNodeHeight(columns.length, minimizedTables.has(tableName)) +
+        SCHEMA_GRAPH_NODE_GAP_Y;
     });
 
     xCursor += lanes * (SCHEMA_GRAPH_NODE_WIDTH + SCHEMA_GRAPH_NODE_GAP_X) + SCHEMA_GRAPH_NODE_GAP_X;
@@ -1135,6 +1138,10 @@ function rankSchemaGraphTables(
     );
 }
 
-function estimateSchemaNodeHeight(columnCount: number): number {
-  return 104 + columnCount * 38;
+function estimateSchemaNodeHeight(columnCount: number, minimized = false): number {
+  if (minimized) {
+    return 92;
+  }
+
+  return 120 + columnCount * 42;
 }

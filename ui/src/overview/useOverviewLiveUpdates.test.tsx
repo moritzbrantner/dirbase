@@ -56,6 +56,7 @@ describe('useOverviewLiveUpdates', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -124,5 +125,50 @@ describe('useOverviewLiveUpdates', () => {
 
     expect(MockEventSource.instances).toHaveLength(2);
     expect(MockEventSource.instances[1].url).toBe('/events');
+  });
+
+  it('invalidates overview queries after server events and pauses event storms', async () => {
+    const onToast = vi.fn();
+    const client = {
+      invalidateQueries: vi.fn().mockResolvedValue(undefined)
+    } as unknown as QueryClient;
+    const { result } = renderHook(() => useOverviewLiveUpdates({ client, onToast }));
+
+    const stream = MockEventSource.instances[0];
+    await waitFor(() => {
+      expect(stream.onopen).toBeTypeOf('function');
+    });
+
+    act(() => {
+      stream.emitOpen();
+    });
+    await waitFor(() => {
+      expect(result.current.liveUpdates).toBe('live');
+    });
+
+    act(() => {
+      stream.emit('resource_changed');
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+
+    expect(client.invalidateQueries).toHaveBeenCalledTimes(4);
+    expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['overview'] });
+    expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['resource'] });
+    expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['schema'] });
+    expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['schema-editor'] });
+
+    act(() => {
+      for (let index = 0; index < 12; index += 1) {
+        stream.emit('overview_changed');
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.liveUpdates).toBe('paused');
+    });
+    expect(stream.closed).toBe(true);
+    expect(onToast).toHaveBeenCalledWith('Live updates paused due to an event storm.', 'error');
   });
 });

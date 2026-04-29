@@ -1,0 +1,34 @@
+[
+  {
+    "student_id": 1,
+    "class_id": 101
+  },
+  {
+    "student_id": 2,
+    "class_id": 101
+  },
+  {
+    "student_id": 5,
+    "class_id": 101
+  },
+  {
+    "student_id": 1,
+    "class_id": 205
+  },
+  {
+    "student_id": 2,
+    "class_id": 205
+  },
+  {
+    "student_id": 3,
+    "class_id": 205
+  },
+  {
+    "student_id": 3,
+    "class_id": 310
+  },
+  {
+    "student_id": 4,
+    "class_id": 150
+  }
+]
