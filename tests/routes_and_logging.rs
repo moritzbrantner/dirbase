@@ -127,6 +127,40 @@ fn supports_all_object_resource_routes() {
 }
 
 #[test]
+fn edit_suffix_serves_patch_editor_for_resources_and_items() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("posts.json"),
+        r#"[{"id":1,"title":"hello"}]
+"#,
+    )
+    .expect("write posts");
+    fs::write(temp.path().join("profile.json"), r#"{"name":"Ada","theme":"dark"}"#)
+        .expect("write profile");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    let item_editor = http_request(&bind_addr, "GET", "/posts/1/edit", None);
+    assert!(item_editor.starts_with("HTTP/1.1 200 OK\r\n"), "{item_editor}");
+    assert!(item_editor.contains("content-type: text/html; charset=utf-8"), "{item_editor}");
+    assert!(item_editor.contains("<title>Edit /posts/1</title>"), "{item_editor}");
+    assert!(item_editor.contains("const targetPath = \"/posts/1\";"), "{item_editor}");
+    assert!(item_editor.contains("method: 'PATCH'"), "{item_editor}");
+
+    let object_editor = http_request(&bind_addr, "GET", "/profile/edit", None);
+    assert!(object_editor.starts_with("HTTP/1.1 200 OK\r\n"), "{object_editor}");
+    assert!(object_editor.contains("<title>Edit /profile</title>"), "{object_editor}");
+    assert!(object_editor.contains("const targetPath = \"/profile\";"), "{object_editor}");
+
+    let item_route_still_returns_json = http_request(&bind_addr, "GET", "/posts/1", None);
+    assert!(
+        item_route_still_returns_json.starts_with("HTTP/1.1 200 OK\r\n"),
+        "{item_route_still_returns_json}"
+    );
+    assert!(item_route_still_returns_json.contains("\"title\":\"hello\""));
+}
+
+#[test]
 fn schema_aware_object_resources_validate_get_put_and_patch_routes() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(

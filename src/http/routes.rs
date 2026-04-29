@@ -19,7 +19,7 @@ use axum::{
     },
     middleware::{self, Next},
     response::{
-        IntoResponse, Response,
+        Html, IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
     },
     routing::get,
@@ -64,6 +64,8 @@ pub fn build_router(state: AppState) -> Router {
             .route("/sql", get(sql_query))
             .route("/export.sql", get(export_sql))
             .route("/sql/export", get(export_sql))
+            .route("/{resource}/edit", get(get_resource_editor))
+            .route("/{resource}/{id}/edit", get(get_item_editor))
             .route("/{resource}", get(get_collection))
             .route("/{resource}/{id}", get(get_item))
             .with_state(state.clone())
@@ -84,6 +86,8 @@ pub fn build_router(state: AppState) -> Router {
             .route("/sql", get(sql_query).post(sql_query_post))
             .route("/export.sql", get(export_sql))
             .route("/sql/export", get(export_sql))
+            .route("/{resource}/edit", get(get_resource_editor))
+            .route("/{resource}/{id}/edit", get(get_item_editor))
             .route(
                 "/{resource}",
                 get(get_collection)
@@ -285,6 +289,26 @@ pub async fn get_overview_js() -> Response {
 
 pub async fn get_schema(State(state): State<AppState>) -> Json<crate::schema::Schema> {
     Json(state.schema_snapshot())
+}
+
+pub async fn get_resource_editor(
+    State(state): State<AppState>,
+    AxumPath(resource): AxumPath<String>,
+) -> Html<String> {
+    Html(render_patch_editor_html(
+        &format!("/{}", encode_path_segment(&resource)),
+        state.config.readonly,
+    ))
+}
+
+pub async fn get_item_editor(
+    State(state): State<AppState>,
+    AxumPath((resource, id)): AxumPath<(String, String)>,
+) -> Html<String> {
+    Html(render_patch_editor_html(
+        &format!("/{}/{}", encode_path_segment(&resource), encode_path_segment(&id)),
+        state.config.readonly,
+    ))
 }
 
 #[derive(Serialize)]
@@ -538,6 +562,275 @@ pub async fn get_item(
             .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?
             .clone(),
     ))
+}
+
+fn render_patch_editor_html(target_path: &str, readonly: bool) -> String {
+    let target_path_json =
+        serde_json::to_string(target_path).expect("serializing an editor path cannot fail");
+    let readonly_json =
+        serde_json::to_string(&readonly).expect("serializing readonly flag cannot fail");
+    let escaped_target_path = escape_html(target_path);
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Edit {escaped_target_path}</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f8fafc;
+      color: #1f2937;
+    }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }}
+    header {{
+      border-bottom: 1px solid #d6d3d1;
+      background: #ffffff;
+      padding: 16px clamp(16px, 4vw, 40px);
+    }}
+    main {{
+      flex: 1;
+      display: grid;
+      grid-template-rows: auto minmax(320px, 1fr) auto;
+      gap: 12px;
+      padding: 16px clamp(16px, 4vw, 40px) 24px;
+    }}
+    h1 {{
+      font-size: 20px;
+      line-height: 1.25;
+      margin: 0 0 6px;
+      overflow-wrap: anywhere;
+    }}
+    .route {{
+      display: inline-block;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      border: 1px solid #d6d3d1;
+      background: #f5f5f4;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }}
+    .toolbar {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }}
+    .status {{
+      min-height: 22px;
+      font-size: 14px;
+      color: #57534e;
+    }}
+    .status.error {{
+      color: #b91c1c;
+    }}
+    .status.ok {{
+      color: #047857;
+    }}
+    textarea {{
+      width: 100%;
+      min-height: 100%;
+      box-sizing: border-box;
+      resize: vertical;
+      border: 1px solid #a8a29e;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 14px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.55;
+      color: #1c1917;
+      tab-size: 2;
+    }}
+    button {{
+      border: 1px solid #78716c;
+      border-radius: 6px;
+      background: #292524;
+      color: #ffffff;
+      font: inherit;
+      font-weight: 600;
+      padding: 8px 12px;
+      cursor: pointer;
+    }}
+    button.secondary {{
+      background: #ffffff;
+      color: #292524;
+    }}
+    button:disabled {{
+      cursor: not-allowed;
+      opacity: 0.55;
+    }}
+    .actions {{
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Edit JSON resource</h1>
+    <code class="route" id="target-path">{escaped_target_path}</code>
+  </header>
+  <main>
+    <div class="toolbar">
+      <div class="status" id="status" role="status">Loading resource...</div>
+      <button type="button" class="secondary" id="reload-button">Reload</button>
+    </div>
+    <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+    <div class="actions">
+      <button type="button" class="secondary" id="format-button">Format JSON</button>
+      <button type="button" id="save-button">Save patch</button>
+    </div>
+  </main>
+  <script>
+    const targetPath = {target_path_json};
+    const readonly = {readonly_json};
+    const editor = document.getElementById('editor');
+    const statusNode = document.getElementById('status');
+    const saveButton = document.getElementById('save-button');
+    const reloadButton = document.getElementById('reload-button');
+    const formatButton = document.getElementById('format-button');
+    let originalValue = null;
+
+    function setStatus(message, kind = '') {{
+      statusNode.textContent = message;
+      statusNode.className = kind ? `status ${{kind}}` : 'status';
+    }}
+
+    function formatJson(value) {{
+      return JSON.stringify(value, null, 2) + '\n';
+    }}
+
+    function isPlainObject(value) {{
+      return value !== null && typeof value === 'object' && !Array.isArray(value);
+    }}
+
+    function sameJson(left, right) {{
+      return JSON.stringify(left) === JSON.stringify(right);
+    }}
+
+    function buildPatch(original, next) {{
+      if (!isPlainObject(original) || !isPlainObject(next)) {{
+        throw new Error('PATCH editing requires the loaded resource to be a JSON object.');
+      }}
+      const removedKeys = Object.keys(original).filter((key) => !Object.prototype.hasOwnProperty.call(next, key));
+      if (removedKeys.length > 0) {{
+        throw new Error(`PATCH cannot remove keys: ${{removedKeys.join(', ')}}. Set a value to null or use PUT from the API.`);
+      }}
+      const patch = {{}};
+      for (const [key, value] of Object.entries(next)) {{
+        if (!sameJson(original[key], value)) {{
+          patch[key] = value;
+        }}
+      }}
+      return patch;
+    }}
+
+    async function loadResource() {{
+      saveButton.disabled = true;
+      reloadButton.disabled = true;
+      setStatus('Loading resource...');
+      try {{
+        const response = await fetch(targetPath, {{ headers: {{ Accept: 'application/json' }} }});
+        const text = await response.text();
+        if (!response.ok) {{
+          throw new Error(text || `GET failed: ${{response.status}} ${{response.statusText}}`);
+        }}
+        originalValue = JSON.parse(text);
+        editor.value = formatJson(originalValue);
+        setStatus(readonly ? 'Read-only mode: editing is disabled.' : 'Loaded. Edit JSON and save a PATCH request.', readonly ? 'error' : 'ok');
+      }} catch (error) {{
+        setStatus(error instanceof Error ? error.message : 'Unable to load resource.', 'error');
+      }} finally {{
+        saveButton.disabled = readonly;
+        reloadButton.disabled = false;
+      }}
+    }}
+
+    async function savePatch() {{
+      if (readonly) {{
+        return;
+      }}
+      saveButton.disabled = true;
+      reloadButton.disabled = true;
+      try {{
+        const nextValue = JSON.parse(editor.value);
+        const patch = buildPatch(originalValue, nextValue);
+        const changedKeys = Object.keys(patch);
+        if (changedKeys.length === 0) {{
+          setStatus('No top-level changes to patch.', 'error');
+          return;
+        }}
+        setStatus(`Saving PATCH with ${{changedKeys.length}} changed key(s)...`);
+        const response = await fetch(targetPath, {{
+          method: 'PATCH',
+          headers: {{
+            Accept: 'application/json',
+            'Content-Type': 'application/json'
+          }},
+          body: JSON.stringify(patch)
+        }});
+        const text = await response.text();
+        if (!response.ok) {{
+          throw new Error(text || `PATCH failed: ${{response.status}} ${{response.statusText}}`);
+        }}
+        originalValue = JSON.parse(text);
+        editor.value = formatJson(originalValue);
+        setStatus(`Saved PATCH for: ${{changedKeys.join(', ')}}`, 'ok');
+      }} catch (error) {{
+        setStatus(error instanceof Error ? error.message : 'Unable to save patch.', 'error');
+      }} finally {{
+        saveButton.disabled = readonly;
+        reloadButton.disabled = false;
+      }}
+    }}
+
+    function formatDraft() {{
+      try {{
+        editor.value = formatJson(JSON.parse(editor.value));
+        setStatus('Formatted JSON.', 'ok');
+      }} catch (error) {{
+        setStatus(error instanceof Error ? error.message : 'Invalid JSON.', 'error');
+      }}
+    }}
+
+    reloadButton.addEventListener('click', () => void loadResource());
+    saveButton.addEventListener('click', () => void savePatch());
+    formatButton.addEventListener('click', formatDraft);
+    void loadResource();
+  </script>
+</body>
+</html>
+"#
+    )
+}
+
+fn encode_path_segment(segment: &str) -> String {
+    let mut encoded = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn escape_html(value: &str) -> String {
+    value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 pub async fn replace_item(
