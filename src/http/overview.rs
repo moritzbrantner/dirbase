@@ -614,6 +614,9 @@ fn render_overview_html(page: &OverviewPageData) -> String {
     let sample_create_path = sample_table_resource
         .map(|resource| format!("/{}", resource.name))
         .unwrap_or_else(|| sample_collection_path.clone());
+    let sample_create_form_path = sample_table_resource
+        .map(|resource| format!("/{}/create", resource.name))
+        .unwrap_or_else(|| format!("{sample_collection_path}/create"));
     let sample_create_body = sample_create_payload(sample_table_resource);
     let capability_note = if page.server_capabilities.readonly {
         "This server is in readonly mode. Browse routes, inspect rows, copy request URLs, and use /graphql, but mutations and schema writes are disabled."
@@ -715,6 +718,13 @@ fn render_overview_html(page: &OverviewPageData) -> String {
                     id = escape_html(sample_item_id),
                 );
             }
+            if resource.kind == "table" {
+                let _ = write!(
+                    html,
+                    "<p class=\"overview-copy\">Create form: <a href=\"/{name}/create\"><code class=\"overview-inline-code\">/{name}/create</code></a></p>",
+                    name = escape_html(&resource.name),
+                );
+            }
             html.push_str("</article>");
         }
         html.push_str("</div>");
@@ -756,6 +766,14 @@ fn render_overview_html(page: &OverviewPageData) -> String {
             "GET",
             &sample_item_path,
             "Use an item route when the resource exposes a sample item or declared primary key.",
+            None,
+        );
+        render_request_card(
+            &mut html,
+            "Open create form",
+            "GET",
+            &sample_create_form_path,
+            "Use the browser form for an array resource when you want to add one item without writing JSON by hand.",
             None,
         );
         render_request_card(

@@ -156,6 +156,7 @@ export function ExplorerHeader({
   onOpenDelete: () => void;
 }) {
   const collectionRoute = resource ? `/${resource.name}` : '/';
+  const createFormRoute = resource?.kind === 'table' ? `/${resource.name}/create` : null;
   const sampleItemRoute =
     resource?.sample_item_id && resource.primary_key ? `/${resource.name}/${resource.sample_item_id}` : null;
   const selectedItemRoute =
@@ -189,6 +190,11 @@ export function ExplorerHeader({
               <a className="underline decoration-stone-900/20 underline-offset-4" href={collectionRoute} target="_blank" rel="noreferrer">
                 Collection
               </a>
+              {createFormRoute && (
+                <a className="underline decoration-stone-900/20 underline-offset-4" href={createFormRoute} target="_blank" rel="noreferrer">
+                  Create form
+                </a>
+              )}
               {sampleItemRoute && (
                 <a className="underline decoration-stone-900/20 underline-offset-4" href={sampleItemRoute} target="_blank" rel="noreferrer">
                   Sample item

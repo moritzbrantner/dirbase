@@ -129,6 +129,7 @@ describe('ExplorerHeader', () => {
     );
 
     expect(screen.getByRole('link', { name: 'Collection' })).toHaveAttribute('href', '/members');
+    expect(screen.getByRole('link', { name: 'Create form' })).toHaveAttribute('href', '/members/create');
     expect(screen.getByRole('link', { name: 'Sample item' })).toHaveAttribute('href', '/members/1');
     expect(screen.getByRole('link', { name: 'Selected item' })).toHaveAttribute('href', '/members/1');
 

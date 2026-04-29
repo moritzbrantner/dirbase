@@ -161,6 +161,59 @@ fn edit_suffix_serves_patch_editor_for_resources_and_items() {
 }
 
 #[test]
+fn create_suffix_serves_item_creation_form_for_array_resources() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("schema.json"),
+        r#"{
+  "tables": {
+    "posts": {
+      "primary_key": "id",
+      "columns": {
+        "id": {"column_type": "integer", "nullable": false},
+        "title": {"column_type": "string", "nullable": false},
+        "published": {"column_type": "boolean", "nullable": true}
+      }
+    }
+  }
+}
+"#,
+    )
+    .expect("write schema");
+    fs::write(
+        temp.path().join("posts.json"),
+        r#"[{"id":1,"title":"hello","published":false}]
+"#,
+    )
+    .expect("write posts");
+    fs::write(temp.path().join("profile.json"), r#"{"name":"Ada","theme":"dark"}"#)
+        .expect("write profile");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    let create_form = http_request(&bind_addr, "GET", "/posts/create", None);
+    assert!(create_form.starts_with("HTTP/1.1 200 OK\r\n"), "{create_form}");
+    assert!(create_form.contains("content-type: text/html; charset=utf-8"), "{create_form}");
+    assert!(create_form.contains("<title>Create /posts</title>"), "{create_form}");
+    assert!(create_form.contains("POST /posts"), "{create_form}");
+    assert!(create_form.contains("const targetPath = \"/posts\";"), "{create_form}");
+    assert!(create_form.contains("\"name\":\"title\""), "{create_form}");
+    assert!(create_form.contains("\"field_type\":\"boolean\""), "{create_form}");
+    assert!(create_form.contains("method: 'POST'"), "{create_form}");
+
+    let object_create = http_request(&bind_addr, "GET", "/profile/create", None);
+    assert!(object_create.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{object_create}");
+    assert!(
+        object_create.contains("Create forms require a JSON array resource"),
+        "{object_create}"
+    );
+
+    let post_create_item_route = http_request(&bind_addr, "GET", "/posts/create/edit", None);
+    assert!(post_create_item_route.starts_with("HTTP/1.1 200 OK\r\n"), "{post_create_item_route}");
+    assert!(post_create_item_route.contains("<title>Edit /posts/create</title>"));
+}
+
+#[test]
 fn schema_aware_object_resources_validate_get_put_and_patch_routes() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(

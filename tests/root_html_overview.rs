@@ -57,6 +57,11 @@ Table posts {
     assert!(!response.contains("Rules of paths"), "{response}");
     assert!(!response.contains("First 60 seconds"), "{response}");
     assert!(response.contains("Create one row"), "{response}");
+    assert!(response.contains("Open create form"), "{response}");
+    assert!(
+        response.contains("<span class=\"overview-method\">GET</span> /posts/create"),
+        "{response}"
+    );
     assert!(response.contains("<span class=\"overview-method\">POST</span> /posts"), "{response}");
     assert!(response.contains("id=\"overview-root\""), "{response}");
     assert!(response.contains("data-overview-endpoint=\"/overview.json\""), "{response}");
