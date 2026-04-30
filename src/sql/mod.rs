@@ -1080,6 +1080,7 @@ mod tests {
             config: Arc::new(crate::app::AppConfig {
                 readonly: false,
                 enable_log: false,
+                response_format: crate::app::ResponseFormat::Json,
                 auth_token: None,
                 cors_origin: None,
                 max_body_bytes: 1024 * 1024,

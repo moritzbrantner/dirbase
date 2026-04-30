@@ -103,6 +103,7 @@ you get:
 - If `./dirbase.conf` exists in the current working directory, `dirbase` loads it automatically using the same CLI-style arguments as the command line; explicit CLI arguments take precedence.
 - `--port <port>` overrides just the listen port while keeping the current bind address host.
 - `--log` enables request logging and `--logname <path>` selects the log output file (default `requests.log`).
+- `--xml` returns JSON response bodies as XML with `application/xml` content type.
 - `--readonly` disables mutation routes and only serves `GET` endpoints.
 - `--auth-token <token>` enables bearer-token auth for application routes.
 - `--cors-origin <origin>` enables explicit CORS for a single allowed origin.

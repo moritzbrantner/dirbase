@@ -34,6 +34,7 @@ use crate::{
     graphql::{graphql_get, graphql_post},
     http::html::{encode_path_segment, escape_html},
     http::overview,
+    http::response_format::response_format_middleware,
     mutation_service,
     query::filters::{
         filter_collection_refs, paginate_collection_refs, parse_collection_query_params,
@@ -109,6 +110,7 @@ pub fn build_router(state: AppState) -> Router {
     app = app.layer(middleware::from_fn_with_state(state.clone(), metrics_middleware));
     app = app.layer(middleware::from_fn_with_state(state.clone(), cors_middleware));
     app = app.layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
+    app = app.layer(middleware::from_fn_with_state(state.clone(), response_format_middleware));
     if state.config.enable_log {
         app = app.layer(middleware::from_fn_with_state(state.clone(), log_requests_middleware));
     }

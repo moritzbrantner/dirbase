@@ -417,7 +417,8 @@ mod tests {
     use super::*;
     use crate::{
         app::{
-            AppConfig, AppState, DataSource, GraphqlStore, HealthState, MetricsStore, SchemaStore,
+            AppConfig, AppState, DataSource, GraphqlStore, HealthState, MetricsStore,
+            ResponseFormat, SchemaStore,
         },
         schema::{ColumnSchema, DeclaredSchema, Schema, TableKind},
     };
@@ -434,6 +435,7 @@ mod tests {
             config: Arc::new(AppConfig {
                 readonly: false,
                 enable_log: false,
+                response_format: ResponseFormat::Json,
                 auth_token: None,
                 cors_origin: None,
                 max_body_bytes: 1024 * 1024,

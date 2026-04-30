@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use app::{AppConfig, AppState, HealthState, MetricsStore};
+use app::{AppConfig, AppState, HealthState, MetricsStore, ResponseFormat};
 use clap::{CommandFactory, Parser, parser::ValueSource};
 use tokio::sync::RwLock;
 
@@ -96,6 +96,8 @@ struct CliArgs {
     schema: Option<PathBuf>,
     #[arg(long, help = "Enable request logging.")]
     log: bool,
+    #[arg(long, help = "Return JSON response bodies as XML.")]
+    xml: bool,
     #[arg(long, help = "Write request logs to this file when --log is enabled.")]
     logname: Option<PathBuf>,
     #[arg(long, help = "Require this bearer token for application routes.")]
@@ -121,6 +123,7 @@ struct Cli {
     readonly: bool,
     schema: Option<PathBuf>,
     log: bool,
+    response_format: ResponseFormat,
     logname: PathBuf,
     auth_token: Option<String>,
     cors_origin: Option<String>,
@@ -204,6 +207,7 @@ async fn main() {
     let config = Arc::new(AppConfig {
         readonly: cli.readonly,
         enable_log: cli.log,
+        response_format: cli.response_format,
         auth_token: cli.auth_token.clone(),
         cors_origin: cli.cors_origin.clone(),
         max_body_bytes: cli.max_body_bytes,
@@ -370,6 +374,11 @@ fn resolve_cli(cli_matches: &clap::ArgMatches, config_matches: Option<&clap::Arg
         readonly: resolve_flag("readonly", cli_matches, config_matches),
         schema: resolve_value("schema", cli_matches, config_matches),
         log: resolve_flag("log", cli_matches, config_matches),
+        response_format: if resolve_flag("xml", cli_matches, config_matches) {
+            ResponseFormat::Xml
+        } else {
+            ResponseFormat::Json
+        },
         logname: resolve_value("logname", cli_matches, config_matches)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_LOGNAME)),
         auth_token: resolve_value("auth_token", cli_matches, config_matches),
@@ -695,6 +704,12 @@ mod tests {
     }
 
     #[test]
+    fn resolve_cli_loads_xml_from_config() {
+        let resolved = resolve_test_cli(&[], &["--xml"]);
+        assert_eq!(resolved.response_format, super::ResponseFormat::Xml);
+    }
+
+    #[test]
     fn resolve_cli_loads_logname_from_config() {
         let resolved = resolve_test_cli(&[], &["--logname", "dirbase.log"]);
         assert_eq!(resolved.logname, PathBuf::from("dirbase.log"));
@@ -785,6 +800,12 @@ mod tests {
     fn resolve_cli_command_line_logname_overrides_config_logname() {
         let resolved = resolve_test_cli(&["--logname", "cli.log"], &["--logname", "config.log"]);
         assert_eq!(resolved.logname, PathBuf::from("cli.log"));
+    }
+
+    #[test]
+    fn resolve_cli_command_line_xml_overrides_config_default() {
+        let resolved = resolve_test_cli(&["--xml"], &[]);
+        assert_eq!(resolved.response_format, super::ResponseFormat::Xml);
     }
 
     #[test]

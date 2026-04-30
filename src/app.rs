@@ -14,6 +14,13 @@ use crate::schema::{DeclaredSchema, DeclaredTableSchema, Schema, TableSchema, me
 use serde::Serialize;
 use serde_json::Value;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ResponseFormat {
+    #[default]
+    Json,
+    Xml,
+}
+
 #[derive(Clone)]
 pub enum DataSource {
     Folder(PathBuf),
@@ -58,6 +65,7 @@ pub struct GraphqlStore {
 pub struct AppConfig {
     pub readonly: bool,
     pub enable_log: bool,
+    pub response_format: ResponseFormat,
     pub auth_token: Option<String>,
     pub cors_origin: Option<String>,
     pub max_body_bytes: usize,
@@ -367,6 +375,7 @@ mod tests {
             config: Arc::new(AppConfig {
                 readonly: false,
                 enable_log: false,
+                response_format: ResponseFormat::Json,
                 auth_token: None,
                 cors_origin: None,
                 max_body_bytes: 1024 * 1024,
