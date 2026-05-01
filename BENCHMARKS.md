@@ -1,10 +1,12 @@
 # Benchmarks
 
-This document explains what `dirbase` should be compared with, what the current benchmark measures, and how to reproduce the results.
+This document explains what `dirbase` should be compared with, what the benchmark suite measures, which dimensions are still pending data, and how to reproduce the results.
 
 ## Summary
 
-The primary benchmark compares `dirbase` with `typicode/json-server`, because both tools turn JSON data into a local HTTP API with very little setup. The current benchmark uses a deterministic six-resource dataset with 92,252 total rows and measures item lookups, filters, text search, sorting, pagination, and composite query workloads.
+The primary benchmark compares `dirbase` with `typicode/json-server`, because both tools turn JSON data into a local HTTP API with very little setup. The current automated script uses a deterministic six-resource dataset with 92,252 total rows and measures item lookups, filters, text search, sorting, pagination, and composite query workloads.
+
+The benchmark scope is broader than read throughput alone. Every report should account for read paths, write paths, persistence correctness, startup behavior, memory, file watching, SSE latency, schema work, query correctness, and concurrent write safety. When a dimension has not been measured in a run, say `not measured` instead of omitting it.
 
 Run the benchmark locally with:
 
@@ -84,7 +86,7 @@ The generated data is written in two equivalent layouts:
 
 ## Current Scenarios
 
-The benchmark exercises:
+The automated benchmark currently exercises:
 
 1. Item lookups on `tickets` and `projects`
 2. Equality and range filters on `teams`, `projects`, and `deployments`
@@ -93,6 +95,23 @@ The benchmark exercises:
 5. Composite filter + sort + pagination workloads
 
 The script uses equivalent server-specific query syntax where the two tools differ. For example, `dirbase` uses `risk_score:gte=70`, while `json-server` uses `risk_score_gte=70`.
+
+## Benchmark Coverage
+
+Each benchmark report should include this coverage matrix. The current script fills the read-heavy rows and leaves the remaining rows marked `not measured` until dedicated scenarios are implemented.
+
+| Dimension | Current status | Required evidence |
+| --- | --- | --- |
+| Read latency and throughput | Measured | `autocannon` request rate, latency, errors, and non-2xx counts for item lookup, filter, text search, sort, pagination, and composite reads |
+| Write latency | Not measured | `POST`, `PUT`, `PATCH`, and `DELETE` latency and throughput against writable resources |
+| Persisted-write correctness | Not measured | Disk reads after mutation workloads proving the JSON files contain the expected rows and remain valid JSON |
+| Cold start time | Not measured | Time from process spawn to ready endpoint success across small, medium, and large datasets |
+| Memory usage | Not measured | Resident memory after startup and during sustained load for each dataset size |
+| File watcher latency | Not measured | Time from external file add, edit, delete, or rename to updated HTTP responses |
+| SSE event latency | Not measured | Time from filesystem change to `/events` notification delivery |
+| Schema inference and export time | Not measured | Duration for schema inference, `/schema` export, and schema persistence on representative datasets |
+| Query correctness | Not measured | Pairwise checks that equivalent `dirbase` and `json-server` requests return equivalent sorted payloads where feature parity exists |
+| Concurrent write safety | Not measured | Parallel mutation workloads followed by JSON parse checks and expected row-count checks |
 
 ## Methodology
 
@@ -144,20 +163,6 @@ The report paths are printed at the end of the run:
 - `benchmarks/results/benchmark-summary-<timestamp>.json`
 - `benchmarks/results/benchmark-report-<timestamp>.md`
 
-## Recommended Additions
-
-The existing benchmark is read-heavy. To strengthen future comparisons, add:
-
-- write latency for `POST`, `PUT`, `PATCH`, and `DELETE`
-- persisted-write verification after mutation workloads
-- cold start time for different dataset sizes
-- memory usage after startup and under sustained load
-- file add/edit/delete detection latency
-- SSE event latency from filesystem change to browser notification
-- schema inference/export time
-- correctness checks that equivalent queries return equivalent data
-- concurrent write tests that verify files remain valid JSON
-
 ## Presenting Results
 
 Use a short README summary and keep detailed tables in generated benchmark reports. A good public claim has this shape:
@@ -173,6 +178,7 @@ Keep the caveats explicit:
 
 - results are local machine measurements, not universal performance guarantees
 - benchmarked tools use different internals and query syntaxes
+- benchmark reports must mark unmeasured dimensions as `not measured`
 - `json-server` remains a good baseline for simple single-file fake REST APIs
 - Mockoon, Prism, WireMock, Postman, MSW, lowdb, and PocketBase solve overlapping but different problems
 

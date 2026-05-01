@@ -6,3 +6,14 @@ js/node_modules
 js/dist
 js/bin
 ui/node_modules
+
+# Generated test artifacts
+/ui/coverage/
+/ui/test-results/
+/ui/playwright-report/
+
+# Generated benchmark artifacts
+/benchmarks/.work/
+/benchmarks/results/*.json
+/benchmarks/results/*.md
+/benchmarks/results/suite-logs-*/
