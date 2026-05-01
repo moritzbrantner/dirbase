@@ -224,6 +224,132 @@ Table posts {
 }
 
 #[test]
+fn schema_xsd_overlay_merges_columns_keys_and_manual_relations() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("schema.xsd"),
+        r#"
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="users">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="user_id" type="xs:int"/>
+        <xs:element name="name" type="xs:string" minOccurs="0"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:key name="users_pk">
+      <xs:selector xpath="."/>
+      <xs:field xpath="user_id"/>
+    </xs:key>
+  </xs:element>
+  <xs:element name="posts">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id" type="xs:int"/>
+        <xs:element name="title" type="xs:string"/>
+        <xs:element name="author_ref" type="xs:int"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:key name="posts_pk">
+      <xs:selector xpath="."/>
+      <xs:field xpath="id"/>
+    </xs:key>
+    <xs:keyref name="posts_author_ref_fk" refer="users_pk">
+      <xs:selector xpath="."/>
+      <xs:field xpath="author_ref"/>
+    </xs:keyref>
+  </xs:element>
+</xs:schema>
+"#,
+    )
+    .expect("write schema xsd");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"user_id": 1, "name": "Ada"}
+]
+"#,
+    )
+    .expect("write users");
+    fs::write(
+        temp.path().join("posts.json"),
+        r#"[
+  {"id": 1, "title": "Hello", "author_ref": 1}
+]
+"#,
+    )
+    .expect("write posts");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    let schema_response = http_request(&bind_addr, "GET", "/schema", None);
+    assert!(schema_response.starts_with("HTTP/1.1 200 OK\r\n"), "{schema_response}");
+    let schema_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&schema_response)).expect("schema json");
+    assert_eq!(schema_payload["tables"]["users"]["primary_key"], "user_id");
+    assert_eq!(schema_payload["tables"]["users"]["columns"]["name"]["nullable"], true);
+    assert_eq!(
+        schema_payload["tables"]["posts"]["foreign_keys"]["author_ref"]["target_column"],
+        "user_id"
+    );
+
+    let embed_response = http_request(&bind_addr, "GET", "/posts?embed=author_ref", None);
+    assert!(embed_response.starts_with("HTTP/1.1 200 OK\r\n"), "{embed_response}");
+    let embed_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&embed_response)).expect("embed json");
+    assert_eq!(embed_payload[0]["author_ref"]["name"], "Ada");
+}
+
+#[test]
+fn schema_xsd_takes_precedence_over_schema_dbml() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("schema.xsd"),
+        r#"
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="users">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="user_id" type="xs:int"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:key name="users_pk">
+      <xs:selector xpath="."/>
+      <xs:field xpath="user_id"/>
+    </xs:key>
+  </xs:element>
+</xs:schema>
+"#,
+    )
+    .expect("write schema xsd");
+    fs::write(
+        temp.path().join("schema.dbml"),
+        r#"
+Table users {
+  id int [pk]
+}
+"#,
+    )
+    .expect("write schema dbml");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"user_id": 1, "id": 10}
+]
+"#,
+    )
+    .expect("write users");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    let schema_response = http_request(&bind_addr, "GET", "/schema", None);
+    assert!(schema_response.starts_with("HTTP/1.1 200 OK\r\n"), "{schema_response}");
+    let schema_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&schema_response)).expect("schema json");
+    assert_eq!(schema_payload["tables"]["users"]["primary_key"], "user_id");
+}
+
+#[test]
 fn schema_infer_endpoint_writes_fresh_inferred_schema_json() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(

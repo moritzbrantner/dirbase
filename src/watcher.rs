@@ -235,7 +235,7 @@ fn is_relevant_folder_watch_path(root: &Path, path: &Path) -> bool {
     let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    if matches!(file_name, "schema.json" | "schema.dbml") {
+    if matches!(file_name, "schema.json" | "schema.xsd" | "schema.dbml") {
         return true;
     }
 
@@ -309,6 +309,18 @@ mod tests {
         let event = Event {
             kind: EventKind::Modify(ModifyKind::Data(DataChange::Content)),
             paths: vec![PathBuf::from("/tmp/data/users.json")],
+            attrs: Default::default(),
+        };
+
+        assert!(should_process_watch_event(&data_source, &event));
+    }
+
+    #[test]
+    fn watcher_processes_data_changes_for_schema_xsd() {
+        let data_source = DataSource::Folder(PathBuf::from("/tmp/data"));
+        let event = Event {
+            kind: EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            paths: vec![PathBuf::from("/tmp/data/schema.xsd")],
             attrs: Default::default(),
         };
 

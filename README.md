@@ -110,9 +110,9 @@ you get:
 - `--max-body-bytes`, `--max-per-page`, `--max-sql-scan-rows`, and `--max-sql-selected-rows` configure request and query limits.
 - `GET /healthz`, `GET /readyz`, and `GET /metrics` expose operational status and counters.
 - Schema metadata is inferred automatically for array-of-object resources. Object tables prefer `id` as the primary key and also detect `<table>_id` or `<singular_table>_id` when those columns are unique and present on every row. Foreign keys are inferred conservatively from `*_id` columns.
-- Declared schema overlays are enabled automatically when `{folder}/schema.json` or `{folder}/schema.dbml` exists.
-- Use `--schema <path>` to load a custom `.dbml` or `.json` schema file.
-- Schema auto-discovery prefers `schema.json` over `schema.dbml`.
+- Declared schema overlays are enabled automatically when `{folder}/schema.json`, `{folder}/schema.xsd`, or `{folder}/schema.dbml` exists.
+- Use `--schema <path>` to load a custom `.json`, `.xsd`, or `.dbml` schema file.
+- Schema auto-discovery prefers `schema.json`, then `schema.xsd`, then `schema.dbml`.
 - Declared schema overlays are permissive: undeclared resources and undeclared columns are still allowed, while declared columns, primary keys, and foreign keys override inferred metadata.
 - GraphQL remains read-only, but now also exposes query-capable collection fields such as `usersQuery(filter:, sort:, page:, perPage:)`.
 
@@ -155,8 +155,8 @@ dirbase ./data --readonly
 # Auth + explicit CORS
 dirbase ./data --auth-token secret --cors-origin http://localhost:3000
 
-# Explicit schema file (if not using ./data/schema.dbml)
-dirbase ./data --schema ./schema.dbml
+# Explicit schema file (if not using ./data/schema.xsd)
+dirbase ./data --schema ./schema.xsd
 
 # Serve a single json-server-style database file
 dirbase ./db.json --bind 127.0.0.1:4444
@@ -180,11 +180,12 @@ dirbase --bind 127.0.0.1:5555
 
 ## Schema files
 
-`dirbase` supports both `schema.json` and `schema.dbml`.
+`dirbase` supports `schema.json`, `schema.xsd`, and `schema.dbml`.
 
 - `schema.json` is the editable, preferred format.
+- `schema.xsd` can declare tables, columns, primary keys, and keyref-backed foreign keys with XML Schema elements.
 - `schema.dbml` is still supported for compatibility.
-- If both files exist next to the data source, `schema.json` wins.
+- If multiple schema files exist next to the data source, `schema.json` wins, then `schema.xsd`, then `schema.dbml`.
 - `GET /schema` always shows the merged effective schema.
 - `POST /schema` writes the merged effective schema back to `schema.json`.
 - `PUT /schema` writes a declared schema overlay to `schema.json`.
@@ -219,6 +220,40 @@ This example connects `posts.author_ref` to `users.user_id`, even though the nam
 }
 ```
 
+### XSD example
+
+The same relationship can be declared with XML Schema `key` and `keyref` constraints:
+
+```xml
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="users">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="user_id" type="xs:int"/>
+        <xs:element name="name" type="xs:string" minOccurs="0"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:key name="users_pk">
+      <xs:selector xpath="."/>
+      <xs:field xpath="user_id"/>
+    </xs:key>
+  </xs:element>
+
+  <xs:element name="posts">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="id" type="xs:int"/>
+        <xs:element name="author_ref" type="xs:int"/>
+      </xs:sequence>
+    </xs:complexType>
+    <xs:keyref name="posts_author_ref_fk" refer="users_pk">
+      <xs:selector xpath="."/>
+      <xs:field xpath="author_ref"/>
+    </xs:keyref>
+  </xs:element>
+</xs:schema>
+```
+
 ### DBML example
 
 The same relationship can be declared in DBML:
@@ -238,7 +273,7 @@ Table posts {
 Ref: posts.author_ref > users.user_id
 ```
 
-With either format:
+With any schema format:
 
 - `GET /posts?embed=author_ref` replaces the foreign-key value with the matching user row
 - `GET /users/1` resolves against `user_id` when that is the declared primary key

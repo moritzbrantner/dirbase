@@ -40,7 +40,7 @@ Examples:
   dirbase ./db.json --bind 127.0.0.1:4444
   dirbase --folder ./data --port 5555
   dirbase --folder ./data --readonly
-  dirbase --folder ./data --schema ./schema.dbml
+  dirbase --folder ./data --schema ./schema.xsd
 
 Config file:
   If ./dirbase.conf exists, dirbase loads it automatically using the same CLI-style arguments.
@@ -91,7 +91,7 @@ struct CliArgs {
     readonly: bool,
     #[arg(
         long,
-        help = "Use an explicit schema file instead of auto-detecting schema.json or schema.dbml."
+        help = "Use an explicit schema file instead of auto-detecting schema.json, schema.xsd, or schema.dbml."
     )]
     schema: Option<PathBuf>,
     #[arg(long, help = "Enable request logging.")]
