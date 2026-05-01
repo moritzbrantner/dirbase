@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+#[path = "test_support/mod.rs"]
 mod support;
 
 use support::{ChildGuard, http_request, parse_http_body, wait_for_server};

@@ -33,7 +33,6 @@ SOURCE_GLOBS = (
 )
 TEST_GLOBS = (
     "src/**/*.rs",
-    "tests/**/*.rs",
     "ui/src/**/*.test.ts",
     "ui/src/**/*.test.tsx",
     "ui/e2e/**/*.spec.ts",
@@ -113,6 +112,9 @@ def discover_public_symbols() -> dict[str, set[str]]:
     )
 
     for path in iter_files(SOURCE_GLOBS):
+        if path.name.endswith("_test.rs") or "test_support" in path.parts:
+            continue
+
         relative = relpath(path)
         try:
             lines = path.read_text(encoding="utf-8").splitlines()

@@ -5,35 +5,35 @@
     {
       "id": "rust-cli-config",
       "name": "Rust CLI and Config",
-      "owner_paths": ["src/main.rs", "tests/config_file.rs", "tests/startup_output.rs"],
+      "owner_paths": ["src/main.rs", "src/main_config_file_test.rs", "src/main_startup_output_test.rs"],
       "risk": "high",
       "entries": ["rust-cli-config"]
     },
     {
       "id": "rust-http-middleware",
       "name": "Rust HTTP Middleware",
-      "owner_paths": ["src/http/routes.rs", "src/http/response_format.rs", "tests/routes_and_logging.rs", "tests/xml_mode.rs"],
+      "owner_paths": ["src/http/routes.rs", "src/http/response_format.rs", "src/http/routes_and_logging_test.rs", "src/http/xml_mode_test.rs"],
       "risk": "critical",
       "entries": ["rust-http-middleware"]
     },
     {
       "id": "rust-rest-read",
       "name": "Rust REST Reads",
-      "owner_paths": ["src/http/routes.rs", "tests/retrieval_and_query_params.rs", "tests/root_html_overview.rs", "tests/overview_endpoints.rs"],
+      "owner_paths": ["src/http/routes.rs", "src/http/retrieval_and_query_params_test.rs", "src/http/root_html_overview_test.rs", "src/http/overview_endpoints_test.rs"],
       "risk": "critical",
       "entries": ["rust-rest-read"]
     },
     {
       "id": "rust-rest-query",
       "name": "Rust REST Query Parameters",
-      "owner_paths": ["src/query/filters.rs", "src/http/routes.rs", "tests/filter_collection_query.rs"],
+      "owner_paths": ["src/query/filters.rs", "src/http/routes.rs", "src/query/filter_collection_query_test.rs"],
       "risk": "critical",
       "entries": ["rust-rest-query"]
     },
     {
       "id": "rust-rest-mutation",
       "name": "Rust REST Mutations",
-      "owner_paths": ["src/mutation_service.rs", "src/http/routes.rs", "tests/crud_operations.rs", "tests/file_input_mode.rs"],
+      "owner_paths": ["src/mutation_service.rs", "src/http/routes.rs", "src/mutation_service_test.rs", "src/storage/file_input_mode_test.rs"],
       "risk": "critical",
       "entries": ["rust-rest-mutation"]
     },
@@ -47,28 +47,28 @@
     {
       "id": "rust-schema",
       "name": "Rust Schema",
-      "owner_paths": ["src/schema.rs", "tests/schema_endpoints.rs"],
+      "owner_paths": ["src/schema.rs", "src/schema_endpoints_test.rs"],
       "risk": "critical",
       "entries": ["rust-schema"]
     },
     {
       "id": "rust-graphql",
       "name": "Rust GraphQL",
-      "owner_paths": ["src/graphql/mod.rs", "tests/graphql_queries.rs"],
+      "owner_paths": ["src/graphql/mod.rs", "src/graphql/graphql_queries_test.rs"],
       "risk": "high",
       "entries": ["rust-graphql"]
     },
     {
       "id": "rust-sql",
       "name": "Rust SQL",
-      "owner_paths": ["src/sql/mod.rs", "tests/sql_query.rs", "tests/sql_and_export_endpoints.rs"],
+      "owner_paths": ["src/sql/mod.rs", "src/sql/sql_query_test.rs", "src/sql/sql_and_export_endpoints_test.rs"],
       "risk": "high",
       "entries": ["rust-sql"]
     },
     {
       "id": "rust-watcher-sse",
       "name": "Rust Watcher and SSE",
-      "owner_paths": ["src/watcher.rs", "tests/watcher_behavior.rs", "tests/routes_and_logging.rs"],
+      "owner_paths": ["src/watcher.rs", "src/watcher_behavior_test.rs", "src/http/routes_and_logging_test.rs"],
       "risk": "high",
       "entries": ["rust-watcher-sse"]
     },
@@ -155,13 +155,13 @@
         },
         {
           "test": "starts_from_dirbase_conf_in_current_directory",
-          "path": "tests/config_file.rs",
+          "path": "src/main_config_file_test.rs",
           "test_type": "integration",
           "asserts": ["server starts from dirbase.conf"]
         },
         {
           "test": "startup_prints_clickable_server_url_and_summary",
-          "path": "tests/startup_output.rs",
+          "path": "src/main_startup_output_test.rs",
           "test_type": "integration",
           "asserts": ["startup output includes browser URL and source metadata"]
         }
@@ -208,13 +208,13 @@
       "covered_by": [
         {
           "test": "auth_and_ops_endpoints_respect_bearer_token_and_cors",
-          "path": "tests/routes_and_logging.rs",
+          "path": "src/http/routes_and_logging_test.rs",
           "test_type": "integration",
           "asserts": ["protected routes reject missing tokens and accept bearer tokens"]
         },
         {
           "test": "cors_preflight_respects_allowed_and_disallowed_origins",
-          "path": "tests/routes_and_logging.rs",
+          "path": "src/http/routes_and_logging_test.rs",
           "test_type": "integration",
           "asserts": ["CORS preflight and response headers are emitted"]
         },
@@ -226,7 +226,7 @@
         },
         {
           "test": "xml_mode_returns_collection_responses_as_xml",
-          "path": "tests/xml_mode.rs",
+          "path": "src/http/xml_mode_test.rs",
           "test_type": "integration",
           "asserts": ["JSON response bodies can be converted to XML"]
         }
@@ -273,25 +273,25 @@
       "covered_by": [
         {
           "test": "retrieval_supports_string_ids_and_returns_404_for_missing_item",
-          "path": "tests/retrieval_and_query_params.rs",
+          "path": "src/http/retrieval_and_query_params_test.rs",
           "test_type": "integration",
           "asserts": ["string ids resolve", "missing item returns 404"]
         },
         {
           "test": "retrieval_returns_400_for_invalid_resource_name",
-          "path": "tests/retrieval_and_query_params.rs",
+          "path": "src/http/retrieval_and_query_params_test.rs",
           "test_type": "integration",
           "asserts": ["invalid resource name is rejected"]
         },
         {
           "test": "overview_json_returns_machine_readable_metadata_for_folder_mode",
-          "path": "tests/overview_endpoints.rs",
+          "path": "src/http/overview_endpoints_test.rs",
           "test_type": "integration",
           "asserts": ["overview metadata describes resources"]
         },
         {
           "test": "root_serves_html_overview_for_browser_requests",
-          "path": "tests/root_html_overview.rs",
+          "path": "src/http/root_html_overview_test.rs",
           "test_type": "integration",
           "asserts": ["browser root renders HTML overview"]
         }
@@ -349,13 +349,13 @@
         },
         {
           "test": "collection_supports_operator_filters_nested_fields_desc_sort_and_pagination_keywords",
-          "path": "tests/filter_collection_query.rs",
+          "path": "src/query/filter_collection_query_test.rs",
           "test_type": "integration",
           "asserts": ["HTTP query path applies operators, nested fields, sort, and pagination"]
         },
         {
           "test": "query_parameters_support_embed_for_foreign_keys",
-          "path": "tests/retrieval_and_query_params.rs",
+          "path": "src/http/retrieval_and_query_params_test.rs",
           "test_type": "integration",
           "asserts": ["embed replaces foreign key values with related rows"]
         }
@@ -402,19 +402,19 @@
       "covered_by": [
         {
           "test": "school_examples_support_students_crud_end_to_end",
-          "path": "tests/crud_operations.rs",
+          "path": "src/mutation_service_test.rs",
           "test_type": "integration",
           "asserts": ["CRUD routes persist changes end to end"]
         },
         {
           "test": "concurrent_posts_to_same_collection_do_not_lose_writes",
-          "path": "tests/crud_operations.rs",
+          "path": "src/mutation_service_test.rs",
           "test_type": "integration",
           "asserts": ["parallel POST requests preserve all rows"]
         },
         {
           "test": "concurrent_update_and_delete_requests_leave_valid_collection_state",
-          "path": "tests/crud_operations.rs",
+          "path": "src/mutation_service_test.rs",
           "test_type": "integration",
           "asserts": ["parallel update/delete leaves valid JSON"]
         },
@@ -571,13 +571,13 @@
         },
         {
           "test": "schema_json_takes_precedence_over_schema_dbml",
-          "path": "tests/schema_endpoints.rs",
+          "path": "src/schema_endpoints_test.rs",
           "test_type": "integration",
           "asserts": ["schema auto-discovery precedence prefers schema.json"]
         },
         {
           "test": "schema_post_preserves_suppressed_inferred_relations_across_reload",
-          "path": "tests/schema_endpoints.rs",
+          "path": "src/schema_endpoints_test.rs",
           "test_type": "integration",
           "asserts": ["suppressed inferred relations survive persistence and reload"]
         }
@@ -623,31 +623,31 @@
       "covered_by": [
         {
           "test": "graphql_executes_basic_queries_and_serves_graphiql",
-          "path": "tests/graphql_queries.rs",
+          "path": "src/graphql/graphql_queries_test.rs",
           "test_type": "integration",
           "asserts": ["GET /graphql serves GraphiQL to browsers"]
         },
         {
           "test": "graphql_executes_basic_queries_and_serves_graphiql",
-          "path": "tests/graphql_queries.rs",
+          "path": "src/graphql/graphql_queries_test.rs",
           "test_type": "integration",
           "asserts": ["POST /graphql returns collections and item lookups"]
         },
         {
           "test": "graphql_collection_query_fields_support_filter_sort_and_pagination",
-          "path": "tests/graphql_queries.rs",
+          "path": "src/graphql/graphql_queries_test.rs",
           "test_type": "integration",
           "asserts": ["query fields support filter, sort, and pagination"]
         },
         {
           "test": "graphql_exposes_derived_many_to_many_fields_and_deduplicates_results",
-          "path": "tests/graphql_queries.rs",
+          "path": "src/graphql/graphql_queries_test.rs",
           "test_type": "integration",
           "asserts": ["many-to-many relation fields resolve target rows"]
         },
         {
           "test": "graphql_sanitizes_resource_and_field_names",
-          "path": "tests/graphql_queries.rs",
+          "path": "src/graphql/graphql_queries_test.rs",
           "test_type": "integration",
           "asserts": ["invalid GraphQL names are normalized"]
         }
@@ -695,25 +695,25 @@
       "covered_by": [
         {
           "test": "sql_happy_paths_cover_select_projection_and_pagination",
-          "path": "tests/sql_and_export_endpoints.rs",
+          "path": "src/sql/sql_and_export_endpoints_test.rs",
           "test_type": "integration",
           "asserts": ["SQL endpoint handles projection, where, order, limit, and offset"]
         },
         {
           "test": "sql_inner_join_supports_schema_backed_relations",
-          "path": "tests/sql_and_export_endpoints.rs",
+          "path": "src/sql/sql_and_export_endpoints_test.rs",
           "test_type": "integration",
           "asserts": ["schema-backed INNER JOIN materializes rows"]
         },
         {
           "test": "sql_error_paths_cover_non_select_unsupported_and_unknowns",
-          "path": "tests/sql_and_export_endpoints.rs",
+          "path": "src/sql/sql_and_export_endpoints_test.rs",
           "test_type": "integration",
           "asserts": ["unsupported syntax and invalid fields return errors"]
         },
         {
           "test": "export_sql_respects_schema_when_present",
-          "path": "tests/sql_and_export_endpoints.rs",
+          "path": "src/sql/sql_and_export_endpoints_test.rs",
           "test_type": "integration",
           "asserts": ["SQL export renders dialect-specific output"]
         }
@@ -778,7 +778,7 @@
         },
         {
           "test": "events_endpoint_streams_resource_and_schema_changes",
-          "path": "tests/routes_and_logging.rs",
+          "path": "src/http/routes_and_logging_test.rs",
           "test_type": "integration",
           "asserts": ["SSE stream emits server events"]
         }
@@ -844,7 +844,7 @@
         },
         {
           "test": "query_parameters_support_embed_for_foreign_keys",
-          "path": "tests/retrieval_and_query_params.rs",
+          "path": "src/http/retrieval_and_query_params_test.rs",
           "test_type": "integration",
           "asserts": ["relation lookup behavior resolves embedded rows through the public REST interface"]
         }

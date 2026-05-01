@@ -1,5 +1,6 @@
 use std::fs;
 
+#[path = "../test_support/mod.rs"]
 mod support;
 
 use support::{http_request_with_headers, spawn_folder_server, spawn_folder_server_with_args};

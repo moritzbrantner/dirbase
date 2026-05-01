@@ -28,3 +28,71 @@ uuid = "1.16"
 fake = "2.10"
 tempfile = "3.19"
 tower = { version = "0.5", features = ["util"] }
+
+[[test]]
+name = "cli_help"
+path = "src/main_cli_help_test.rs"
+
+[[test]]
+name = "config_file"
+path = "src/main_config_file_test.rs"
+
+[[test]]
+name = "crud_operations"
+path = "src/mutation_service_test.rs"
+
+[[test]]
+name = "empty_folder_overview"
+path = "src/http/empty_folder_overview_test.rs"
+
+[[test]]
+name = "file_input_mode"
+path = "src/storage/file_input_mode_test.rs"
+
+[[test]]
+name = "filter_collection_query"
+path = "src/query/filter_collection_query_test.rs"
+
+[[test]]
+name = "graphql_queries"
+path = "src/graphql/graphql_queries_test.rs"
+
+[[test]]
+name = "overview_endpoints"
+path = "src/http/overview_endpoints_test.rs"
+
+[[test]]
+name = "retrieval_and_query_params"
+path = "src/http/retrieval_and_query_params_test.rs"
+
+[[test]]
+name = "root_html_overview"
+path = "src/http/root_html_overview_test.rs"
+
+[[test]]
+name = "routes_and_logging"
+path = "src/http/routes_and_logging_test.rs"
+
+[[test]]
+name = "schema_endpoints"
+path = "src/schema_endpoints_test.rs"
+
+[[test]]
+name = "sql_and_export_endpoints"
+path = "src/sql/sql_and_export_endpoints_test.rs"
+
+[[test]]
+name = "sql_query"
+path = "src/sql/sql_query_test.rs"
+
+[[test]]
+name = "startup_output"
+path = "src/main_startup_output_test.rs"
+
+[[test]]
+name = "watcher_behavior"
+path = "src/watcher_behavior_test.rs"
+
+[[test]]
+name = "xml_mode"
+path = "src/http/xml_mode_test.rs"

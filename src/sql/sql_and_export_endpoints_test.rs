@@ -1,3 +1,4 @@
+#[path = "../test_support/mod.rs"]
 mod support;
 
 use support::{ChildGuard, http_get, http_post_json, parse_http_body};

@@ -1,3 +1,4 @@
+#[path = "test_support/mod.rs"]
 mod support;
 
 use std::{

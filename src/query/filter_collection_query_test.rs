@@ -1,5 +1,6 @@
 use fake::{Fake, faker::name::en::Name};
 
+#[path = "../test_support/mod.rs"]
 mod support;
 
 use support::{ChildGuard, http_get, parse_http_body};
