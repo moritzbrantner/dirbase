@@ -1,4 +1,9 @@
-use std::{fs, time::Duration};
+use std::{
+    fs,
+    sync::{Arc, Barrier},
+    thread,
+    time::Duration,
+};
 
 mod support;
 
@@ -109,6 +114,76 @@ fn file_input_mode_persists_collection_and_object_mutations() {
                 {"id": 2, "name": "Bobby", "department": "engineering", "role": "admin"}
             ],
             "settings": {"theme": "light", "locale": "de", "timezone": "UTC"}
+        })
+    );
+}
+
+#[test]
+fn file_input_mode_concurrent_writes_to_different_resources_are_not_lost() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let db_path = temp.path().join("db.json");
+    fs::write(
+        &db_path,
+        r#"{
+  "users": [
+    {"id": 1, "name": "Ada"}
+  ],
+  "posts": [
+    {"id": 10, "title": "Hello"}
+  ],
+  "settings": {"theme": "dark"}
+}
+"#,
+    )
+    .expect("write db file");
+
+    let (_child, bind_addr) = spawn_file_server(&db_path);
+    wait_for_server(&bind_addr, Duration::from_secs(5));
+
+    let barrier = Arc::new(Barrier::new(4));
+    let users_addr = bind_addr.clone();
+    let users_barrier = barrier.clone();
+    let users_handle = thread::spawn(move || {
+        users_barrier.wait();
+        http_request(&users_addr, "POST", "/users", Some(r#"{"name":"Grace"}"#))
+    });
+
+    let posts_addr = bind_addr.clone();
+    let posts_barrier = barrier.clone();
+    let posts_handle = thread::spawn(move || {
+        posts_barrier.wait();
+        http_request(&posts_addr, "PATCH", "/posts/10", Some(r#"{"status":"published"}"#))
+    });
+
+    let settings_addr = bind_addr.clone();
+    let settings_barrier = barrier.clone();
+    let settings_handle = thread::spawn(move || {
+        settings_barrier.wait();
+        http_request(&settings_addr, "PATCH", "/settings", Some(r#"{"locale":"en"}"#))
+    });
+
+    barrier.wait();
+    let users_response = users_handle.join().expect("join users request");
+    let posts_response = posts_handle.join().expect("join posts request");
+    let settings_response = settings_handle.join().expect("join settings request");
+
+    assert!(users_response.starts_with("HTTP/1.1 201 Created\r\n"), "{users_response}");
+    assert!(posts_response.starts_with("HTTP/1.1 200 OK\r\n"), "{posts_response}");
+    assert!(settings_response.starts_with("HTTP/1.1 200 OK\r\n"), "{settings_response}");
+
+    let final_db: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&db_path).expect("read db")).expect("db json");
+    assert_eq!(
+        final_db,
+        serde_json::json!({
+            "users": [
+                {"id": 1, "name": "Ada"},
+                {"id": 2, "name": "Grace"}
+            ],
+            "posts": [
+                {"id": 10, "title": "Hello", "status": "published"}
+            ],
+            "settings": {"theme": "dark", "locale": "en"}
         })
     );
 }

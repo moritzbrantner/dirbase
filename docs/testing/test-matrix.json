@@ -1,0 +1,1358 @@
+{
+  "version": 1,
+  "generated_at": null,
+  "areas": [
+    {
+      "id": "rust-cli-config",
+      "name": "Rust CLI and Config",
+      "owner_paths": ["src/main.rs", "tests/config_file.rs", "tests/startup_output.rs"],
+      "risk": "high",
+      "entries": ["rust-cli-config"]
+    },
+    {
+      "id": "rust-http-middleware",
+      "name": "Rust HTTP Middleware",
+      "owner_paths": ["src/http/routes.rs", "src/http/response_format.rs", "tests/routes_and_logging.rs", "tests/xml_mode.rs"],
+      "risk": "critical",
+      "entries": ["rust-http-middleware"]
+    },
+    {
+      "id": "rust-rest-read",
+      "name": "Rust REST Reads",
+      "owner_paths": ["src/http/routes.rs", "tests/retrieval_and_query_params.rs", "tests/root_html_overview.rs", "tests/overview_endpoints.rs"],
+      "risk": "critical",
+      "entries": ["rust-rest-read"]
+    },
+    {
+      "id": "rust-rest-query",
+      "name": "Rust REST Query Parameters",
+      "owner_paths": ["src/query/filters.rs", "src/http/routes.rs", "tests/filter_collection_query.rs"],
+      "risk": "critical",
+      "entries": ["rust-rest-query"]
+    },
+    {
+      "id": "rust-rest-mutation",
+      "name": "Rust REST Mutations",
+      "owner_paths": ["src/mutation_service.rs", "src/http/routes.rs", "tests/crud_operations.rs", "tests/file_input_mode.rs"],
+      "risk": "critical",
+      "entries": ["rust-rest-mutation"]
+    },
+    {
+      "id": "rust-storage",
+      "name": "Rust Storage",
+      "owner_paths": ["src/storage.rs", "src/storage/io.rs", "src/storage/index.rs", "src/storage/validation.rs"],
+      "risk": "critical",
+      "entries": ["rust-storage"]
+    },
+    {
+      "id": "rust-schema",
+      "name": "Rust Schema",
+      "owner_paths": ["src/schema.rs", "tests/schema_endpoints.rs"],
+      "risk": "critical",
+      "entries": ["rust-schema"]
+    },
+    {
+      "id": "rust-graphql",
+      "name": "Rust GraphQL",
+      "owner_paths": ["src/graphql/mod.rs", "tests/graphql_queries.rs"],
+      "risk": "high",
+      "entries": ["rust-graphql"]
+    },
+    {
+      "id": "rust-sql",
+      "name": "Rust SQL",
+      "owner_paths": ["src/sql/mod.rs", "tests/sql_query.rs", "tests/sql_and_export_endpoints.rs"],
+      "risk": "high",
+      "entries": ["rust-sql"]
+    },
+    {
+      "id": "rust-watcher-sse",
+      "name": "Rust Watcher and SSE",
+      "owner_paths": ["src/watcher.rs", "tests/watcher_behavior.rs", "tests/routes_and_logging.rs"],
+      "risk": "high",
+      "entries": ["rust-watcher-sse"]
+    },
+    {
+      "id": "rust-app-state",
+      "name": "Rust App State",
+      "owner_paths": ["src/app.rs", "src/error.rs", "src/relations.rs"],
+      "risk": "high",
+      "entries": ["rust-app-state"]
+    },
+    {
+      "id": "ui-url-api",
+      "name": "UI URL State and API Client",
+      "owner_paths": ["ui/src/urlState.ts", "ui/src/api.ts", "ui/src/helpers.ts"],
+      "risk": "high",
+      "entries": ["ui-url-api"]
+    },
+    {
+      "id": "ui-overview-explorer",
+      "name": "UI Overview Explorer",
+      "owner_paths": ["ui/src/overview/explorer.tsx", "ui/src/overview/shared.tsx", "ui/src/overview/overviewAppUtils.ts"],
+      "risk": "high",
+      "entries": ["ui-overview-explorer"]
+    },
+    {
+      "id": "ui-mutations",
+      "name": "UI Mutations",
+      "owner_paths": ["ui/src/overview/inspector.tsx", "ui/src/overviewUtils.ts"],
+      "risk": "critical",
+      "entries": ["ui-mutations"]
+    },
+    {
+      "id": "ui-schema-workspace",
+      "name": "UI Schema Workspace",
+      "owner_paths": ["ui/src/schemaWorkspace.ts", "ui/src/schemaEditor.ts", "ui/src/overview/schema"],
+      "risk": "high",
+      "entries": ["ui-schema-workspace"]
+    },
+    {
+      "id": "ui-live-updates",
+      "name": "UI Live Updates",
+      "owner_paths": ["ui/src/overview/useOverviewLiveUpdates.ts", "ui/src/overview/queryClient.ts"],
+      "risk": "high",
+      "entries": ["ui-live-updates"]
+    },
+    {
+      "id": "ui-e2e-workflows",
+      "name": "UI End-to-End Workflows",
+      "owner_paths": ["ui/e2e/overview.spec.ts", "ui/e2e/schema.spec.ts"],
+      "risk": "critical",
+      "entries": ["ui-e2e-workflows"]
+    },
+    {
+      "id": "js-wrapper",
+      "name": "JavaScript Wrapper",
+      "owner_paths": ["js/src/index.ts", "js/src/cli.ts", "js/src/index.test.ts"],
+      "risk": "medium",
+      "entries": ["js-wrapper"]
+    }
+  ],
+  "entries": [
+    {
+      "id": "rust-cli-config",
+      "area": "rust-cli-config",
+      "language": "rust",
+      "kind": "interface",
+      "symbol": "CLI resolution and startup",
+      "module": "src/main.rs",
+      "interface": "dirbase CLI arguments, dirbase.conf, startup summary",
+      "risk": "high",
+      "covered_symbols": ["load_cli", "parse_config_args", "resolve_cli", "resolve_bind_addr", "resolve_data_source_args", "browser_url_for", "print_startup_summary"],
+      "covered_by": [
+        {
+          "test": "config_parser_supports_quotes_comments_and_escapes",
+          "path": "src/main.rs",
+          "test_type": "unit",
+          "asserts": ["config parser handles comments, quotes, and escapes"]
+        },
+        {
+          "test": "resolve_cli_prefers_command_line_values_over_config",
+          "path": "src/main.rs",
+          "test_type": "unit",
+          "asserts": ["CLI values override config values"]
+        },
+        {
+          "test": "starts_from_dirbase_conf_in_current_directory",
+          "path": "tests/config_file.rs",
+          "test_type": "integration",
+          "asserts": ["server starts from dirbase.conf"]
+        },
+        {
+          "test": "startup_prints_clickable_server_url_and_summary",
+          "path": "tests/startup_output.rs",
+          "test_type": "integration",
+          "asserts": ["startup output includes browser URL and source metadata"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "cli/config source",
+          "covered_values": ["positional path", "--folder", "--file", "--bind", "--port", "--readonly", "--schema", "--xml", "--auth-token", "--cors-origin", "limits"],
+          "missing_values": ["malformed config file integration failure mode"]
+        },
+        {
+          "name": "bind address",
+          "covered_values": ["specific IPv4", "unspecified IPv4", "unspecified IPv6", "port-only override"],
+          "missing_values": []
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["direct CLI args", "config file defaults", "command-line override precedence", "startup summary rendering"]
+        },
+        "exceptional": {
+          "status": "partial",
+          "cases": ["config parser rejects invalid tokenization through unit coverage"],
+          "missing_cases": ["end-to-end malformed config file process exit assertion"]
+        },
+        "concurrency": {
+          "status": "not_applicable",
+          "cases": []
+        }
+      },
+      "notes": "This row tracks the public CLI behavior rather than every private CLI helper."
+    },
+    {
+      "id": "rust-http-middleware",
+      "area": "rust-http-middleware",
+      "language": "rust",
+      "kind": "interface",
+      "symbol": "HTTP middleware stack",
+      "module": "src/http/routes.rs",
+      "interface": "auth, CORS, logging, metrics, XML format, health endpoints",
+      "risk": "critical",
+      "covered_symbols": ["build_router", "auth_middleware", "cors_middleware", "metrics_middleware", "log_requests_middleware", "response_format_middleware", "metrics", "healthz", "readyz"],
+      "covered_by": [
+        {
+          "test": "auth_and_ops_endpoints_respect_bearer_token_and_cors",
+          "path": "tests/routes_and_logging.rs",
+          "test_type": "integration",
+          "asserts": ["protected routes reject missing tokens and accept bearer tokens"]
+        },
+        {
+          "test": "cors_preflight_respects_allowed_and_disallowed_origins",
+          "path": "tests/routes_and_logging.rs",
+          "test_type": "integration",
+          "asserts": ["CORS preflight and response headers are emitted"]
+        },
+        {
+          "test": "metrics_store_render_prometheus_contains_all_metrics",
+          "path": "src/app.rs",
+          "test_type": "unit",
+          "asserts": ["Prometheus counters include requests and errors"]
+        },
+        {
+          "test": "xml_mode_returns_collection_responses_as_xml",
+          "path": "tests/xml_mode.rs",
+          "test_type": "integration",
+          "asserts": ["JSON response bodies can be converted to XML"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "request headers",
+          "covered_values": ["Authorization bearer", "Origin", "Accept application/xml", "Content-Type JSON"],
+          "missing_values": ["multiple Accept values with XML quality factors"]
+        },
+        {
+          "name": "server config",
+          "covered_values": ["readonly false", "readonly true", "auth token enabled", "CORS origin enabled", "request logging enabled"],
+          "missing_values": ["custom body limit rejection row should stay visible"]
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["authorized request", "CORS preflight", "metrics rendering", "health/ready JSON", "XML conversion"]
+        },
+        "exceptional": {
+          "status": "partial",
+          "cases": ["missing/invalid auth token", "error responses counted", "XML scalar and invalid XML names"],
+          "missing_cases": ["body limit rejection documented in matrix but needs direct coverage if absent"]
+        },
+        "concurrency": {
+          "status": "not_applicable",
+          "cases": []
+        }
+      },
+      "notes": "Route-level middleware behavior is covered through integration tests because the public contract is HTTP-visible."
+    },
+    {
+      "id": "rust-rest-read",
+      "area": "rust-rest-read",
+      "language": "rust",
+      "kind": "interface",
+      "symbol": "REST read routes",
+      "module": "src/http/routes.rs",
+      "interface": "GET /, /overview.json, /{resource}, /{resource}/{id}",
+      "risk": "critical",
+      "covered_symbols": ["list_resources", "get_overview", "get_collection", "get_item", "render_root_overview", "request_prefers_html", "get_overview_json", "overview_css", "overview_js", "OverviewPageData", "ServerCapabilities", "OverviewStats", "ResourceOverview", "OverviewColumn", "OverviewRelation", "OverviewEdge", "OverviewManyToManyRelation", "QueryCapabilities", "MutationCapabilities", "get_overview_css", "get_overview_js", "get_schema", "get_resource_editor", "get_item_editor", "get_create_item_form"],
+      "covered_by": [
+        {
+          "test": "retrieval_supports_string_ids_and_returns_404_for_missing_item",
+          "path": "tests/retrieval_and_query_params.rs",
+          "test_type": "integration",
+          "asserts": ["string ids resolve", "missing item returns 404"]
+        },
+        {
+          "test": "retrieval_returns_400_for_invalid_resource_name",
+          "path": "tests/retrieval_and_query_params.rs",
+          "test_type": "integration",
+          "asserts": ["invalid resource name is rejected"]
+        },
+        {
+          "test": "overview_json_returns_machine_readable_metadata_for_folder_mode",
+          "path": "tests/overview_endpoints.rs",
+          "test_type": "integration",
+          "asserts": ["overview metadata describes resources"]
+        },
+        {
+          "test": "root_serves_html_overview_for_browser_requests",
+          "path": "tests/root_html_overview.rs",
+          "test_type": "integration",
+          "asserts": ["browser root renders HTML overview"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "resource",
+          "covered_values": ["array resource", "object resource", "missing resource", "invalid name"],
+          "missing_values": []
+        },
+        {
+          "name": "id",
+          "covered_values": ["numeric id", "string id", "declared primary key", "missing id"],
+          "missing_values": ["boolean id route behavior if intentionally supported"]
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["root resource list", "overview JSON", "collection read", "item read", "declared primary key read"]
+        },
+        "exceptional": {
+          "status": "covered",
+          "cases": ["missing item", "invalid resource name", "missing resource"]
+        },
+        "concurrency": {
+          "status": "not_applicable",
+          "cases": []
+        }
+      },
+      "notes": ""
+    },
+    {
+      "id": "rust-rest-query",
+      "area": "rust-rest-query",
+      "language": "rust",
+      "kind": "interface",
+      "symbol": "Collection query parsing and execution",
+      "module": "src/query/filters.rs",
+      "interface": "REST collection filters, sorting, pagination, embeds",
+      "risk": "critical",
+      "covered_symbols": ["FilterOperator", "FilterCondition", "SortColumn", "Pagination", "PaginationWindow", "ParsedCollectionQuery", "new", "parse_collection_query_params", "filter_collection_data", "sort_collection_data", "paginate_collection_data", "filter_collection_refs", "sort_collection_refs", "pagination_window", "paginate_collection_refs", "get_value_at_path", "value_to_filter_string"],
+      "covered_by": [
+        {
+          "test": "parses_where_like_json_server_cases",
+          "path": "src/query/filters.rs",
+          "test_type": "unit",
+          "asserts": ["query parser recognizes pagination, sort, embeds, and filters"]
+        },
+        {
+          "test": "operator_matrix_covers_nested_missing_null_and_string_cases",
+          "path": "src/query/filters.rs",
+          "test_type": "unit",
+          "asserts": ["operator matrix covers nested, missing, null, and string comparisons"]
+        },
+        {
+          "test": "collection_supports_operator_filters_nested_fields_desc_sort_and_pagination_keywords",
+          "path": "tests/filter_collection_query.rs",
+          "test_type": "integration",
+          "asserts": ["HTTP query path applies operators, nested fields, sort, and pagination"]
+        },
+        {
+          "test": "query_parameters_support_embed_for_foreign_keys",
+          "path": "tests/retrieval_and_query_params.rs",
+          "test_type": "integration",
+          "asserts": ["embed replaces foreign key values with related rows"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "operators",
+          "covered_values": ["eq", "ne", "lt", "lte", "gt", "gte", "in", "contains", "startsWith", "endsWith", "isNull", "isNotNull"],
+          "missing_values": []
+        },
+        {
+          "name": "pagination",
+          "covered_values": ["page", "_page", "per_page", "_per_page", "missing defaults", "page clamped to last page"],
+          "missing_values": ["configured max-per-page rejection if only route-level coverage exists"]
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["operator filtering", "nested fields", "multi-sort", "pagination aliases", "embed"]
+        },
+        "exceptional": {
+          "status": "partial",
+          "cases": ["invalid operator", "invalid pagination values", "unknown underscore suffix treated as field"],
+          "missing_cases": ["unknown embed relation and missing target-row response should be explicit"]
+        },
+        "concurrency": {
+          "status": "not_applicable",
+          "cases": []
+        }
+      },
+      "notes": "Dense operator behavior is best maintained as unit matrix tests plus a smaller HTTP integration set."
+    },
+    {
+      "id": "rust-rest-mutation",
+      "area": "rust-rest-mutation",
+      "language": "rust",
+      "kind": "interface",
+      "symbol": "REST mutation service",
+      "module": "src/mutation_service.rs",
+      "interface": "POST/PUT/PATCH/DELETE /{resource} and /{resource}/{id}",
+      "risk": "critical",
+      "covered_symbols": ["create_item", "replace_item", "patch_item", "delete_item", "replace_resource_object", "patch_resource_object"],
+      "covered_by": [
+        {
+          "test": "school_examples_support_students_crud_end_to_end",
+          "path": "tests/crud_operations.rs",
+          "test_type": "integration",
+          "asserts": ["CRUD routes persist changes end to end"]
+        },
+        {
+          "test": "concurrent_posts_to_same_collection_do_not_lose_writes",
+          "path": "tests/crud_operations.rs",
+          "test_type": "integration",
+          "asserts": ["parallel POST requests preserve all rows"]
+        },
+        {
+          "test": "concurrent_update_and_delete_requests_leave_valid_collection_state",
+          "path": "tests/crud_operations.rs",
+          "test_type": "integration",
+          "asserts": ["parallel update/delete leaves valid JSON"]
+        },
+        {
+          "test": "patch_item_merges_fields_without_overwriting_primary_key",
+          "path": "src/mutation_service.rs",
+          "test_type": "unit",
+          "asserts": ["PATCH merges fields and keeps path primary key"]
+        },
+        {
+          "test": "patch_resource_object_merges_fields",
+          "path": "src/mutation_service.rs",
+          "test_type": "unit",
+          "asserts": ["object-resource PATCH merges top-level fields"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "payload",
+          "covered_values": ["new object without id", "object with explicit id", "replacement object", "patch object", "non-object payload"],
+          "missing_values": ["schema constraint rejection at mutation-service level"]
+        },
+        {
+          "name": "resource shape",
+          "covered_values": ["array resource", "object resource", "non-array rejection", "non-object rejection"],
+          "missing_values": []
+        },
+        {
+          "name": "id",
+          "covered_values": ["numeric id", "string declared primary key", "missing id", "path id coercion"],
+          "missing_values": []
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["POST", "PUT item", "PATCH item", "DELETE item", "PUT object resource", "PATCH object resource", "file mode"]
+        },
+        "exceptional": {
+          "status": "partial",
+          "cases": ["non-object payload", "non-array resource", "missing id", "readonly route behavior"],
+          "missing_cases": ["declared-schema validation failure per mutation operation", "storage write failure"]
+        },
+        "concurrency": {
+          "status": "covered",
+          "cases": ["parallel creates", "mixed update/delete", "mixed create/replace/patch/delete unit coverage"]
+        }
+      },
+      "notes": "The initial report intentionally marks schema-validation rejection as a visible gap for follow-up."
+    },
+    {
+      "id": "rust-storage",
+      "area": "rust-storage",
+      "language": "rust",
+      "kind": "module",
+      "symbol": "Storage IO, index, validation",
+      "module": "src/storage.rs",
+      "interface": "resource loading, persistence, scanning, validation",
+      "risk": "critical",
+      "covered_symbols": ["load_resource", "write_resource", "resource_exists", "read_resource_value", "persist_resource_value", "resource_file_path", "is_valid_resource_name", "is_reserved_resource_name", "scan_resources", "find_item_by_key", "find_item_index_by_key", "build_id_index", "next_numeric_id", "coerce_id_value", "validate_resource_data", "validate_sql_identifier"],
+      "covered_by": [
+        {
+          "test": "read_resource_value_reads_folder_resource",
+          "path": "src/storage/io.rs",
+          "test_type": "unit",
+          "asserts": ["folder resource reads JSON"]
+        },
+        {
+          "test": "persist_resource_value_file_mode_preserves_sibling_keys",
+          "path": "src/storage/io.rs",
+          "test_type": "unit",
+          "asserts": ["file-mode write preserves unrelated top-level resources"]
+        },
+        {
+          "test": "concurrent_file_mode_persists_preserve_each_resource_update",
+          "path": "src/storage/io.rs",
+          "test_type": "unit",
+          "asserts": ["parallel file-mode writes preserve every resource update"]
+        },
+        {
+          "test": "write_resource_survives_interrupted_temp_file_and_keeps_output_intact",
+          "path": "src/storage.rs",
+          "test_type": "unit",
+          "asserts": ["interrupted temp file residue does not corrupt writes"]
+        },
+        {
+          "test": "validate_resource_data_enforces_unique_and_primary_key_constraints",
+          "path": "src/storage/validation.rs",
+          "test_type": "unit",
+          "asserts": ["unique and primary key constraints are enforced"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "data source",
+          "covered_values": ["folder", "single database file"],
+          "missing_values": []
+        },
+        {
+          "name": "resource name",
+          "covered_values": ["valid name", "invalid name", "reserved schema/events/assets names"],
+          "missing_values": []
+        },
+        {
+          "name": "schema validation",
+          "covered_values": ["extended scalar types", "nullable columns", "enum constraints", "unique constraints", "primary key constraints"],
+          "missing_values": []
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["read folder", "read file mode", "write folder", "write file mode", "scan resources", "index ids", "validate valid schema rows"]
+        },
+        "exceptional": {
+          "status": "covered",
+          "cases": ["missing resource", "invalid JSON", "invalid resource name", "wrong declared type", "missing non-null column", "constraint violations"]
+        },
+        "concurrency": {
+          "status": "covered",
+          "cases": ["file-mode concurrent persist", "resource write lock behavior through mutation tests"]
+        }
+      },
+      "notes": ""
+    },
+    {
+      "id": "rust-schema",
+      "area": "rust-schema",
+      "language": "rust",
+      "kind": "module",
+      "symbol": "Schema parsing, inference, merge, validation",
+      "module": "src/schema.rs",
+      "interface": "schema.json, schema.xsd, schema.dbml, inferred schema, effective schema",
+      "risk": "critical",
+      "covered_symbols": ["Schema", "TableSchema", "DeclaredSchema", "DeclaredTableSchema", "TableKind", "ForeignKey", "ManyToManyRelation", "ColumnSchema", "ColumnType", "new", "label", "from_dbml_type", "from_xsd_type", "infer_json", "is_compatible_with", "is_string_backed", "is_numeric_like", "is_orderable_with_bounds", "is_valid_identifier", "primary_key_name", "load_schema", "parse_json_schema", "parse_xsd_schema", "parse_dbml_schema", "merge_schemas", "infer_schema_from_data_source", "infer_schema_from_values", "export_declared_schema_snapshot", "default_schema_output_path", "SchemaEditorPayload", "get_schema_editor", "save_schema", "save_declared_schema", "infer_and_save_schema"],
+      "covered_by": [
+        {
+          "test": "parses_dbml_schema",
+          "path": "src/schema.rs",
+          "test_type": "unit",
+          "asserts": ["DBML parser handles tables and references"]
+        },
+        {
+          "test": "parses_schema_json",
+          "path": "src/schema.rs",
+          "test_type": "unit",
+          "asserts": ["JSON schema parser handles declared schema"]
+        },
+        {
+          "test": "parses_schema_xsd_tables_keys_and_keyrefs",
+          "path": "src/schema.rs",
+          "test_type": "unit",
+          "asserts": ["XSD parser handles tables, keys, and keyrefs"]
+        },
+        {
+          "test": "schema_json_takes_precedence_over_schema_dbml",
+          "path": "tests/schema_endpoints.rs",
+          "test_type": "integration",
+          "asserts": ["schema auto-discovery precedence prefers schema.json"]
+        },
+        {
+          "test": "schema_post_preserves_suppressed_inferred_relations_across_reload",
+          "path": "tests/schema_endpoints.rs",
+          "test_type": "integration",
+          "asserts": ["suppressed inferred relations survive persistence and reload"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "schema format",
+          "covered_values": ["json", "xsd", "dbml", "inferred"],
+          "missing_values": []
+        },
+        {
+          "name": "schema features",
+          "covered_values": ["primary keys", "foreign keys", "many-to-many", "column types", "nullability", "enum", "bounds", "length", "unique constraints"],
+          "missing_values": ["declared many-to-many relation endpoint case if not explicit"]
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["parse JSON", "parse XSD", "parse DBML", "infer schema", "merge declared over inferred", "export declared snapshot"]
+        },
+        "exceptional": {
+          "status": "covered",
+          "cases": ["invalid identifiers", "invalid constraints", "foreign key target errors", "foreign key type mismatch", "invalid unique constraints"]
+        },
+        "concurrency": {
+          "status": "not_applicable",
+          "cases": []
+        }
+      },
+      "notes": "Schema persistence route behavior is tracked in endpoint tests; parser and validator detail remains in module tests."
+    },
+    {
+      "id": "rust-graphql",
+      "area": "rust-graphql",
+      "language": "rust",
+      "kind": "interface",
+      "symbol": "GraphQL API",
+      "module": "src/graphql/mod.rs",
+      "interface": "GET/POST /graphql, dynamic schema, query execution",
+      "risk": "high",
+      "covered_symbols": ["build_schema", "graphql_get", "graphql_post"],
+      "covered_by": [
+        {
+          "test": "graphql_executes_basic_queries_and_serves_graphiql",
+          "path": "tests/graphql_queries.rs",
+          "test_type": "integration",
+          "asserts": ["GET /graphql serves GraphiQL to browsers"]
+        },
+        {
+          "test": "graphql_executes_basic_queries_and_serves_graphiql",
+          "path": "tests/graphql_queries.rs",
+          "test_type": "integration",
+          "asserts": ["POST /graphql returns collections and item lookups"]
+        },
+        {
+          "test": "graphql_collection_query_fields_support_filter_sort_and_pagination",
+          "path": "tests/graphql_queries.rs",
+          "test_type": "integration",
+          "asserts": ["query fields support filter, sort, and pagination"]
+        },
+        {
+          "test": "graphql_exposes_derived_many_to_many_fields_and_deduplicates_results",
+          "path": "tests/graphql_queries.rs",
+          "test_type": "integration",
+          "asserts": ["many-to-many relation fields resolve target rows"]
+        },
+        {
+          "test": "graphql_sanitizes_resource_and_field_names",
+          "path": "tests/graphql_queries.rs",
+          "test_type": "integration",
+          "asserts": ["invalid GraphQL names are normalized"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "request shape",
+          "covered_values": ["GET GraphiQL", "GET query string", "POST JSON body"],
+          "missing_values": ["malformed JSON body if not covered by Axum extractor tests"]
+        },
+        {
+          "name": "schema shape",
+          "covered_values": ["array tables", "object resources", "JSON fallback resources", "relations", "many-to-many", "normalized names"],
+          "missing_values": []
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["GraphiQL", "collection query", "by-id query", "filter/sort/page query", "relation traversal", "many-to-many traversal"]
+        },
+        "exceptional": {
+          "status": "partial",
+          "cases": ["GraphQL query errors", "missing resource schema build errors through helper conversion"],
+          "missing_cases": ["explicit invalid variables/operator request if absent"]
+        },
+        "concurrency": {
+          "status": "partial",
+          "cases": ["schema cache invalidation is covered through app-state tests"],
+          "missing_cases": ["parallel GraphQL schema build/query stress case"]
+        }
+      },
+      "notes": "Most private GraphQL builder helpers are intentionally covered through dynamic schema behavior."
+    },
+    {
+      "id": "rust-sql",
+      "area": "rust-sql",
+      "language": "rust",
+      "kind": "interface",
+      "symbol": "SQL query and export API",
+      "module": "src/sql/mod.rs",
+      "interface": "GET/POST /sql, /export.sql, /sql/export",
+      "risk": "high",
+      "covered_symbols": ["SqlGetParams", "SqlPostBody", "SqlExportParams", "sql_query", "sql_query_post", "export_sql"],
+      "covered_by": [
+        {
+          "test": "sql_happy_paths_cover_select_projection_and_pagination",
+          "path": "tests/sql_and_export_endpoints.rs",
+          "test_type": "integration",
+          "asserts": ["SQL endpoint handles projection, where, order, limit, and offset"]
+        },
+        {
+          "test": "sql_inner_join_supports_schema_backed_relations",
+          "path": "tests/sql_and_export_endpoints.rs",
+          "test_type": "integration",
+          "asserts": ["schema-backed INNER JOIN materializes rows"]
+        },
+        {
+          "test": "sql_error_paths_cover_non_select_unsupported_and_unknowns",
+          "path": "tests/sql_and_export_endpoints.rs",
+          "test_type": "integration",
+          "asserts": ["unsupported syntax and invalid fields return errors"]
+        },
+        {
+          "test": "export_sql_respects_schema_when_present",
+          "path": "tests/sql_and_export_endpoints.rs",
+          "test_type": "integration",
+          "asserts": ["SQL export renders dialect-specific output"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "query",
+          "covered_values": ["SELECT *", "projection", "WHERE", "ORDER BY", "LIMIT", "OFFSET", "alias", "INNER JOIN"],
+          "missing_values": ["quoted identifiers if intentionally unsupported"]
+        },
+        {
+          "name": "dialect",
+          "covered_values": ["postgres", "postgresql", "sqlite"],
+          "missing_values": []
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["GET query", "POST query", "projection", "filters", "sorting", "pagination", "join", "export"]
+        },
+        "exceptional": {
+          "status": "partial",
+          "cases": ["unsupported query", "invalid fields", "unsupported dialect", "query length or scan/selected row guard"],
+          "missing_cases": ["explicit malformed SQL literal edge cases"]
+        },
+        "concurrency": {
+          "status": "not_applicable",
+          "cases": []
+        }
+      },
+      "notes": ""
+    },
+    {
+      "id": "rust-watcher-sse",
+      "area": "rust-watcher-sse",
+      "language": "rust",
+      "kind": "interface",
+      "symbol": "Filesystem watcher and events",
+      "module": "src/watcher.rs",
+      "interface": "resource watcher plus GET /events SSE stream",
+      "risk": "high",
+      "covered_symbols": ["start_resource_watcher", "get_events"],
+      "covered_by": [
+        {
+          "test": "watcher_ignores_read_only_access_events_for_resources",
+          "path": "src/watcher.rs",
+          "test_type": "unit",
+          "asserts": ["read-only access events are ignored"]
+        },
+        {
+          "test": "watcher_ignores_temp_files_in_folder_mode",
+          "path": "src/watcher.rs",
+          "test_type": "unit",
+          "asserts": ["temporary files do not trigger resource refresh"]
+        },
+        {
+          "test": "watcher_processes_data_changes_for_resources",
+          "path": "src/watcher.rs",
+          "test_type": "unit",
+          "asserts": ["data changes trigger processing"]
+        },
+        {
+          "test": "events_endpoint_streams_resource_and_schema_changes",
+          "path": "tests/routes_and_logging.rs",
+          "test_type": "integration",
+          "asserts": ["SSE stream emits server events"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "event path",
+          "covered_values": ["resource JSON", "schema.xsd", "temp files", "metadata access"],
+          "missing_values": ["file-mode db.json watcher path if not integrated"]
+        },
+        {
+          "name": "event kind",
+          "covered_values": ["create", "modify", "remove", "metadata"],
+          "missing_values": ["rename if platform-specific behavior matters"]
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["resource changes", "schema changes", "changed resource names de-duplicated", "SSE delivery"]
+        },
+        "exceptional": {
+          "status": "partial",
+          "cases": ["ignored access events", "ignored temp files"],
+          "missing_cases": ["watcher backend startup failure path"]
+        },
+        "concurrency": {
+          "status": "partial",
+          "cases": ["changed resource names are de-duplicated"],
+          "missing_cases": ["rapid burst filesystem integration test"]
+        }
+      },
+      "notes": ""
+    },
+    {
+      "id": "rust-app-state",
+      "area": "rust-app-state",
+      "language": "rust",
+      "kind": "module",
+      "symbol": "App state, metrics, health, errors, relations",
+      "module": "src/app.rs",
+      "interface": "shared application state and support types",
+      "risk": "high",
+      "covered_symbols": ["ResponseFormat", "DataSource", "AppState", "CachedResource", "SchemaStore", "GraphqlStore", "AppConfig", "MetricsStore", "HealthState", "ServerEvent", "new", "replace_inferred", "replace_declared", "record_request", "record_response", "record_auth_failure", "record_event", "render_prometheus", "mark_ready", "mark_not_ready", "is_ready", "last_error", "schema_snapshot", "inferred_schema_snapshot", "declared_schema_snapshot", "schema_table", "validation_schema_table", "update_inferred_schema", "update_declared_schema", "resource_names_sorted", "read_lock_for_resource", "write_lock_for_resource", "read_locks_for_resources", "invalidate_graphql_schema", "emit_event", "subscribe_events", "graphql_schema", "AppError", "with_code", "build_relation_lookup", "resolve_related_row_in_lookup"],
+      "covered_by": [
+        {
+          "test": "schema_store_new_merges_declared_and_inferred",
+          "path": "src/app.rs",
+          "test_type": "unit",
+          "asserts": ["schema store returns effective merged schema"]
+        },
+        {
+          "test": "metrics_store_render_prometheus_contains_all_metrics",
+          "path": "src/app.rs",
+          "test_type": "unit",
+          "asserts": ["metrics counters render in Prometheus format"]
+        },
+        {
+          "test": "health_state_mark_not_ready_sets_error",
+          "path": "src/app.rs",
+          "test_type": "unit",
+          "asserts": ["health state tracks ready flag and last error"]
+        },
+        {
+          "test": "query_parameters_support_embed_for_foreign_keys",
+          "path": "tests/retrieval_and_query_params.rs",
+          "test_type": "integration",
+          "asserts": ["relation lookup behavior resolves embedded rows through the public REST interface"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "schema store",
+          "covered_values": ["inferred only", "declared overlay", "replace inferred", "replace declared"],
+          "missing_values": []
+        },
+        {
+          "name": "relation key",
+          "covered_values": ["numeric", "string", "missing"],
+          "missing_values": ["boolean if intentionally supported"]
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["schema snapshots", "metrics increments", "health ready", "relation lookup"]
+        },
+        "exceptional": {
+          "status": "partial",
+          "cases": ["schema validation errors", "health not ready"],
+          "missing_cases": ["AppError JSON body shape direct unit coverage if only integration-covered"]
+        },
+        "concurrency": {
+          "status": "partial",
+          "cases": ["resource lock ordering is exercised by mutation concurrency tests"],
+          "missing_cases": ["direct lock ordering test for read_locks_for_resources"]
+        }
+      },
+      "notes": ""
+    },
+    {
+      "id": "ui-url-api",
+      "area": "ui-url-api",
+      "language": "typescript",
+      "kind": "module",
+      "symbol": "URL state, helpers, API client",
+      "module": "ui/src/urlState.ts",
+      "interface": "overview URL state, REST request paths, API client functions",
+      "risk": "high",
+      "covered_symbols": ["FILTER_OPERATORS", "DEFAULT_PER_PAGE", "PAGE_SIZE_OPTIONS", "parseOverviewState", "buildBrowserQueryString", "buildResourceSearchParams", "buildResourceRequestPath", "resetTableState", "nextSorting", "createFilter", "fetchOverview", "fetchSchema", "fetchSchemaEditor", "fetchResource", "saveSchemaDocument", "inferSchemaDocument", "mutateResource", "isRecord", "isPaginatedResponse", "getTableRows", "shouldUseTableView", "getColumnNames", "formatJson", "truncate", "summarizeValue", "coerceRelationValue", "coerceIncomingRelationValue"],
+      "covered_by": [
+        {
+          "test": "hydrates state from the browser query string",
+          "path": "ui/src/urlState.test.ts",
+          "test_type": "unit",
+          "asserts": ["query string hydrates overview state"]
+        },
+        {
+          "test": "serializes filters into REST query params",
+          "path": "ui/src/urlState.test.ts",
+          "test_type": "unit",
+          "asserts": ["filters serialize into server query params"]
+        },
+        {
+          "test": "throws for failed overview and schema requests",
+          "path": "ui/src/api.test.ts",
+          "test_type": "unit",
+          "asserts": ["API client surfaces failed response text"]
+        },
+        {
+          "test": "orders primary key columns first and merges schema, field, and sampled row names",
+          "path": "ui/src/helpers.test.ts",
+          "test_type": "unit",
+          "asserts": ["table helper column ordering is stable"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "URL values",
+          "covered_values": ["mode", "resource", "view", "filters", "sort", "pagination", "embeds", "invalid pagination"],
+          "missing_values": ["unknown mode/view telemetry if needed"]
+        },
+        {
+          "name": "API response",
+          "covered_values": ["JSON success", "text success", "failed response", "mutation without body"],
+          "missing_values": ["network rejection path if not covered by fetch stubs"]
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["parse URL", "serialize URL", "build REST params", "fetch overview/schema/resource", "mutate resource"]
+        },
+        "exceptional": {
+          "status": "partial",
+          "cases": ["invalid pagination fallback", "failed overview/schema/mutation responses"],
+          "missing_cases": ["network-level fetch rejection"]
+        },
+        "concurrency": {
+          "status": "not_applicable",
+          "cases": []
+        }
+      },
+      "notes": ""
+    },
+    {
+      "id": "ui-overview-explorer",
+      "area": "ui-overview-explorer",
+      "language": "typescript",
+      "kind": "component",
+      "symbol": "Overview explorer UI",
+      "module": "ui/src/overview/explorer.tsx",
+      "interface": "resource sidebar, explorer header, query summary, data explorer",
+      "risk": "high",
+      "covered_symbols": ["ResourceSidebar", "ExplorerHeader", "QuerySummaryBar", "DataExplorerPanel", "RelationMap", "ToastMessage", "ToastViewport", "HighlightText", "TableSkeleton", "renderCellValue", "groupResources", "renderLiveUpdateLabel", "getJsonValidationError", "findSelectedResource", "filterResourcesBySearch", "removeQuerySummaryChip", "buildDrilldownFilter"],
+      "covered_by": [
+        {
+          "test": "renders loading placeholders and empty search results",
+          "path": "ui/src/overview/explorer.test.tsx",
+          "test_type": "unit",
+          "asserts": ["sidebar renders loading and empty states"]
+        },
+        {
+          "test": "updates filters, embeds, visibility, and row selection",
+          "path": "ui/src/overview/explorer.test.tsx",
+          "test_type": "unit",
+          "asserts": ["explorer controls update query and selection state"]
+        },
+        {
+          "test": "renders raw and non-table views",
+          "path": "ui/src/overview/explorer.test.tsx",
+          "test_type": "unit",
+          "asserts": ["non-table rendering modes work"]
+        },
+        {
+          "test": "shared overview helpers",
+          "path": "ui/src/overview/shared.test.tsx",
+          "test_type": "unit",
+          "asserts": ["toasts, skeletons, highlighting, cell values, resource grouping"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "resource state",
+          "covered_values": ["loading", "error", "empty search", "table resource", "object resource", "raw mode", "hidden columns"],
+          "missing_values": []
+        },
+        {
+          "name": "user action",
+          "covered_values": ["resource search", "filter add/remove", "embed toggle", "column visibility", "row select", "page size"],
+          "missing_values": ["keyboard-only row activation if not covered"]
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["resource browsing", "table controls", "raw/object views", "query chips", "drilldown filters"]
+        },
+        "exceptional": {
+          "status": "covered",
+          "cases": ["loading", "error", "empty search", "all columns hidden"]
+        },
+        "concurrency": {
+          "status": "not_applicable",
+          "cases": []
+        }
+      },
+      "notes": ""
+    },
+    {
+      "id": "ui-mutations",
+      "area": "ui-mutations",
+      "language": "typescript",
+      "kind": "component",
+      "symbol": "Overview mutation UI",
+      "module": "ui/src/overview/inspector.tsx",
+      "interface": "mutation dialog, inspector requests, mutation planning",
+      "risk": "critical",
+      "covered_symbols": ["FILTER_OPERATOR_LABELS", "DEFAULT_PREFERENCES", "buildQuerySummaryChips", "getVisibleMutationActions", "buildMutationPlan", "buildPatchPayload", "collectChangedKeys", "loadOverviewPreferences", "saveOverviewPreferences", "createUiState", "summarizeSchemaDiff", "InspectorPanel", "MutationDialog"],
+      "covered_by": [
+        {
+          "test": "uses PATCH with only changed keys for row edits by default",
+          "path": "ui/src/overviewUtils.test.ts",
+          "test_type": "unit",
+          "asserts": ["mutation planner builds minimal PATCH payloads"]
+        },
+        {
+          "test": "switches to PUT for full object replacement after explicit selection",
+          "path": "ui/src/overviewUtils.test.ts",
+          "test_type": "unit",
+          "asserts": ["mutation planner supports full replacement mode"]
+        },
+        {
+          "test": "builds and submits PATCH requests for changed rows",
+          "path": "ui/src/overview/inspector.test.tsx",
+          "test_type": "unit",
+          "asserts": ["mutation dialog submits PATCH plans"]
+        },
+        {
+          "test": "requires confirmation for deletes and surfaces submit failures",
+          "path": "ui/src/overview/inspector.test.tsx",
+          "test_type": "unit",
+          "asserts": ["delete confirmation and failed submission states are visible"]
+        },
+        {
+          "test": "surfaces invalid JSON and disables submission",
+          "path": "ui/src/overviewComponents.test.tsx",
+          "test_type": "unit",
+          "asserts": ["invalid JSON disables mutation submission"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "mutation mode",
+          "covered_values": ["create", "patch", "replace", "delete", "object replace", "object patch"],
+          "missing_values": []
+        },
+        {
+          "name": "server capability",
+          "covered_values": ["writable", "readonly", "object editing enabled"],
+          "missing_values": []
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["PATCH row", "PUT replacement", "delete", "object selection snapshot", "copy request details"]
+        },
+        "exceptional": {
+          "status": "covered",
+          "cases": ["invalid JSON", "confirmation required", "submit failure", "readonly hides writes"]
+        },
+        "concurrency": {
+          "status": "not_applicable",
+          "cases": []
+        }
+      },
+      "notes": ""
+    },
+    {
+      "id": "ui-schema-workspace",
+      "area": "ui-schema-workspace",
+      "language": "typescript",
+      "kind": "module",
+      "symbol": "Schema workspace UI",
+      "module": "ui/src/schemaWorkspace.ts",
+      "interface": "schema editor, schema graph, details panels, JSON drawer",
+      "risk": "high",
+      "covered_symbols": ["SchemaConnection", "buildSchemaHandleId", "parseSchemaConnection", "parseSchemaDocument", "upsertSchemaRelationship", "deriveSchemaEdges", "SchemaGraphColumn", "SchemaGraphTable", "SchemaGraphRelation", "normalizeSchema", "normalizeDeclaredSchema", "cloneDeclaredSchema", "formatDeclaredSchema", "mergeSchemaEditorPayload", "validateSchemaDraft", "isSchemaTableManual", "getSchemaTableNames", "setDeclaredTableKind", "setDeclaredPrimaryKey", "setDeclaredUniqueConstraints", "setDeclaredColumnOverride", "upsertDeclaredRelationship", "stageRelationshipFromConnection", "removeDeclaredRelationship", "resetDeclaredRelationship", "isColumnOverridden", "getRelationOrigin", "getTableRelationCount", "getSchemaWorkspaceSnapshot", "deriveSchemaGraphTables", "getSchemaGraphAutoLayout", "deriveSchemaGraphRelations", "columnTypesAreCompatible", "SchemaCanvas", "SchemaDetailsPanel", "SchemaJsonDrawer", "SchemaSidebarEntry", "SchemaSidebar", "SchemaToolbar", "SchemaWorkspace"],
+      "covered_by": [
+        {
+          "test": "merges inferred schema with declared overrides and suppressions",
+          "path": "ui/src/schemaWorkspace.test.ts",
+          "test_type": "unit",
+          "asserts": ["workspace merges inferred and declared schema state"]
+        },
+        {
+          "test": "validates enum and unique constraint declarations",
+          "path": "ui/src/schemaWorkspace.test.ts",
+          "test_type": "unit",
+          "asserts": ["schema draft validation catches invalid constraints"]
+        },
+        {
+          "test": "derives strict junction kinds and many-to-many relations client-side",
+          "path": "ui/src/schemaWorkspace.test.ts",
+          "test_type": "unit",
+          "asserts": ["client graph derives junction and many-to-many metadata"]
+        },
+        {
+          "test": "renders only handles that can actually participate in a connection",
+          "path": "ui/src/overview/schema/SchemaCanvas.test.tsx",
+          "test_type": "unit",
+          "asserts": ["schema canvas renders valid connection handles"]
+        },
+        {
+          "test": "loads dedicated schema mode and stages structured edits before save",
+          "path": "ui/e2e/schema.spec.ts",
+          "test_type": "e2e",
+          "asserts": ["schema workspace supports staged edits before saving"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "schema edits",
+          "covered_values": ["table kind", "primary key", "column override", "unique constraints", "foreign key", "suppression reset", "manual relation removal"],
+          "missing_values": ["every visual details-panel input edge case"]
+        },
+        {
+          "name": "graph shape",
+          "covered_values": ["strict junction", "many-to-many", "one-to-many inferred", "array-id inferred", "compatible key columns", "auto layout"],
+          "missing_values": []
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["normalize", "merge", "stage edits", "derive graph", "auto layout", "save workflow"]
+        },
+        "exceptional": {
+          "status": "partial",
+          "cases": ["invalid JSON disables save", "invalid constraints", "invalid relation compatibility"],
+          "missing_cases": ["visual details-panel parsing edge cases for every field type"]
+        },
+        "concurrency": {
+          "status": "not_applicable",
+          "cases": []
+        }
+      },
+      "notes": ""
+    },
+    {
+      "id": "ui-live-updates",
+      "area": "ui-live-updates",
+      "language": "typescript",
+      "kind": "hook",
+      "symbol": "Overview live updates",
+      "module": "ui/src/overview/useOverviewLiveUpdates.ts",
+      "interface": "EventSource lifecycle and query invalidation",
+      "risk": "high",
+      "covered_symbols": ["useOverviewLiveUpdates", "invalidateOverviewQueries", "useOverviewToasts", "useOverviewUrlState", "useOverviewSchemaWorkspace"],
+      "covered_by": [
+        {
+          "test": "keeps one EventSource instance alive across transient errors",
+          "path": "ui/src/overview/useOverviewLiveUpdates.test.tsx",
+          "test_type": "unit",
+          "asserts": ["transient errors do not recreate the stream unnecessarily"]
+        },
+        {
+          "test": "pauses after repeated errors and opens a fresh stream on retry",
+          "path": "ui/src/overview/useOverviewLiveUpdates.test.tsx",
+          "test_type": "unit",
+          "asserts": ["repeated errors pause live updates and retry creates a fresh stream"]
+        },
+        {
+          "test": "invalidates overview queries after server events and pauses event storms",
+          "path": "ui/src/overview/useOverviewLiveUpdates.test.tsx",
+          "test_type": "unit",
+          "asserts": ["resource/schema events invalidate queries and event storms are paused"]
+        },
+        {
+          "test": "invalidates all overview-related query keys",
+          "path": "ui/src/overview/queryClient.test.ts",
+          "test_type": "unit",
+          "asserts": ["overview-related query keys are invalidated together"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "event",
+          "covered_values": ["resource_changed", "schema_changed", "overview_changed", "error", "event storm"],
+          "missing_values": ["malformed event data if parser becomes explicit"]
+        },
+        {
+          "name": "lifecycle",
+          "covered_values": ["initial connect", "transient error", "repeated error pause", "manual retry", "unmount cleanup"],
+          "missing_values": []
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["connect", "receive event", "invalidate queries"]
+        },
+        "exceptional": {
+          "status": "covered",
+          "cases": ["transient errors", "repeated errors", "event storm pause"]
+        },
+        "concurrency": {
+          "status": "covered",
+          "cases": ["event storms are rate-limited by pause behavior"]
+        }
+      },
+      "notes": ""
+    },
+    {
+      "id": "ui-e2e-workflows",
+      "area": "ui-e2e-workflows",
+      "language": "typescript",
+      "kind": "e2e",
+      "symbol": "Overview and schema browser workflows",
+      "module": "ui/e2e",
+      "interface": "Playwright browser flows against a running dirbase server",
+      "risk": "critical",
+      "covered_symbols": ["OverviewApp", "OverviewAppRoot", "SchemaWorkspace", "DeclaredSchemaForeignKey", "DeclaredSchemaResponse", "DeclaredSchemaTable", "FilterDescriptor", "FilterOperator", "InspectorTab", "LiveUpdateStatus", "MobileSurface", "MutationCapabilities", "MutationDialogState", "MutationMode", "MutationPlan", "OverviewColumn", "OverviewEdge", "OverviewManyToManyRelation", "OverviewMode", "OverviewPageData", "OverviewPreferences", "OverviewRelation", "OverviewStats", "OverviewUiState", "OverviewUrlState", "OverviewView", "PaginatedResponse", "QueryCapabilities", "QuerySummaryChip", "ResourceKind", "ResourceOverview", "ResourceResponse", "SchemaColumn", "SchemaColumnOverrideInput", "SchemaEditorPayload", "SchemaForeignKey", "SchemaManyToManyRelation", "SchemaMobileSurface", "SchemaResponse", "SchemaTable", "SchemaWorkspaceSelection", "ServerCapabilities", "SortDescriptor"],
+      "covered_by": [
+        {
+          "test": "supports first-load discovery, filter chips, and relation drill-down in both directions",
+          "path": "ui/e2e/overview.spec.ts",
+          "test_type": "e2e",
+          "asserts": ["overview discovery, filters, and relation drilldown work in browser"]
+        },
+        {
+          "test": "supports mobile drawers and inspector sheet without losing explorer state",
+          "path": "ui/e2e/overview.spec.ts",
+          "test_type": "e2e",
+          "asserts": ["mobile drawer interactions preserve state"]
+        },
+        {
+          "test": "supports object raw mode and invalid mutation feedback",
+          "path": "ui/e2e/overview.spec.ts",
+          "test_type": "e2e",
+          "asserts": ["object raw mode and invalid mutation feedback are visible"]
+        },
+        {
+          "test": "supports create, edit, delete, infer, and save workflows",
+          "path": "ui/e2e/overview.spec.ts",
+          "test_type": "e2e",
+          "asserts": ["core write and schema workflows work end to end"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "viewport/workflow",
+          "covered_values": ["desktop explorer", "mobile drawers", "relation map", "readonly mode", "object raw mode", "schema mode"],
+          "missing_values": ["cross-browser variants beyond configured Playwright browser"]
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["discovery", "filtering", "relation drilldown", "relation map", "create/edit/delete", "infer/save"]
+        },
+        "exceptional": {
+          "status": "partial",
+          "cases": ["invalid mutation feedback", "invalid JSON disables save", "readonly hides actions"],
+          "missing_cases": ["network failure and server restart browser recovery"]
+        },
+        "concurrency": {
+          "status": "not_applicable",
+          "cases": []
+        }
+      },
+      "notes": "The e2e row intentionally tracks browser workflows rather than individual helper functions."
+    },
+    {
+      "id": "js-wrapper",
+      "area": "js-wrapper",
+      "language": "typescript",
+      "kind": "module",
+      "symbol": "Bun/npm wrapper",
+      "module": "js/src/index.ts",
+      "interface": "package binary path helpers and runDirbase",
+      "risk": "medium",
+      "covered_symbols": ["platformKey", "binaryNameForPlatform", "getBinaryPath", "runDirbase"],
+      "covered_by": [
+        {
+          "test": "builds platform keys from platform and architecture",
+          "path": "js/src/index.test.ts",
+          "test_type": "unit",
+          "asserts": ["platform and architecture are combined into binary key"]
+        },
+        {
+          "test": "selects executable names for Unix and Windows platforms",
+          "path": "js/src/index.test.ts",
+          "test_type": "unit",
+          "asserts": ["Windows gets .exe and Unix does not"]
+        },
+        {
+          "test": "rejects clearly when the platform binary is missing",
+          "path": "js/src/index.test.ts",
+          "test_type": "unit",
+          "asserts": ["missing binary returns a clear rejection"]
+        },
+        {
+          "test": "spawns the resolved binary and resolves with its exit code",
+          "path": "js/src/index.test.ts",
+          "test_type": "unit",
+          "asserts": ["spawn close code is returned"]
+        },
+        {
+          "test": "rejects when the spawned process emits an error",
+          "path": "js/src/index.test.ts",
+          "test_type": "unit",
+          "asserts": ["spawn error rejects runDirbase"]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "platform",
+          "covered_values": ["current platform", "win32", "linux-style Unix"],
+          "missing_values": ["unsupported arch naming policy beyond helper construction"]
+        },
+        {
+          "name": "spawn lifecycle",
+          "covered_values": ["missing binary", "close with explicit code", "error event"],
+          "missing_values": ["close with null code"]
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": ["path construction", "binary name selection", "spawn close code"]
+        },
+        "exceptional": {
+          "status": "partial",
+          "cases": ["missing binary", "spawn error"],
+          "missing_cases": ["CLI wrapper process.exit behavior without spawning real binary"]
+        },
+        "concurrency": {
+          "status": "not_applicable",
+          "cases": []
+        }
+      },
+      "notes": "The CLI wrapper is intentionally listed as a small remaining gap because it calls process.exit immediately."
+    }
+  ],
+  "out_of_scope": [
+    {
+      "path": "benchmarks/**",
+      "reason": "Benchmark coverage is tracked separately in BENCHMARKS.md."
+    },
+    {
+      "path": "ui/dist/**",
+      "reason": "Generated overview assets are covered through source UI tests and rebuild checks."
+    }
+  ]
+}

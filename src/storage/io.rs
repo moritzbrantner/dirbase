@@ -356,6 +356,47 @@ mod tests {
         assert_eq!(parsed["posts"], json!([{"id": 10}]));
     }
 
+    #[tokio::test]
+    async fn concurrent_file_mode_persists_preserve_each_resource_update() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("db.json");
+        std::fs::write(
+            &path,
+            "{\"users\":[{\"id\":1}],\"posts\":[{\"id\":10}],\"settings\":{\"theme\":\"dark\"}}\n",
+        )
+        .expect("write db");
+        let data_source = DataSource::File(path.clone());
+
+        let users_path = path.clone();
+        let posts_path = path.clone();
+        let settings_path = path.clone();
+        let users_source = data_source.clone();
+        let posts_source = data_source.clone();
+        let settings_source = data_source.clone();
+        let users_value = json!([{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]);
+        let posts_value = json!([{"id": 10, "title": "Hello"}, {"id": 11, "title": "World"}]);
+        let settings_value = json!({"theme": "light", "locale": "en"});
+        let (users_result, posts_result, settings_result) = tokio::join!(
+            persist_resource_value(&users_source, &users_path, "users", &users_value),
+            persist_resource_value(&posts_source, &posts_path, "posts", &posts_value),
+            persist_resource_value(&settings_source, &settings_path, "settings", &settings_value)
+        );
+
+        users_result.expect("persist users");
+        posts_result.expect("persist posts");
+        settings_result.expect("persist settings");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read file"))
+                .expect("json");
+        assert_eq!(parsed["users"], json!([{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]));
+        assert_eq!(
+            parsed["posts"],
+            json!([{"id": 10, "title": "Hello"}, {"id": 11, "title": "World"}])
+        );
+        assert_eq!(parsed["settings"], json!({"theme": "light", "locale": "en"}));
+    }
+
     #[test]
     fn scan_resources_folder_ignores_non_json_files() {
         let temp = tempfile::tempdir().expect("tempdir");

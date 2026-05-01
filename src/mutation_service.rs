@@ -179,7 +179,7 @@ mod tests {
 
     use axum::http::StatusCode;
     use serde_json::{Value, json};
-    use tokio::sync::RwLock;
+    use tokio::sync::{Barrier, RwLock};
 
     use super::*;
     use crate::{
@@ -317,6 +317,47 @@ mod tests {
             .expect("create");
         assert_eq!(created, json!({"id": "user-7", "name": "Ada"}));
         assert_eq!(read_json(&path), json!([{"id": "user-7", "name": "Ada"}]));
+    }
+
+    #[tokio::test]
+    async fn concurrent_create_item_calls_on_same_resource_do_not_lose_rows() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("users.json");
+        write_json(&path, &json!([{"id": 1, "name": "Ada"}]));
+        let state = test_state_for_folder(temp.path(), &["users"], None);
+        let barrier = Arc::new(Barrier::new(9));
+
+        let mut handles = Vec::new();
+        for index in 0..8 {
+            let state = state.clone();
+            let barrier = barrier.clone();
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                create_item(&state, "users", json!({"name": format!("User {index}")}))
+                    .await
+                    .expect("create")
+            }));
+        }
+
+        barrier.wait().await;
+        let mut created_ids = Vec::new();
+        for handle in handles {
+            let created = handle.await.expect("join create task");
+            created_ids.push(created["id"].as_i64().expect("numeric id"));
+        }
+        created_ids.sort_unstable();
+
+        let persisted = read_json(&path);
+        let rows = persisted.as_array().expect("users array");
+        let mut persisted_ids = rows
+            .iter()
+            .map(|row| row["id"].as_i64().expect("persisted numeric id"))
+            .collect::<Vec<_>>();
+        persisted_ids.sort_unstable();
+
+        assert_eq!(created_ids, vec![2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(persisted_ids, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(rows.len(), 9);
     }
 
     #[tokio::test]
@@ -489,6 +530,107 @@ mod tests {
 
         delete_item(&state, "posts", "1").await.expect("delete");
         assert_eq!(read_json(&path), json!([{"id": 2, "title": "world"}]));
+    }
+
+    #[tokio::test]
+    async fn concurrent_mixed_item_mutations_on_same_resource_are_all_persisted() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("posts.json");
+        write_json(
+            &path,
+            &json!([
+                {"id": 1, "title": "hello", "status": "draft"},
+                {"id": 2, "title": "world", "status": "draft"},
+                {"id": 3, "title": "old", "status": "archived"}
+            ]),
+        );
+        let state = test_state_for_folder(temp.path(), &["posts"], None);
+        let barrier = Arc::new(Barrier::new(5));
+
+        let patch_state = state.clone();
+        let patch_barrier = barrier.clone();
+        let patch_task = tokio::spawn(async move {
+            patch_barrier.wait().await;
+            patch_item(&patch_state, "posts", "1", json!({"status": "published"}))
+                .await
+                .expect("patch")
+        });
+
+        let replace_state = state.clone();
+        let replace_barrier = barrier.clone();
+        let replace_task = tokio::spawn(async move {
+            replace_barrier.wait().await;
+            replace_item(&replace_state, "posts", "2", json!({"title": "updated"}))
+                .await
+                .expect("replace")
+        });
+
+        let delete_state = state.clone();
+        let delete_barrier = barrier.clone();
+        let delete_task = tokio::spawn(async move {
+            delete_barrier.wait().await;
+            delete_item(&delete_state, "posts", "3").await.expect("delete");
+        });
+
+        let create_state = state.clone();
+        let create_barrier = barrier.clone();
+        let create_task = tokio::spawn(async move {
+            create_barrier.wait().await;
+            create_item(&create_state, "posts", json!({"id": 99, "title": "new"}))
+                .await
+                .expect("create")
+        });
+
+        barrier.wait().await;
+        let (patched, replaced, deleted, created) =
+            tokio::join!(patch_task, replace_task, delete_task, create_task);
+        patched.expect("join patch task");
+        replaced.expect("join replace task");
+        deleted.expect("join delete task");
+        created.expect("join create task");
+
+        let persisted = read_json(&path);
+        assert_eq!(
+            persisted,
+            json!([
+                {"id": 1, "title": "hello", "status": "published"},
+                {"id": 2, "title": "updated"},
+                {"id": 99, "title": "new"}
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_update_and_delete_conflict_keeps_resource_valid() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("posts.json");
+        write_json(&path, &json!([{"id": 1, "title": "hello", "status": "draft"}]));
+        let state = test_state_for_folder(temp.path(), &["posts"], None);
+        let barrier = Arc::new(Barrier::new(3));
+
+        let patch_state = state.clone();
+        let patch_barrier = barrier.clone();
+        let patch_task = tokio::spawn(async move {
+            patch_barrier.wait().await;
+            patch_item(&patch_state, "posts", "1", json!({"status": "published"})).await
+        });
+
+        let delete_state = state.clone();
+        let delete_barrier = barrier.clone();
+        let delete_task = tokio::spawn(async move {
+            delete_barrier.wait().await;
+            delete_item(&delete_state, "posts", "1").await
+        });
+
+        barrier.wait().await;
+        let patch_result = patch_task.await.expect("join patch task");
+        delete_task.await.expect("join delete task").expect("delete");
+
+        if let Err(err) = patch_result {
+            assert_eq!(err.status, StatusCode::NOT_FOUND);
+            assert!(err.message.contains("Item not found"));
+        }
+        assert_eq!(read_json(&path), json!([]));
     }
 
     #[tokio::test]

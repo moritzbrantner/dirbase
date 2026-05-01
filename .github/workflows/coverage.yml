@@ -39,6 +39,9 @@ jobs:
         run: bun run test:coverage
         working-directory: ui
 
+      - name: Validate test coverage matrix
+        run: python3 scripts/render_test_matrix.py --check
+
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4
         if: always()

@@ -1,4 +1,11 @@
-use std::{fs, path::Path, time::Duration};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::Path,
+    sync::{Arc, Barrier},
+    thread,
+    time::Duration,
+};
 
 mod support;
 
@@ -144,6 +151,110 @@ fn school_example_schema_covers_many_to_many_and_nullable_cases() {
         serde_json::from_str(parse_http_body(&class_response)).expect("class json");
     assert!(class_payload["professor_id"].is_null(), "{class_payload}");
     assert_eq!(class_payload["student_ids"], serde_json::json!([]));
+}
+
+#[test]
+fn concurrent_posts_to_same_collection_do_not_lose_writes() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"id": 1, "name": "Ada"}
+]
+"#,
+    )
+    .expect("write users");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+    wait_for_server(&bind_addr, Duration::from_secs(5));
+
+    let barrier = Arc::new(Barrier::new(9));
+    let mut handles = Vec::new();
+    for index in 0..8 {
+        let bind_addr = bind_addr.clone();
+        let barrier = barrier.clone();
+        handles.push(thread::spawn(move || {
+            barrier.wait();
+            http_request(
+                &bind_addr,
+                "POST",
+                "/users",
+                Some(&format!(r#"{{"name":"User {index}"}}"#)),
+            )
+        }));
+    }
+
+    barrier.wait();
+    let mut created_ids = BTreeSet::new();
+    for handle in handles {
+        let response = handle.join().expect("join request thread");
+        assert!(response.starts_with("HTTP/1.1 201 Created\r\n"), "{response}");
+        let payload: serde_json::Value =
+            serde_json::from_str(parse_http_body(&response)).expect("created json");
+        assert!(created_ids.insert(payload["id"].as_i64().expect("numeric id")));
+    }
+
+    let persisted: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join("users.json")).expect("read users"),
+    )
+    .expect("users json");
+    let rows = persisted.as_array().expect("users array");
+    let persisted_ids = rows
+        .iter()
+        .map(|row| row["id"].as_i64().expect("persisted numeric id"))
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(created_ids, BTreeSet::from([2, 3, 4, 5, 6, 7, 8, 9]));
+    assert_eq!(persisted_ids, BTreeSet::from([1, 2, 3, 4, 5, 6, 7, 8, 9]));
+    assert_eq!(rows.len(), 9);
+}
+
+#[test]
+fn concurrent_update_and_delete_requests_leave_valid_collection_state() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("posts.json"),
+        r#"[
+  {"id": 1, "title": "hello", "status": "draft"}
+]
+"#,
+    )
+    .expect("write posts");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+    wait_for_server(&bind_addr, Duration::from_secs(5));
+
+    let barrier = Arc::new(Barrier::new(3));
+    let patch_addr = bind_addr.clone();
+    let patch_barrier = barrier.clone();
+    let patch_handle = thread::spawn(move || {
+        patch_barrier.wait();
+        http_request(&patch_addr, "PATCH", "/posts/1", Some(r#"{"status":"published"}"#))
+    });
+
+    let delete_addr = bind_addr.clone();
+    let delete_barrier = barrier.clone();
+    let delete_handle = thread::spawn(move || {
+        delete_barrier.wait();
+        http_request(&delete_addr, "DELETE", "/posts/1", None)
+    });
+
+    barrier.wait();
+    let patch_response = patch_handle.join().expect("join patch request");
+    let delete_response = delete_handle.join().expect("join delete request");
+
+    assert!(delete_response.starts_with("HTTP/1.1 204 No Content\r\n"), "{delete_response}");
+    assert!(
+        patch_response.starts_with("HTTP/1.1 200 OK\r\n")
+            || patch_response.starts_with("HTTP/1.1 404 Not Found\r\n"),
+        "{patch_response}"
+    );
+
+    let persisted: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join("posts.json")).expect("read posts"),
+    )
+    .expect("posts json");
+    assert_eq!(persisted, serde_json::json!([]));
 }
 
 fn copy_example_folder(example_name: &str, destination: &Path) {
