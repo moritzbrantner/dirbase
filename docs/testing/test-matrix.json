@@ -47,7 +47,7 @@
     {
       "id": "rust-schema",
       "name": "Rust Schema",
-      "owner_paths": ["src/schema.rs", "src/schema_endpoints_test.rs"],
+      "owner_paths": ["src/schema.rs", "src/schema/*.rs", "src/schema_endpoints_test.rs"],
       "risk": "critical",
       "entries": ["rust-schema"]
     },
@@ -553,19 +553,19 @@
       "covered_by": [
         {
           "test": "parses_dbml_schema",
-          "path": "src/schema.rs",
+          "path": "src/schema/tests.rs",
           "test_type": "unit",
           "asserts": ["DBML parser handles tables and references"]
         },
         {
           "test": "parses_schema_json",
-          "path": "src/schema.rs",
+          "path": "src/schema/tests.rs",
           "test_type": "unit",
           "asserts": ["JSON schema parser handles declared schema"]
         },
         {
           "test": "parses_schema_xsd_tables_keys_and_keyrefs",
-          "path": "src/schema.rs",
+          "path": "src/schema/tests.rs",
           "test_type": "unit",
           "asserts": ["XSD parser handles tables, keys, and keyrefs"]
         },

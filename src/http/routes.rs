@@ -22,7 +22,7 @@ use axum::{
         Html, IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
     },
-    routing::get,
+    routing::{MethodRouter, get, post},
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -50,61 +50,7 @@ use crate::{
 };
 
 pub fn build_router(state: AppState) -> Router {
-    let app = if state.config.readonly {
-        Router::new()
-            .route("/", get(list_resources))
-            .route("/events", get(get_events))
-            .route("/healthz", get(healthz))
-            .route("/readyz", get(readyz))
-            .route("/metrics", get(metrics))
-            .route("/overview.json", get(get_overview))
-            .route("/assets/overview.css", get(get_overview_css))
-            .route("/assets/overview.js", get(get_overview_js))
-            .route("/graphql", get(graphql_get).post(graphql_post))
-            .route("/schema", get(get_schema))
-            .route("/schema/editor", get(get_schema_editor))
-            .route("/sql", get(sql_query))
-            .route("/export.sql", get(export_sql))
-            .route("/sql/export", get(export_sql))
-            .route("/{resource}/edit", get(get_resource_editor))
-            .route("/{resource}/create", get(get_create_item_form))
-            .route("/{resource}/{id}/edit", get(get_item_editor))
-            .route("/{resource}", get(get_collection))
-            .route("/{resource}/{id}", get(get_item))
-            .with_state(state.clone())
-    } else {
-        Router::new()
-            .route("/", get(list_resources))
-            .route("/events", get(get_events))
-            .route("/healthz", get(healthz))
-            .route("/readyz", get(readyz))
-            .route("/metrics", get(metrics))
-            .route("/overview.json", get(get_overview))
-            .route("/assets/overview.css", get(get_overview_css))
-            .route("/assets/overview.js", get(get_overview_js))
-            .route("/graphql", get(graphql_get).post(graphql_post))
-            .route("/schema", get(get_schema).post(save_schema).put(save_declared_schema))
-            .route("/schema/editor", get(get_schema_editor))
-            .route("/schema/infer", axum::routing::post(infer_and_save_schema))
-            .route("/sql", get(sql_query).post(sql_query_post))
-            .route("/export.sql", get(export_sql))
-            .route("/sql/export", get(export_sql))
-            .route("/{resource}/edit", get(get_resource_editor))
-            .route("/{resource}/create", get(get_create_item_form))
-            .route("/{resource}/{id}/edit", get(get_item_editor))
-            .route(
-                "/{resource}",
-                get(get_collection)
-                    .post(create_item)
-                    .put(replace_resource_object)
-                    .patch(patch_resource_object),
-            )
-            .route(
-                "/{resource}/{id}",
-                get(get_item).put(replace_item).patch(patch_item).delete(delete_item),
-            )
-            .with_state(state.clone())
-    };
+    let app = build_application_routes(state.config.readonly).with_state(state.clone());
 
     let mut app = app.layer(DefaultBodyLimit::max(state.config.max_body_bytes));
     app = app.layer(middleware::from_fn_with_state(state.clone(), metrics_middleware));
@@ -115,6 +61,55 @@ pub fn build_router(state: AppState) -> Router {
         app = app.layer(middleware::from_fn_with_state(state.clone(), log_requests_middleware));
     }
     app
+}
+
+fn build_application_routes(readonly: bool) -> Router<AppState> {
+    let app = Router::new()
+        .route("/", get(list_resources))
+        .route("/events", get(get_events))
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
+        .route("/metrics", get(metrics))
+        .route("/overview.json", get(get_overview))
+        .route("/assets/overview.css", get(get_overview_css))
+        .route("/assets/overview.js", get(get_overview_js))
+        .route("/graphql", get(graphql_get).post(graphql_post))
+        .route("/schema", schema_route(readonly))
+        .route("/schema/editor", get(get_schema_editor))
+        .route("/sql", sql_route(readonly))
+        .route("/export.sql", get(export_sql))
+        .route("/sql/export", get(export_sql))
+        .route("/{resource}/edit", get(get_resource_editor))
+        .route("/{resource}/create", get(get_create_item_form))
+        .route("/{resource}/{id}/edit", get(get_item_editor))
+        .route("/{resource}", collection_route(readonly))
+        .route("/{resource}/{id}", item_route(readonly));
+
+    if readonly { app } else { app.route("/schema/infer", post(infer_and_save_schema)) }
+}
+
+fn schema_route(readonly: bool) -> MethodRouter<AppState> {
+    let route = get(get_schema);
+    if readonly { route } else { route.post(save_schema).put(save_declared_schema) }
+}
+
+fn sql_route(readonly: bool) -> MethodRouter<AppState> {
+    let route = get(sql_query);
+    if readonly { route } else { route.post(sql_query_post) }
+}
+
+fn collection_route(readonly: bool) -> MethodRouter<AppState> {
+    let route = get(get_collection);
+    if readonly {
+        route
+    } else {
+        route.post(create_item).put(replace_resource_object).patch(patch_resource_object)
+    }
+}
+
+fn item_route(readonly: bool) -> MethodRouter<AppState> {
+    let route = get(get_item);
+    if readonly { route } else { route.put(replace_item).patch(patch_item).delete(delete_item) }
 }
 
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
