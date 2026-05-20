@@ -1,6 +1,10 @@
 /target
 /data
 /requests.log
+.env
+.env.*
+!.env.example
+.DS_Store
 node_modules/
 js/node_modules
 js/dist

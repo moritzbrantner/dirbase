@@ -340,6 +340,18 @@ If your editor uses different settings, configure it to run `cargo fmt --all` on
 
 ## Development checks
 
+The standard local task aliases are documented in [`docs/development.md`](./docs/development.md). From the repository root:
+
+```bash
+bun run dev
+bun run test
+bun run lint
+bun run format:check
+bun run build
+bun run verify
+bun run hygiene
+```
+
 Before committing or opening a PR, always run linting and tests:
 
 ```bash
