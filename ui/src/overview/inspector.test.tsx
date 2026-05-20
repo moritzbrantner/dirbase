@@ -146,7 +146,7 @@ describe('InspectorPanel', () => {
 });
 
 describe('MutationDialog', () => {
-  it('builds and submits PATCH requests for changed rows', async () => {
+  it('builds and stages PATCH requests for changed rows', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     const onClose = vi.fn();
 
@@ -163,12 +163,12 @@ describe('MutationDialog', () => {
     );
 
     expect(screen.getByText('No changed keys detected. Edit the JSON or switch to full replace.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'PATCH request' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stage change' })).toBeDisabled();
 
     fireEvent.change(screen.getByRole('textbox'), {
       target: { value: '{\n  "id": 1,\n  "name": "Grace"\n}' }
     });
-    fireEvent.click(screen.getByRole('button', { name: 'PATCH request' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stage change' }));
 
     await waitFor(() =>
       expect(onSubmit).toHaveBeenCalledWith({
@@ -206,9 +206,9 @@ describe('MutationDialog', () => {
       )
     );
 
-    expect(screen.getByRole('button', { name: 'PUT request' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stage change' })).toBeDisabled();
     fireEvent.click(screen.getByLabelText('I understand this will replace the full document with PUT.'));
-    fireEvent.click(screen.getByRole('button', { name: 'PUT request' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stage change' }));
 
     await waitFor(() =>
       expect(onSubmit).toHaveBeenCalledWith({
@@ -237,7 +237,7 @@ describe('MutationDialog', () => {
       />
     );
 
-    const submit = screen.getByRole('button', { name: 'DELETE request' });
+    const submit = screen.getByRole('button', { name: 'Stage change' });
     expect(submit).toBeDisabled();
 
     fireEvent.click(screen.getByLabelText('I understand this delete cannot be undone.'));

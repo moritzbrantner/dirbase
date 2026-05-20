@@ -311,7 +311,7 @@ export function MutationDialog({
             }}
             disabled={submitDisabled}
           >
-            {pending ? 'Submitting…' : `${plan?.method ?? 'Submit'} request`}
+            {pending ? 'Staging...' : 'Stage change'}
           </button>
         </div>
       </div>

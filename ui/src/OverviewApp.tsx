@@ -4,13 +4,15 @@ import { ReactFlowProvider } from '@xyflow/react';
 import { useDeferredValue, useEffect, useState } from 'react';
 
 import { fetchOverview, fetchResource, fetchSchemaEditor, mutateResource } from './api';
-import { coerceIncomingRelationValue, coerceRelationValue, getTableRows, isRecord } from './helpers';
+import { coerceIncomingRelationValue, coerceRelationValue, getTableRows } from './helpers';
 import {
   buildQuerySummaryChips,
   createUiState,
+  describeStagedMutation,
   getVisibleMutationActions,
   loadOverviewPreferences,
-  saveOverviewPreferences
+  saveOverviewPreferences,
+  validateStagedMutationConsistency
 } from './overviewUtils';
 import { DataExplorerPanel, ExplorerHeader, QuerySummaryBar, ResourceSidebar } from './overview/explorer';
 import { InspectorPanel, MutationDialog } from './overview/inspector';
@@ -34,7 +36,8 @@ import type {
   MutationPlan,
   OverviewPreferences,
   OverviewUiState,
-  OverviewUrlState
+  OverviewUrlState,
+  StagedMutation
 } from './types';
 import { buildResourceRequestPath, resetTableState } from './urlState';
 
@@ -65,6 +68,9 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
   const [preferences, setPreferences] = useState<OverviewPreferences>(() =>
     loadOverviewPreferences(window.localStorage)
   );
+  const [stagedMutations, setStagedMutations] = useState<StagedMutation[]>([]);
+  const [consistencyIssues, setConsistencyIssues] = useState<string[]>([]);
+  const [savingMutations, setSavingMutations] = useState(false);
   const [uiState, setUiState] = useState<OverviewUiState>(() => ({
     ...createUiState(urlState.resource, false),
     inspectorTab: preferences.lastInspectorTab
@@ -356,6 +362,54 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
                 onRemoveChip={(chip) => updateTableState((current) => removeQuerySummaryChip(current, chip))}
               />
 
+              {stagedMutations.length > 0 && (
+                <section className="staged-mutation-panel" data-testid="staged-mutations">
+                  <div className="overview-panel-head">
+                    <div>
+                      <p className="section-title">Unsaved changes</p>
+                      <h3 className="text-lg font-semibold text-stoneink-900">
+                        {stagedMutations.length} staged {stagedMutations.length === 1 ? 'change' : 'changes'}
+                      </h3>
+                    </div>
+                    <div className="mutation-dialog-actions">
+                      <button
+                        type="button"
+                        className="overview-secondary-button"
+                        onClick={discardStagedMutations}
+                        disabled={savingMutations}
+                      >
+                        Discard changes
+                      </button>
+                      <button
+                        type="button"
+                        className="overview-secondary-button is-primary"
+                        onClick={() => void saveStagedMutations()}
+                        disabled={savingMutations}
+                      >
+                        {savingMutations ? 'Saving...' : 'Save changes'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="overview-inline-list">
+                    {stagedMutations.map((mutation) => (
+                      <span key={mutation.id} className="overview-inline-badge">
+                        {describeStagedMutation(mutation)}
+                      </span>
+                    ))}
+                  </div>
+                  {consistencyIssues.length > 0 && (
+                    <div className="consistency-issue-list" role="alert">
+                      <p className="copy-status is-error">Save blocked by broken references:</p>
+                      {consistencyIssues.map((issue) => (
+                        <p key={issue} className="copy-status is-error">
+                          {issue}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
+
               <DataExplorerPanel
                 resource={selectedResource}
                 response={resourceQuery.data}
@@ -503,7 +557,7 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
             mutationDialog: { open: false, mode: null }
           }))
         }
-        onSubmit={submitMutationPlan}
+        onSubmit={stageMutationPlan}
       />
 
       <ToastViewport toasts={toasts} />
@@ -580,30 +634,87 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
     }));
   }
 
-  async function submitMutationPlan(plan: MutationPlan) {
-    const result = await mutateResource({
-      method: plan.method,
-      path: plan.path,
-      body: plan.body
-    });
+  async function stageMutationPlan(plan: MutationPlan) {
+    if (!selectedResource) {
+      return;
+    }
 
-    await invalidateOverviewQueries(client);
+    setConsistencyIssues([]);
+    setStagedMutations((current) => [
+      ...current,
+      {
+        id: `${Date.now()}:${current.length}`,
+        resourceName: selectedResource.name,
+        plan
+      }
+    ]);
+    pushToast(`Staged ${plan.method} ${plan.path}`, 'success');
+  }
 
-    if (plan.method === 'DELETE') {
+  async function saveStagedMutations() {
+    if (stagedMutations.length === 0) {
+      return;
+    }
+
+    setSavingMutations(true);
+    setConsistencyIssues([]);
+    try {
+      const rowsByResource = await fetchRowsByResourceForConsistency();
+      const issues = validateStagedMutationConsistency({
+        resources,
+        rowsByResource,
+        stagedMutations
+      });
+
+      if (issues.length > 0) {
+        setConsistencyIssues(issues.map((issue) => issue.message));
+        pushToast('Save blocked by broken references.', 'error');
+        return;
+      }
+
+      for (const mutation of stagedMutations) {
+        await mutateResource({
+          method: mutation.plan.method,
+          path: mutation.plan.path,
+          body: mutation.plan.body
+        });
+      }
+
+      await invalidateOverviewQueries(client);
+      setStagedMutations([]);
       setUiState((current) => ({
         ...current,
         selectedRow: null,
         inspectorTab: current.inspectorTab === 'selection' ? 'request' : current.inspectorTab
       }));
-    } else if (isRecord(result.parsed) && selectedResource?.kind === 'table') {
-      setUiState((current) => ({
-        ...current,
-        selectedRow: result.parsed as Record<string, unknown>,
-        inspectorTab: 'selection'
-      }));
+      pushToast(`Saved ${stagedMutations.length} staged ${stagedMutations.length === 1 ? 'change' : 'changes'}.`, 'success');
+    } catch (caught) {
+      pushToast(caught instanceof Error ? caught.message : 'Save failed.', 'error');
+    } finally {
+      setSavingMutations(false);
     }
+  }
 
-    pushToast(`${plan.method} ${plan.path}`, 'success');
+  function discardStagedMutations() {
+    setStagedMutations([]);
+    setConsistencyIssues([]);
+    pushToast('Discarded staged changes.', 'success');
+  }
+
+  async function fetchRowsByResourceForConsistency() {
+    const rowsByResource: Record<string, Record<string, unknown>[]> = {};
+    await Promise.all(
+      resources
+        .filter((resource) => resource.kind === 'table')
+        .map(async (resource) => {
+          const response = await fetchResource(`/${encodeURIComponent(resource.name)}`);
+          if (response.status >= 400) {
+            throw new Error(`Could not load ${resource.name} before saving.`);
+          }
+          rowsByResource[resource.name] = getTableRows(response.parsed);
+        })
+    );
+    return rowsByResource;
   }
 
   async function copyText(value: string) {

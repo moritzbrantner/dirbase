@@ -7,8 +7,10 @@
     "build": "bunx tailwindcss -c ./tailwind.config.mjs -i ./src/styles.css -o ./src/tailwind.generated.css --minify && bun esbuild.config.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage --coverage.provider=istanbul",
+    "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
-    "test:e2e": "playwright test --config=playwright.config.cjs"
+    "test:e2e": "playwright test --config=playwright.config.cjs",
+    "test:e2e:ui": "playwright test --config=playwright.config.cjs --ui"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.91.0",

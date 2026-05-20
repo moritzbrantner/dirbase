@@ -1,4 +1,5 @@
 import type {
+  ConsistencyIssue,
   FilterDescriptor,
   FilterOperator,
   MutationPlan,
@@ -6,7 +7,8 @@ import type {
   OverviewUiState,
   QuerySummaryChip,
   ResourceOverview,
-  ServerCapabilities
+  ServerCapabilities,
+  StagedMutation
 } from './types';
 
 export const FILTER_OPERATOR_LABELS: Record<FilterOperator, string> = {
@@ -198,6 +200,153 @@ export function collectChangedKeys(originalValue: unknown, nextValue: unknown): 
   const originalRecord = isPlainRecord(originalValue) ? originalValue : {};
   const keys = new Set([...Object.keys(originalRecord), ...Object.keys(nextValue)]);
   return [...keys].filter((key) => !Object.is(originalRecord[key], nextValue[key]));
+}
+
+export function validateStagedMutationConsistency({
+  resources,
+  rowsByResource,
+  stagedMutations
+}: {
+  resources: ResourceOverview[];
+  rowsByResource: Record<string, Record<string, unknown>[]>;
+  stagedMutations: StagedMutation[];
+}): ConsistencyIssue[] {
+  const projectedRows = projectRowsByResource(resources, rowsByResource, stagedMutations);
+  const issues: ConsistencyIssue[] = [];
+
+  for (const resource of resources) {
+    for (const relation of resource.outgoing_relations) {
+      const sourceRows = projectedRows[relation.source_table] ?? [];
+      const targetRows = projectedRows[relation.target_table] ?? [];
+      const targetValues = new Set(
+        targetRows
+          .map((row) => row[relation.target_column])
+          .filter((value) => value !== null && value !== undefined)
+          .map(stringifyRelationValue)
+      );
+
+      for (const row of sourceRows) {
+        const rawValue = row[relation.source_column];
+        if (rawValue === null || rawValue === undefined || rawValue === '') {
+          continue;
+        }
+
+        const value = stringifyRelationValue(rawValue);
+        if (targetValues.has(value)) {
+          continue;
+        }
+
+        issues.push({
+          sourceTable: relation.source_table,
+          sourceColumn: relation.source_column,
+          targetTable: relation.target_table,
+          targetColumn: relation.target_column,
+          value,
+          message: `${relation.source_table}.${relation.source_column} value ${value} does not reference an existing ${relation.target_table}.${relation.target_column}`
+        });
+      }
+    }
+  }
+
+  return issues;
+}
+
+export function describeStagedMutation(mutation: StagedMutation): string {
+  return `${mutation.plan.method} ${mutation.plan.path}`;
+}
+
+function projectRowsByResource(
+  resources: ResourceOverview[],
+  rowsByResource: Record<string, Record<string, unknown>[]>,
+  stagedMutations: StagedMutation[]
+): Record<string, Record<string, unknown>[]> {
+  const projectedRows: Record<string, Record<string, unknown>[]> = {};
+  for (const [resourceName, rows] of Object.entries(rowsByResource)) {
+    projectedRows[resourceName] = rows.map((row) => ({ ...row }));
+  }
+
+  for (const mutation of stagedMutations) {
+    const resource = resources.find((candidate) => candidate.name === mutation.resourceName);
+    if (!resource || resource.kind !== 'table') {
+      continue;
+    }
+
+    const rows = projectedRows[mutation.resourceName] ?? [];
+    projectedRows[mutation.resourceName] = applyStagedTableMutation(resource, rows, mutation.plan);
+  }
+
+  return projectedRows;
+}
+
+function applyStagedTableMutation(
+  resource: ResourceOverview,
+  rows: Record<string, unknown>[],
+  plan: MutationPlan
+): Record<string, unknown>[] {
+  if (plan.method === 'POST') {
+    const body = parsePlanBody(plan.body);
+    return isPlainRecord(body) ? [...rows, body] : rows;
+  }
+
+  const primaryKey = resource.primary_key;
+  if (!primaryKey) {
+    return rows;
+  }
+
+  const itemId = decodeMutationItemId(plan.path);
+  if (itemId === null) {
+    return rows;
+  }
+
+  if (plan.method === 'DELETE') {
+    return rows.filter((row) => stringifyRelationValue(row[primaryKey]) !== itemId);
+  }
+
+  const body = parsePlanBody(plan.body);
+  if (!isPlainRecord(body)) {
+    return rows;
+  }
+
+  return rows.map((row) => {
+    if (stringifyRelationValue(row[primaryKey]) !== itemId) {
+      return row;
+    }
+
+    if (plan.method === 'PUT') {
+      return body;
+    }
+
+    return { ...row, ...body };
+  });
+}
+
+function parsePlanBody(body: string | null): unknown {
+  if (!body) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function decodeMutationItemId(path: string): string | null {
+  const [, itemId] = path.split('/').filter(Boolean).slice(-2);
+  if (!itemId) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(itemId);
+  } catch {
+    return itemId;
+  }
+}
+
+function stringifyRelationValue(value: unknown): string {
+  return String(value);
 }
 
 export function loadOverviewPreferences(storage: Storage | Pick<Storage, 'getItem'>): OverviewPreferences {

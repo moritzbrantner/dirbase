@@ -358,10 +358,22 @@ cd ui
 bun run test
 bun run test:coverage
 bun run test:e2e
+bun run test:e2e:ui
 
 cd ../js
 bun test
 ```
+
+From the repository root, use the root package scripts to run the UI checks without changing folders:
+
+```bash
+bun run test:ui
+bun run test:e2e
+bun run playwright
+bun run playwright:ui
+```
+
+`bun run playwright` and `bun run playwright:ui` open Playwright UI mode in the browser and use the same fixture-backed `dirbase` server as the headless E2E suite.
 
 Do not use `cd ui && bun test` in this repository. That invokes Bun's test runner instead of Vitest, bypasses the `jsdom` setup in [`ui/vitest.config.ts`](./ui/vitest.config.ts), and produces false failures around globals such as `vi.stubGlobal`, `document`, and `EventSource`.
 

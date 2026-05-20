@@ -1017,7 +1017,7 @@
       "module": "ui/src/overview/inspector.tsx",
       "interface": "mutation dialog, inspector requests, mutation planning",
       "risk": "critical",
-      "covered_symbols": ["FILTER_OPERATOR_LABELS", "DEFAULT_PREFERENCES", "buildQuerySummaryChips", "getVisibleMutationActions", "buildMutationPlan", "buildPatchPayload", "collectChangedKeys", "loadOverviewPreferences", "saveOverviewPreferences", "createUiState", "summarizeSchemaDiff", "InspectorPanel", "MutationDialog"],
+      "covered_symbols": ["FILTER_OPERATOR_LABELS", "DEFAULT_PREFERENCES", "buildQuerySummaryChips", "getVisibleMutationActions", "buildMutationPlan", "buildPatchPayload", "collectChangedKeys", "validateStagedMutationConsistency", "describeStagedMutation", "StagedMutation", "ConsistencyIssue", "loadOverviewPreferences", "saveOverviewPreferences", "createUiState", "summarizeSchemaDiff", "InspectorPanel", "MutationDialog"],
       "covered_by": [
         {
           "test": "uses PATCH with only changed keys for row edits by default",
@@ -1032,10 +1032,28 @@
           "asserts": ["mutation planner supports full replacement mode"]
         },
         {
-          "test": "builds and submits PATCH requests for changed rows",
+          "test": "builds and stages PATCH requests for changed rows",
           "path": "ui/src/overview/inspector.test.tsx",
           "test_type": "unit",
           "asserts": ["mutation dialog submits PATCH plans"]
+        },
+        {
+          "test": "allows staged mutations that keep foreign keys resolvable",
+          "path": "ui/src/overviewUtils.test.ts",
+          "test_type": "unit",
+          "asserts": ["valid staged foreign keys produce no consistency issues"]
+        },
+        {
+          "test": "reports newly broken outgoing references",
+          "path": "ui/src/overviewUtils.test.ts",
+          "test_type": "unit",
+          "asserts": ["staged edits that break outgoing relations report consistency issues"]
+        },
+        {
+          "test": "reports incoming references broken by deleting a target row",
+          "path": "ui/src/overviewUtils.test.ts",
+          "test_type": "unit",
+          "asserts": ["staged deletes that orphan incoming references report consistency issues"]
         },
         {
           "test": "requires confirmation for deletes and surfaces submit failures",

@@ -289,8 +289,17 @@
   .non-table-panel,
   .error-state,
   .mutation-plan-card,
+  .staged-mutation-panel,
   .schema-diff-summary {
     @apply grid gap-3 rounded-2xl border border-stone-900/10 bg-white/60 p-4;
+  }
+
+  .staged-mutation-panel {
+    @apply border-tealbrand-500/20 bg-tealbrand-500/10;
+  }
+
+  .consistency-issue-list {
+    @apply grid gap-2 rounded-2xl border border-red-200 bg-red-50 p-3;
   }
 
   .query-chip {

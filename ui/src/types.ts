@@ -288,3 +288,18 @@ export interface MutationPlan {
   changedKeys: string[];
   requiresConfirmation: boolean;
 }
+
+export interface StagedMutation {
+  id: string;
+  resourceName: string;
+  plan: MutationPlan;
+}
+
+export interface ConsistencyIssue {
+  message: string;
+  sourceTable: string;
+  sourceColumn: string;
+  targetTable: string;
+  targetColumn: string;
+  value: string;
+}

@@ -55,7 +55,7 @@ describe('MutationDialog', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '{' } });
 
     expect(screen.getByText(/JSON Parse error|Invalid JSON/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Submit request' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stage change' })).toBeDisabled();
     expect(onSubmit).not.toHaveBeenCalled();
   });
 });

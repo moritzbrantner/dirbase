@@ -6,9 +6,10 @@ import {
   createUiState,
   getVisibleMutationActions,
   loadOverviewPreferences,
-  summarizeSchemaDiff
+  summarizeSchemaDiff,
+  validateStagedMutationConsistency
 } from './overviewUtils';
-import type { ResourceOverview, ServerCapabilities } from './types';
+import type { ResourceOverview, ServerCapabilities, StagedMutation } from './types';
 
 const writableServer: ServerCapabilities = {
   readonly: false,
@@ -68,6 +69,34 @@ const objectResource: ResourceOverview = {
     replace_object: true,
     patch_object: true
   }
+};
+
+const teamResource: ResourceOverview = {
+  ...tableResource,
+  name: 'teams',
+  row_count: 2,
+  field_names: ['id', 'name'],
+  sample_item_id: '1',
+  mutation_capabilities: {
+    create_item: true,
+    update_item: true,
+    delete_item: true,
+    replace_object: false,
+    patch_object: false
+  }
+};
+
+const membersWithTeamRelation: ResourceOverview = {
+  ...tableResource,
+  outgoing_relations: [
+    {
+      label: 'team_id -> teams.id',
+      source_table: 'members',
+      source_column: 'team_id',
+      target_table: 'teams',
+      target_column: 'id'
+    }
+  ]
 };
 
 describe('buildQuerySummaryChips', () => {
@@ -206,6 +235,98 @@ describe('mutation diff helpers', () => {
       'city'
     ]);
     expect(collectChangedKeys({ id: 1 }, { id: 2, name: 'Grace' })).toEqual(['id', 'name']);
+  });
+});
+
+describe('validateStagedMutationConsistency', () => {
+  it('allows staged mutations that keep foreign keys resolvable', () => {
+    const stagedMutations: StagedMutation[] = [
+      {
+        id: 'create-member',
+        resourceName: 'members',
+        plan: {
+          method: 'POST',
+          path: '/members',
+          body: JSON.stringify({ id: 2, name: 'Grace', team_id: 1 }),
+          changedKeys: ['id', 'name', 'team_id'],
+          requiresConfirmation: false
+        }
+      }
+    ];
+
+    expect(
+      validateStagedMutationConsistency({
+        resources: [membersWithTeamRelation, teamResource],
+        rowsByResource: {
+          members: [{ id: 1, name: 'Ada', team_id: 1 }],
+          teams: [{ id: 1, name: 'Core' }]
+        },
+        stagedMutations
+      })
+    ).toEqual([]);
+  });
+
+  it('reports newly broken outgoing references', () => {
+    const stagedMutations: StagedMutation[] = [
+      {
+        id: 'edit-member',
+        resourceName: 'members',
+        plan: {
+          method: 'PATCH',
+          path: '/members/1',
+          body: JSON.stringify({ team_id: 99 }),
+          changedKeys: ['team_id'],
+          requiresConfirmation: false
+        }
+      }
+    ];
+
+    expect(
+      validateStagedMutationConsistency({
+        resources: [membersWithTeamRelation, teamResource],
+        rowsByResource: {
+          members: [{ id: 1, name: 'Ada', team_id: 1 }],
+          teams: [{ id: 1, name: 'Core' }]
+        },
+        stagedMutations
+      })
+    ).toEqual([
+      {
+        sourceTable: 'members',
+        sourceColumn: 'team_id',
+        targetTable: 'teams',
+        targetColumn: 'id',
+        value: '99',
+        message: 'members.team_id value 99 does not reference an existing teams.id'
+      }
+    ]);
+  });
+
+  it('reports incoming references broken by deleting a target row', () => {
+    const stagedMutations: StagedMutation[] = [
+      {
+        id: 'delete-team',
+        resourceName: 'teams',
+        plan: {
+          method: 'DELETE',
+          path: '/teams/1',
+          body: null,
+          changedKeys: [],
+          requiresConfirmation: true
+        }
+      }
+    ];
+
+    expect(
+      validateStagedMutationConsistency({
+        resources: [membersWithTeamRelation, teamResource],
+        rowsByResource: {
+          members: [{ id: 1, name: 'Ada', team_id: 1 }],
+          teams: [{ id: 1, name: 'Core' }]
+        },
+        stagedMutations
+      })
+    ).toHaveLength(1);
   });
 });
 
