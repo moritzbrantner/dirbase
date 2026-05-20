@@ -11,27 +11,47 @@ use crate::{
     },
 };
 
+enum ResourceValidation {
+    BeforeAndAfter,
+    AfterOnly,
+}
+
+async fn update_locked_resource<T>(
+    state: &AppState,
+    resource: &str,
+    validation: ResourceValidation,
+    update: impl FnOnce(&mut Value) -> Result<T, AppError>,
+) -> Result<T, AppError> {
+    let _guard = state.write_lock_for_resource(resource).await;
+    let mut data = load_resource(state, resource).await?.as_ref().clone();
+    if matches!(validation, ResourceValidation::BeforeAndAfter) {
+        validate_resource_data(state, resource, &data)?;
+    }
+    let result = update(&mut data)?;
+    validate_resource_data(state, resource, &data)?;
+    write_resource(state, resource, &data).await?;
+    Ok(result)
+}
+
 pub async fn create_item(
     state: &AppState,
     resource: &str,
     mut payload: Value,
 ) -> Result<Value, AppError> {
-    let _guard = state.write_lock_for_resource(resource).await;
-    let mut data = load_resource(state, resource).await?.as_ref().clone();
-    validate_resource_data(state, resource, &data)?;
-    let array = data
-        .as_array_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
-    let item = payload
-        .as_object_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object"))?;
     let table = state.schema_table(resource);
-    maybe_fill_missing_id(item, array, table.as_ref());
-    let created = Value::Object(item.clone());
-    array.push(created.clone());
-    validate_resource_data(state, resource, &data)?;
-    write_resource(state, resource, &data).await?;
-    Ok(created)
+    update_locked_resource(state, resource, ResourceValidation::BeforeAndAfter, |data| {
+        let array = data.as_array_mut().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array")
+        })?;
+        let item = payload.as_object_mut().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object")
+        })?;
+        maybe_fill_missing_id(item, array, table.as_ref());
+        let created = Value::Object(item.clone());
+        array.push(created.clone());
+        Ok(created)
+    })
+    .await
 }
 
 pub async fn replace_item(
@@ -40,24 +60,23 @@ pub async fn replace_item(
     id: &str,
     mut payload: Value,
 ) -> Result<Value, AppError> {
-    let _guard = state.write_lock_for_resource(resource).await;
-    let mut data = load_resource(state, resource).await?.as_ref().clone();
     let table = state.schema_table(resource);
     let item_key = primary_key_name(table.as_ref()).to_string();
-    let array = data
-        .as_array_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
-    let object = payload
-        .as_object_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object"))?;
-    object.insert(item_key.clone(), coerce_id_value(id, table.as_ref()));
-    let replacement = Value::Object(object.clone());
-    let position = find_item_index_by_key(array, &item_key, id)
-        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
-    array[position] = replacement.clone();
-    validate_resource_data(state, resource, &data)?;
-    write_resource(state, resource, &data).await?;
-    Ok(replacement)
+    update_locked_resource(state, resource, ResourceValidation::AfterOnly, |data| {
+        let array = data.as_array_mut().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array")
+        })?;
+        let object = payload.as_object_mut().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object")
+        })?;
+        object.insert(item_key.clone(), coerce_id_value(id, table.as_ref()));
+        let replacement = Value::Object(object.clone());
+        let position = find_item_index_by_key(array, &item_key, id)
+            .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
+        array[position] = replacement.clone();
+        Ok(replacement)
+    })
+    .await
 }
 
 pub async fn patch_item(
@@ -66,48 +85,43 @@ pub async fn patch_item(
     id: &str,
     payload: Value,
 ) -> Result<Value, AppError> {
-    let _guard = state.write_lock_for_resource(resource).await;
-    let mut data = load_resource(state, resource).await?.as_ref().clone();
     let table = state.schema_table(resource);
     let item_key = primary_key_name(table.as_ref()).to_string();
-    validate_resource_data(state, resource, &data)?;
-    let array = data
-        .as_array_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
-    let patch = payload
-        .as_object()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object"))?;
-    let index = find_item_index_by_key(array, &item_key, id)
-        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
-    let current = array[index].as_object_mut().ok_or_else(|| {
-        AppError::new(StatusCode::BAD_REQUEST, "Array item must be a JSON object")
-    })?;
-    for (key, value) in patch {
-        if key != &item_key {
-            current.insert(key.clone(), value.clone());
+    update_locked_resource(state, resource, ResourceValidation::BeforeAndAfter, |data| {
+        let array = data.as_array_mut().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array")
+        })?;
+        let patch = payload.as_object().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object")
+        })?;
+        let index = find_item_index_by_key(array, &item_key, id)
+            .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
+        let current = array[index].as_object_mut().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Array item must be a JSON object")
+        })?;
+        for (key, value) in patch {
+            if key != &item_key {
+                current.insert(key.clone(), value.clone());
+            }
         }
-    }
-    let updated = Value::Object(current.clone());
-    validate_resource_data(state, resource, &data)?;
-    write_resource(state, resource, &data).await?;
-    Ok(updated)
+        Ok(Value::Object(current.clone()))
+    })
+    .await
 }
 
 pub async fn delete_item(state: &AppState, resource: &str, id: &str) -> Result<(), AppError> {
-    let _guard = state.write_lock_for_resource(resource).await;
-    let mut data = load_resource(state, resource).await?.as_ref().clone();
     let table = state.schema_table(resource);
     let item_key = primary_key_name(table.as_ref()).to_string();
-    validate_resource_data(state, resource, &data)?;
-    let array = data
-        .as_array_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
-    let index = find_item_index_by_key(array, &item_key, id)
-        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
-    array.remove(index);
-    validate_resource_data(state, resource, &data)?;
-    write_resource(state, resource, &data).await?;
-    Ok(())
+    update_locked_resource(state, resource, ResourceValidation::BeforeAndAfter, |data| {
+        let array = data.as_array_mut().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array")
+        })?;
+        let index = find_item_index_by_key(array, &item_key, id)
+            .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?;
+        array.remove(index);
+        Ok(())
+    })
+    .await
 }
 
 pub async fn replace_resource_object(
@@ -115,18 +129,17 @@ pub async fn replace_resource_object(
     resource: &str,
     payload: Value,
 ) -> Result<Value, AppError> {
-    let _guard = state.write_lock_for_resource(resource).await;
-    let mut data = load_resource(state, resource).await?.as_ref().clone();
-    if !data.is_object() || !payload.is_object() {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "Payload and resource must be JSON objects",
-        ));
-    }
-    data = payload;
-    validate_resource_data(state, resource, &data)?;
-    write_resource(state, resource, &data).await?;
-    Ok(data)
+    update_locked_resource(state, resource, ResourceValidation::AfterOnly, |data| {
+        if !data.is_object() || !payload.is_object() {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                "Payload and resource must be JSON objects",
+            ));
+        }
+        *data = payload;
+        Ok(data.clone())
+    })
+    .await
 }
 
 pub async fn patch_resource_object(
@@ -134,21 +147,19 @@ pub async fn patch_resource_object(
     resource: &str,
     payload: Value,
 ) -> Result<Value, AppError> {
-    let _guard = state.write_lock_for_resource(resource).await;
-    let mut data = load_resource(state, resource).await?.as_ref().clone();
-    let current = data
-        .as_object_mut()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON object"))?;
-    let patch = payload
-        .as_object()
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object"))?;
-    for (key, value) in patch {
-        current.insert(key.clone(), value.clone());
-    }
-    let updated = Value::Object(current.clone());
-    validate_resource_data(state, resource, &data)?;
-    write_resource(state, resource, &data).await?;
-    Ok(updated)
+    update_locked_resource(state, resource, ResourceValidation::AfterOnly, |data| {
+        let current = data.as_object_mut().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON object")
+        })?;
+        let patch = payload.as_object().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Payload must be a JSON object")
+        })?;
+        for (key, value) in patch {
+            current.insert(key.clone(), value.clone());
+        }
+        Ok(Value::Object(current.clone()))
+    })
+    .await
 }
 
 fn maybe_fill_missing_id(

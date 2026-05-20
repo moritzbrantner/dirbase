@@ -13,14 +13,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup project
+        uses: ./.github/actions/setup-project
         with:
-          toolchain: 1.85.0
-          components: rustfmt
-
-      - name: Cache cargo registry and build artifacts
-        uses: Swatinem/rust-cache@v2
+          rust-components: rustfmt
+          bun: "false"
+          ui-deps: "false"
 
       - name: Check formatting
         run: cargo fmt --all -- --check

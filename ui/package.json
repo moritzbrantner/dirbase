@@ -26,11 +26,15 @@
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@vitest/coverage-istanbul": "4.1.0",
+    "@vitest/coverage-istanbul": "4.1.7",
     "esbuild": "^0.27.4",
     "jsdom": "^29.0.0",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"
+  },
+  "overrides": {
+    "postcss": "^8.5.10",
+    "vite": "^8.0.5"
   }
 }

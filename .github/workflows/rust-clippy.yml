@@ -13,22 +13,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup project
+        uses: ./.github/actions/setup-project
         with:
-          bun-version-file: ".bun-version"
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.85.0
-          components: clippy
-
-      - name: Cache cargo registry and build artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install UI dependencies
-        run: bun install --cwd ui --frozen-lockfile
+          rust-components: clippy
 
       - name: Lint
         run: cargo clippy --all-targets --all-features -- -D warnings

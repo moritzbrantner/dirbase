@@ -1,5 +1,46 @@
 import type { OverviewPageData, ResourceResponse, SchemaEditorPayload, SchemaResponse } from './types';
 
+type ParsedResponseBody = {
+  rawText: string;
+  parsed: unknown;
+};
+
+async function readJsonOrText(
+  response: Response,
+  { emptyParsed = null }: { emptyParsed?: unknown } = {}
+): Promise<ParsedResponseBody> {
+  const rawText = await response.text();
+  if (!rawText) {
+    return { rawText, parsed: emptyParsed };
+  }
+  try {
+    return { rawText, parsed: JSON.parse(rawText) as unknown };
+  } catch {
+    return { rawText, parsed: rawText };
+  }
+}
+
+function apiErrorMessage(parsed: unknown, fallback: string): string {
+  if (typeof parsed === 'string' && parsed.trim()) {
+    return parsed;
+  }
+  if (parsed && typeof parsed === 'object') {
+    const record = parsed as Record<string, unknown>;
+    for (const key of ['message', 'error']) {
+      const value = record[key];
+      if (typeof value === 'string' && value.trim()) {
+        return value;
+      }
+    }
+  }
+  return fallback;
+}
+
+async function throwApiError(response: Response, fallback: string): Promise<never> {
+  const { parsed } = await readJsonOrText(response);
+  throw new Error(apiErrorMessage(parsed, fallback));
+}
+
 export async function fetchOverview(overviewEndpoint: string): Promise<OverviewPageData> {
   const response = await fetch(overviewEndpoint, {
     headers: {
@@ -7,7 +48,10 @@ export async function fetchOverview(overviewEndpoint: string): Promise<OverviewP
     }
   });
   if (!response.ok) {
-    throw new Error(`Overview request failed: ${response.status} ${response.statusText}`);
+    await throwApiError(
+      response,
+      `Overview request failed: ${response.status} ${response.statusText}`
+    );
   }
   return response.json() as Promise<OverviewPageData>;
 }
@@ -18,13 +62,7 @@ export async function fetchResource(path: string): Promise<ResourceResponse> {
       Accept: 'application/json'
     }
   });
-  const rawText = await response.text();
-  let parsed: unknown = rawText;
-  try {
-    parsed = JSON.parse(rawText) as unknown;
-  } catch {
-    // Keep the raw text when the response is not JSON.
-  }
+  const { rawText, parsed } = await readJsonOrText(response, { emptyParsed: '' });
   return {
     status: response.status,
     statusText: response.statusText,
@@ -41,7 +79,10 @@ export async function fetchSchema(): Promise<SchemaResponse> {
     }
   });
   if (!response.ok) {
-    throw new Error(`Schema request failed: ${response.status} ${response.statusText}`);
+    await throwApiError(
+      response,
+      `Schema request failed: ${response.status} ${response.statusText}`
+    );
   }
   return response.json() as Promise<SchemaResponse>;
 }
@@ -53,7 +94,10 @@ export async function fetchSchemaEditor(): Promise<SchemaEditorPayload> {
     }
   });
   if (!response.ok) {
-    throw new Error(`Schema editor request failed: ${response.status} ${response.statusText}`);
+    await throwApiError(
+      response,
+      `Schema editor request failed: ${response.status} ${response.statusText}`
+    );
   }
   return response.json() as Promise<SchemaEditorPayload>;
 }
@@ -68,8 +112,7 @@ export async function saveSchemaDocument(schema: string): Promise<void> {
     body: schema
   });
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Schema save failed: ${response.status} ${response.statusText}`);
+    await throwApiError(response, `Schema save failed: ${response.status} ${response.statusText}`);
   }
 }
 
@@ -81,8 +124,7 @@ export async function inferSchemaDocument(): Promise<{ path?: string }> {
     }
   });
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Schema infer failed: ${response.status} ${response.statusText}`);
+    await throwApiError(response, `Schema infer failed: ${response.status} ${response.statusText}`);
   }
   return response.json() as Promise<{ path?: string }>;
 }
@@ -105,22 +147,12 @@ export async function mutateResource({
     body: body ?? undefined
   });
 
-  const rawText = await response.text();
-  let parsed: unknown = null;
-  if (rawText) {
-    try {
-      parsed = JSON.parse(rawText) as unknown;
-    } catch {
-      parsed = rawText;
-    }
-  }
+  const { parsed } = await readJsonOrText(response);
 
   if (!response.ok) {
-    const message =
-      typeof parsed === 'string' && parsed.trim()
-        ? parsed
-        : `Request failed: ${response.status} ${response.statusText}`;
-    throw new Error(message);
+    throw new Error(
+      apiErrorMessage(parsed, `Request failed: ${response.status} ${response.statusText}`)
+    );
   }
 
   return {

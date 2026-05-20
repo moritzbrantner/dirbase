@@ -28,16 +28,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup project
+        uses: ./.github/actions/setup-project
         with:
-          bun-version-file: '.bun-version'
-
-      - name: Install UI dependencies
-        run: bun install --cwd ../ui --frozen-lockfile
+          rust-toolchain: stable
 
       - name: Build Rust binary
         run: cargo build --release --manifest-path ../Cargo.toml
@@ -63,13 +57,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup project
+        uses: ./.github/actions/setup-project
         with:
-          bun-version-file: '.bun-version'
-
-      - name: Install Bun dependencies
-        run: bun install --frozen-lockfile
+          rust: "false"
+          cargo-cache: "false"
+          ui-deps: "false"
+          js-deps: "true"
 
       - name: Build JavaScript bundle
         run: bun run build:js

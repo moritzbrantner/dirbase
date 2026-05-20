@@ -1,0 +1,42 @@
+name: Dependency Security
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup project
+        uses: ./.github/actions/setup-project
+        with:
+          js-deps: "true"
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Check Rust dependency policy
+        run: cargo deny check advisories bans sources
+
+      - name: Audit Rust dependencies
+        run: cargo audit
+
+      - name: Audit UI dependencies
+        run: bun audit --audit-level=moderate
+        working-directory: ui
+
+      - name: Audit JavaScript package dependencies
+        run: bun audit --audit-level=moderate
+        working-directory: js

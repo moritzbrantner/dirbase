@@ -123,6 +123,14 @@ describe('api client', () => {
     mockFetch({ ok: false, status: 400, statusText: 'Bad Request', text: 'invalid schema' });
     await expect(saveSchemaDocument('{')).rejects.toThrow('invalid schema');
 
+    mockFetch({
+      ok: false,
+      status: 422,
+      statusText: 'Unprocessable Content',
+      json: { message: 'schema message failed' }
+    });
+    await expect(saveSchemaDocument('{"tables":{}}')).rejects.toThrow('schema message failed');
+
     mockFetch({ ok: true, status: 200, statusText: 'OK', json: { path: '/tmp/schema.json' } });
     await expect(inferSchemaDocument()).resolves.toEqual({ path: '/tmp/schema.json' });
 
@@ -170,5 +178,15 @@ describe('api client', () => {
     await expect(
       mutateResource({ method: 'PATCH', path: '/users/1', body: '{"bad":true}' })
     ).rejects.toThrow('bad payload');
+
+    mockFetch({
+      ok: false,
+      status: 409,
+      statusText: 'Conflict',
+      json: { error: 'conflicting row' }
+    });
+    await expect(
+      mutateResource({ method: 'PUT', path: '/users/1', body: '{"name":"Ada"}' })
+    ).rejects.toThrow('conflicting row');
   });
 });

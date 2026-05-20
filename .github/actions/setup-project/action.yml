@@ -1,0 +1,61 @@
+name: Setup project
+description: Install the shared Rust, Bun, dependency, and Cargo cache setup for CI jobs.
+
+inputs:
+  rust:
+    description: Install a Rust toolchain.
+    default: "true"
+  rust-toolchain:
+    description: Rust toolchain version to install.
+    default: "1.85.0"
+  rust-components:
+    description: Comma-separated Rust toolchain components to install.
+    default: ""
+  cargo-cache:
+    description: Restore and save the Cargo registry and build cache.
+    default: "true"
+  bun:
+    description: Install Bun from the repository version file.
+    default: "true"
+  ui-deps:
+    description: Install UI dependencies with Bun.
+    default: "true"
+  js-deps:
+    description: Install JavaScript package dependencies with Bun.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust toolchain
+      if: inputs.rust == 'true' && inputs.rust-components == ''
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ inputs.rust-toolchain }}
+
+    - name: Install Rust toolchain with components
+      if: inputs.rust == 'true' && inputs.rust-components != ''
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ inputs.rust-toolchain }}
+        components: ${{ inputs.rust-components }}
+
+    - name: Cache cargo registry and build artifacts
+      if: inputs.rust == 'true' && inputs.cargo-cache == 'true'
+      uses: Swatinem/rust-cache@v2
+
+    - name: Setup Bun
+      if: inputs.bun == 'true'
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version-file: ${{ github.workspace }}/.bun-version
+
+    - name: Install UI dependencies
+      if: inputs.bun == 'true' && inputs.ui-deps == 'true'
+      run: bun install --cwd "${{ github.workspace }}/ui" --frozen-lockfile
+      shell: bash
+
+    - name: Install JavaScript package dependencies
+      if: inputs.bun == 'true' && inputs.js-deps == 'true'
+      run: bun install --cwd "${{ github.workspace }}/js" --frozen-lockfile
+      shell: bash
