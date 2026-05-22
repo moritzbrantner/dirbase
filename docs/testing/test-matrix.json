@@ -143,13 +143,13 @@
       "covered_by": [
         {
           "test": "config_parser_supports_quotes_comments_and_escapes",
-          "path": "src/main.rs",
+          "path": "src/cli.rs",
           "test_type": "unit",
           "asserts": ["config parser handles comments, quotes, and escapes"]
         },
         {
           "test": "resolve_cli_prefers_command_line_values_over_config",
-          "path": "src/main.rs",
+          "path": "src/cli.rs",
           "test_type": "unit",
           "asserts": ["CLI values override config values"]
         },

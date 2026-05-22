@@ -1,4 +1,11 @@
+mod assets;
+mod embed;
 mod html;
+mod html_forms;
+mod middleware;
+mod ops;
 pub mod overview;
+mod resource_routes;
 mod response_format;
-pub mod routes;
+pub mod router;
+mod schema_routes;
