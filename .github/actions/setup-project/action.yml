@@ -7,7 +7,7 @@ inputs:
     default: "true"
   rust-toolchain:
     description: Rust toolchain version to install.
-    default: "1.85.0"
+    default: "1.89.0"
   rust-components:
     description: Comma-separated Rust toolchain components to install.
     default: ""

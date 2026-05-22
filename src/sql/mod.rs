@@ -245,12 +245,13 @@ async fn materialize_sql_rows(
         let Some(target_rows) = join_data.get(&join.alias) else {
             continue;
         };
-        let lookup = target_rows.iter().fold(HashMap::new(), |mut acc, row| {
-            if let Some(value) = row.get(&join.right_column) {
-                acc.entry(value_to_lookup_key(value)).or_insert_with(Vec::new).push(row.clone());
-            }
-            acc
-        });
+        let lookup: HashMap<String, Vec<Map<String, Value>>> =
+            target_rows.iter().fold(HashMap::new(), |mut acc, row| {
+                if let Some(value) = row.get(&join.right_column) {
+                    acc.entry(value_to_lookup_key(value)).or_default().push(row.clone());
+                }
+                acc
+            });
         let mut next_rows = Vec::new();
         for row in &joined_rows {
             let Some(actual) =

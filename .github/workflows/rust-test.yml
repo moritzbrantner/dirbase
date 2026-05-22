@@ -19,4 +19,4 @@ jobs:
       - name: Run tests
         run: |
           rm -rf ui/dist
-          cargo test --all-features --verbose -- --test-threads=1
+          DIRBASE_REBUILD_UI=1 cargo test --all-features --verbose -- --test-threads=1
