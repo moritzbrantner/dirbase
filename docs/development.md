@@ -4,7 +4,7 @@ This repository contains a Rust server, a Bun-built React overview UI, and a Bun
 
 ## Setup
 
-Install Rust from `rust-toolchain.toml` and Bun 1.3.12 from `.bun-version`.
+Install Rust from `rust-toolchain.toml` and Bun 1.3.14 from `.bun-version`.
 
 ```bash
 bun install --cwd ui --frozen-lockfile

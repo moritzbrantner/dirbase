@@ -303,7 +303,7 @@ bun pm pack
 A GitHub Actions workflow is provided at `.github/workflows/rust-to-bun.yml`.
 
 - Trigger: pushing tags matching `bun-v*` (or manual `workflow_dispatch`).
-- Toolchain: Rust stable + Bun 1.3.12.
+- Toolchain: Rust stable + Bun 1.3.14.
 - Steps: build native binaries on Linux, macOS, and Windows, bundle the JS launcher, then publish one package containing all prebuilt binaries with Bun.
 - Secret required: `NPM_TOKEN`.
 
