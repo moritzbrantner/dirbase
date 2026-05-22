@@ -76,8 +76,8 @@ pub async fn auth_middleware(
         return next.run(request).await;
     }
     state.metrics.record_auth_failure();
-    AppError::new(StatusCode::UNAUTHORIZED, "Missing or invalid bearer token")
-        .with_code("unauthorized")
+    AppError::unauthorized("Missing or invalid bearer token")
+        .with_code(crate::error::ERROR_CODE_UNAUTHORIZED)
         .into_response()
 }
 

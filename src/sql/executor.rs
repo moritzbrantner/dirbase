@@ -25,14 +25,11 @@ pub(crate) async fn run_sql_query(state: AppState, query: String) -> Result<Json
     let rows = materialize_sql_rows(&state, &parsed).await?;
     let scanned_rows = rows.len();
     if scanned_rows > state.config.max_sql_scan_rows {
-        return Err(AppError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            format!(
-                "Query exceeds scan guard: {scanned_rows} rows scanned (max {})",
-                state.config.max_sql_scan_rows
-            ),
-        )
-        .with_code("unsupported_feature"));
+        return Err(AppError::payload_too_large(format!(
+            "Query exceeds scan guard: {scanned_rows} rows scanned (max {})",
+            state.config.max_sql_scan_rows
+        ))
+        .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
     }
 
     let filtered = if parsed.filters.is_empty() {
@@ -63,14 +60,13 @@ pub(crate) async fn run_sql_query(state: AppState, query: String) -> Result<Json
     let rows = apply_column_selection(paginated_rows, parsed.selected_columns)?;
     let row_count = rows.len();
     if row_count > state.config.max_sql_selected_rows {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
+        return Err(AppError::bad_request(
             format!(
                 "Query returned {row_count} rows; maximum allowed is {}. Use LIMIT to reduce the result set",
                 state.config.max_sql_selected_rows
             ),
         )
-        .with_code("unsupported_feature"));
+        .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
     }
 
     Ok(Json(

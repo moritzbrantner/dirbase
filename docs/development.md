@@ -25,6 +25,8 @@ For focused work, prefer the native command for the area you are changing:
 
 ```bash
 cargo test -- --test-threads=1
+cargo test --test api_contracts -- --test-threads=1
+cargo test --test storage_reliability -- --test-threads=1
 bun run --cwd ui test
 bun run --cwd js test
 ```
@@ -43,6 +45,10 @@ bun run hygiene
 
 `bun run verify` runs formatting checks, Rust Clippy, UI typecheck, a Rust build, and `scripts/run_repo_tests.sh`.
 
+## Public Contracts
+
+Compatibility surfaces and maintenance rules are documented in [`contracts.md`](./contracts.md). When a change affects CLI behavior, routes, error responses, GraphQL, SQL, storage, schema, overview UI workflows, or the JS wrapper, add or update contract coverage before changing internals.
+
 ## UI Bundle
 
 The Rust server embeds the checked-in UI bundle in `ui/dist/`. Rebuild it only when UI source changes:
@@ -52,6 +58,12 @@ bun run build:ui
 ```
 
 `ui/src/tailwind.generated.css`, `ui/dist/overview.css`, and `ui/dist/overview.js` are generated outputs from that command.
+
+For non-UI work, check that generated assets stayed clean:
+
+```bash
+bash scripts/check_generated_ui_clean.sh
+```
 
 ## Full Verification
 
@@ -88,6 +100,20 @@ bun run hygiene
 It reports dirty status, untracked files, upstream configuration, ahead/behind state, generated directories that are accidentally tracked, and local-only ignore coverage.
 
 Ignored local outputs include `target/`, `data/`, `requests.log`, `node_modules/`, `js/dist/`, `js/bin/`, UI coverage and Playwright reports, and benchmark work/results outputs. `ui/dist/overview.css` and `ui/dist/overview.js` are intentionally tracked.
+
+## Benchmark Summaries
+
+Run the benchmark with the default comparison settings:
+
+```bash
+bash scripts/benchmark_vs_json_server.sh
+```
+
+Print a compact summary of the latest benchmark output:
+
+```bash
+python3 scripts/summarize_benchmark_result.py
+```
 
 ## Release And Publish
 

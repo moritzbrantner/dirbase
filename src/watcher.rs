@@ -14,8 +14,11 @@ use tokio::sync::RwLock;
 
 use crate::{
     app::{AppState, CachedResource, DataSource, GraphqlStore, HealthState, SchemaStore},
-    schema::{infer_schema_from_data_source, load_schema, primary_key_name},
-    storage::{build_id_index, is_reserved_resource_name, is_valid_resource_name, scan_resources},
+    schema::{infer_schema_from_data_source, load_schema},
+    storage::{
+        cached_resource_from_value, is_reserved_resource_name, is_valid_resource_name,
+        scan_resources,
+    },
 };
 
 pub fn start_resource_watcher(
@@ -132,17 +135,10 @@ pub fn start_resource_watcher(
                                                             .cloned();
                                                         cache.insert(
                                                             stem.to_string(),
-                                                            CachedResource {
-                                                                id_index: build_id_index(
-                                                                    &value,
-                                                                    table.as_ref(),
-                                                                ),
-                                                                primary_key: primary_key_name(
-                                                                    table.as_ref(),
-                                                                )
-                                                                .to_string(),
-                                                                value: Arc::new(value),
-                                                            },
+                                                            cached_resource_from_value(
+                                                                Arc::new(value),
+                                                                table.as_ref(),
+                                                            ),
                                                         );
                                                     }
                                                     None => {

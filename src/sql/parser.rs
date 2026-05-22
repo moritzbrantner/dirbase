@@ -27,22 +27,21 @@ pub(crate) async fn parse_sql_query(
     state: &AppState,
 ) -> Result<ParsedSqlQuery, AppError> {
     if query.len() > MAX_SQL_QUERY_LENGTH {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            format!("SQL query length exceeds {MAX_SQL_QUERY_LENGTH} characters"),
-        )
-        .with_code("invalid_sql"));
+        return Err(AppError::bad_request(format!(
+            "SQL query length exceeds {MAX_SQL_QUERY_LENGTH} characters"
+        ))
+        .with_code(crate::error::ERROR_CODE_INVALID_SQL));
     }
     let statements = SqlParser::parse_sql(&GenericDialect {}, query).map_err(|err| {
         AppError::new(StatusCode::BAD_REQUEST, format!("Invalid SQL query: {err}"))
-            .with_code("invalid_sql")
+            .with_code(crate::error::ERROR_CODE_INVALID_SQL)
     })?;
     if statements.len() != 1 {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "Only a single SQL statement is supported",
         )
-        .with_code("unsupported_feature"));
+        .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
     }
 
     let statement = statements.into_iter().next().expect("single statement");
@@ -62,7 +61,7 @@ pub(crate) async fn parse_sql_query(
                 (Some(per_page), None) => Some(Pagination { page: 1, per_page }),
                 (None, Some(_)) => {
                     return Err(AppError::new(StatusCode::BAD_REQUEST, "OFFSET requires LIMIT")
-                        .with_code("invalid_sql"));
+                        .with_code(crate::error::ERROR_CODE_INVALID_SQL));
                 }
             };
             if matches!(pagination.as_ref(), Some(p) if p.per_page > state.config.max_sql_selected_rows)
@@ -74,7 +73,7 @@ pub(crate) async fn parse_sql_query(
                         state.config.max_sql_selected_rows
                     ),
                 )
-                .with_code("unsupported_feature"));
+                .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
             }
             let sort_columns = parse_sql_order_by(query_box.order_by.as_ref())?;
             match *query_box.body {
@@ -83,12 +82,12 @@ pub(crate) async fn parse_sql_query(
                 }
                 _ => {
                     Err(AppError::new(StatusCode::BAD_REQUEST, "Only SELECT queries are supported")
-                        .with_code("unsupported_feature"))
+                        .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE))
                 }
             }
         }
         _ => Err(AppError::new(StatusCode::BAD_REQUEST, "Only SELECT statements are supported")
-            .with_code("unsupported_feature")),
+            .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE)),
     }
 }
 
@@ -101,33 +100,30 @@ async fn parse_sql_select(
     if !matches!(select.group_by, sqlparser::ast::GroupByExpr::Expressions(ref exprs, _) if exprs.is_empty())
     {
         return Err(AppError::new(StatusCode::BAD_REQUEST, "GROUP BY is not supported")
-            .with_code("unsupported_feature"));
+            .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
     }
     if select.having.is_some() {
         return Err(AppError::new(StatusCode::BAD_REQUEST, "HAVING is not supported")
-            .with_code("unsupported_feature"));
+            .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
     }
     if select.distinct.is_some() {
         return Err(AppError::new(StatusCode::BAD_REQUEST, "DISTINCT is not supported")
-            .with_code("unsupported_feature"));
+            .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
     }
     if select.from.len() != 1 {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "Exactly one table/resource in FROM is required",
         )
-        .with_code("invalid_sql"));
+        .with_code(crate::error::ERROR_CODE_INVALID_SQL));
     }
     let from = &select.from[0];
     let (resource, resource_alias) = parse_sql_table_factor(&from.relation)?;
     validate_sql_identifier(&resource, "resource")?;
     validate_sql_identifier(&resource_alias, "resource alias")?;
     if !resource_exists(state, &resource).await? {
-        return Err(AppError::new(
-            StatusCode::NOT_FOUND,
-            format!("Unknown table/resource '{resource}'"),
-        )
-        .with_code("unknown_table"));
+        return Err(AppError::not_found(format!("Unknown table/resource '{resource}'"))
+            .with_code(crate::error::ERROR_CODE_UNKNOWN_TABLE));
     }
     let joins = parse_sql_joins(&resource, &resource_alias, &from.joins, state).await?;
 
@@ -165,7 +161,7 @@ fn parse_sql_table_factor(relation: &TableFactor) -> Result<(String, String), Ap
                 .last()
                 .ok_or_else(|| {
                     AppError::new(StatusCode::BAD_REQUEST, "Missing table/resource name")
-                        .with_code("invalid_sql")
+                        .with_code(crate::error::ERROR_CODE_INVALID_SQL)
                 })?
                 .value
                 .clone();
@@ -176,7 +172,7 @@ fn parse_sql_table_factor(relation: &TableFactor) -> Result<(String, String), Ap
             Ok((resource, alias))
         }
         _ => Err(AppError::new(StatusCode::BAD_REQUEST, "Unsupported FROM clause")
-            .with_code("unsupported_feature")),
+            .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE)),
     }
 }
 
@@ -197,14 +193,14 @@ async fn parse_sql_joins(
                 StatusCode::NOT_FOUND,
                 format!("Unknown table/resource '{resource}'"),
             )
-            .with_code("unknown_table"));
+            .with_code(crate::error::ERROR_CODE_UNKNOWN_TABLE));
         }
         if aliases.contains_key(&alias) {
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
                 format!("Duplicate table alias '{alias}'"),
             )
-            .with_code("invalid_sql"));
+            .with_code(crate::error::ERROR_CODE_INVALID_SQL));
         }
         let (left_alias, left_column, right_alias, right_column) = match &join.join_operator {
             JoinOperator::Inner(JoinConstraint::On(expr)) => parse_sql_join_on(expr)?,
@@ -213,11 +209,11 @@ async fn parse_sql_joins(
                     StatusCode::BAD_REQUEST,
                     "INNER JOIN requires an ON clause",
                 )
-                .with_code("unsupported_feature"));
+                .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
             }
             _ => {
                 return Err(AppError::new(StatusCode::BAD_REQUEST, "Only INNER JOIN is supported")
-                    .with_code("unsupported_feature"));
+                    .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
             }
         };
         if right_alias != alias && left_alias != alias {
@@ -225,7 +221,7 @@ async fn parse_sql_joins(
                 StatusCode::BAD_REQUEST,
                 "JOIN ON clause must reference the joined table alias",
             )
-            .with_code("invalid_sql"));
+            .with_code(crate::error::ERROR_CODE_INVALID_SQL));
         }
         let existing_alias = if left_alias == alias { &right_alias } else { &left_alias };
         if !aliases.contains_key(existing_alias) {
@@ -233,7 +229,7 @@ async fn parse_sql_joins(
                 StatusCode::BAD_REQUEST,
                 format!("JOIN references unknown alias '{existing_alias}'"),
             )
-            .with_code("invalid_sql"));
+            .with_code(crate::error::ERROR_CODE_INVALID_SQL));
         }
         let existing_resource = aliases.get(existing_alias).expect("existing alias");
         validate_join_relation(
@@ -266,11 +262,11 @@ async fn parse_sql_joins(
 fn parse_sql_join_on(expr: &Expr) -> Result<(String, String, String, String), AppError> {
     let Expr::BinaryOp { left, op, right } = expr else {
         return Err(AppError::new(StatusCode::BAD_REQUEST, "JOIN ON must be a simple equality")
-            .with_code("unsupported_feature"));
+            .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
     };
     if *op != BinaryOperator::Eq {
         return Err(AppError::new(StatusCode::BAD_REQUEST, "JOIN ON only supports equality")
-            .with_code("unsupported_feature"));
+            .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
     }
     let left = parse_sql_qualified_column_expr(left)?;
     let right = parse_sql_qualified_column_expr(right)?;
@@ -294,7 +290,7 @@ fn parse_sql_qualified_column_expr(expr: &Expr) -> Result<(String, String), AppE
             StatusCode::BAD_REQUEST,
             "JOIN columns must use qualified references like table.column",
         )
-        .with_code("invalid_sql")),
+        .with_code(crate::error::ERROR_CODE_INVALID_SQL)),
     }
 }
 
@@ -324,7 +320,7 @@ fn validate_join_relation(
             "JOIN between '{left_resource}.{left_column}' and '{right_resource}.{right_column}' is not backed by schema metadata"
         ),
     )
-    .with_code("unsupported_feature"))
+    .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE))
 }
 
 fn parse_sql_projection(projection: &[SelectItem]) -> Result<Option<Vec<String>>, AppError> {
@@ -355,7 +351,7 @@ fn parse_sql_projection(projection: &[SelectItem]) -> Result<Option<Vec<String>>
                     StatusCode::BAD_REQUEST,
                     "Unsupported SELECT projection",
                 )
-                .with_code("unsupported_feature"));
+                .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
             }
         }
     }

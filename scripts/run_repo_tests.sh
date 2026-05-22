@@ -12,6 +12,8 @@ python3 scripts/render_test_matrix.py --check
   bun run test:e2e
 )
 
+bash scripts/check_generated_ui_clean.sh
+
 (
   cd js
   bun test

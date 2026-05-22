@@ -1,3 +1,4 @@
+mod cache;
 mod index;
 mod io;
 mod validation;
@@ -8,11 +9,14 @@ use axum::http::StatusCode;
 use serde_json::Value;
 
 use crate::{
-    app::{AppState, CachedResource, DataSource},
+    app::{AppState, DataSource},
     error::AppError,
-    schema::{infer_schema_from_data_source, primary_key_name},
+    schema::infer_schema_from_data_source,
 };
 
+pub(crate) use cache::cached_resource_from_value;
+#[allow(unused_imports)]
+pub use cache::{clear_resource_cache, remove_cached_resource, update_cached_resource};
 pub use index::{
     build_id_index, coerce_id_value, find_item_by_key, find_item_index_by_key, next_numeric_id,
 };
@@ -39,7 +43,7 @@ pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value
 
     let value = Arc::new(io::read_resource_value(&state.data_source, &file, resource).await?);
 
-    update_cached_resource(state, resource, value.clone()).await;
+    cache::update_cached_resource(state, resource, value.clone()).await;
     Ok(value)
 }
 
@@ -57,7 +61,7 @@ pub async fn write_resource(
         io::persist_resource_value(&state.data_source, &file, resource, value).await?;
     }
 
-    update_cached_resource(state, resource, Arc::new(value.clone())).await;
+    cache::update_cached_resource(state, resource, Arc::new(value.clone())).await;
     refresh_inferred_schema(state).await?;
     state.invalidate_graphql_schema().await;
     state.emit_event("resource_changed", Some(resource.to_string()));
@@ -71,18 +75,6 @@ pub async fn resource_exists(state: &AppState, resource: &str) -> Result<bool, A
     Ok(state.resources.read().await.contains(resource))
 }
 
-async fn update_cached_resource(state: &AppState, resource: &str, value: Arc<Value>) {
-    let table = state.schema_table(resource);
-    state.resource_cache.write().await.insert(
-        resource.to_string(),
-        CachedResource {
-            value: value.clone(),
-            id_index: build_id_index(value.as_ref(), table.as_ref()),
-            primary_key: primary_key_name(table.as_ref()).to_string(),
-        },
-    );
-}
-
 async fn refresh_inferred_schema(state: &AppState) -> Result<(), AppError> {
     let resources = state.resources.read().await.clone();
     let data_source = state.data_source.clone();
@@ -90,16 +82,9 @@ async fn refresh_inferred_schema(state: &AppState) -> Result<(), AppError> {
         infer_schema_from_data_source(&data_source, &resources)
     })
     .await
-    .map_err(|err| {
-        AppError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Schema refresh task failed: {err}"),
-        )
-    })?
-    .map_err(|err| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, err))?;
-    state
-        .update_inferred_schema(inferred)
-        .map_err(|err| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, err))?;
+    .map_err(|err| AppError::internal(format!("Schema refresh task failed: {err}")))?
+    .map_err(AppError::internal)?;
+    state.update_inferred_schema(inferred).map_err(AppError::internal)?;
     state.health.mark_ready();
     Ok(())
 }

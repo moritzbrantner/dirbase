@@ -40,3 +40,6 @@ jobs:
       - name: Run UI e2e tests
         run: bun run test:e2e
         working-directory: ui
+
+      - name: Check generated UI assets
+        run: bash scripts/check_generated_ui_clean.sh

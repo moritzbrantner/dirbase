@@ -2,13 +2,16 @@
 // Integration tests compile as separate crates, so each crate uses a different subset of these helpers.
 
 use std::{
+    fs,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
+
+use serde_json::Value;
 
 pub struct ChildGuard {
     child: Child,
@@ -88,6 +91,37 @@ pub fn parse_http_body(response: &str) -> &str {
 
 pub fn http_get(addr: &str, path: &str) -> String {
     http_request(addr, "GET", path, None)
+}
+
+pub fn request_json(addr: &str, method: &str, path: &str, body: Option<Value>) -> Value {
+    let body_text = body.as_ref().map(Value::to_string);
+    parse_json_body(&request_text(addr, method, path, body_text.as_deref()))
+}
+
+pub fn request_text(addr: &str, method: &str, path: &str, body: Option<&str>) -> String {
+    http_request(addr, method, path, body)
+}
+
+pub fn request_with_headers(
+    addr: &str,
+    method: &str,
+    path: &str,
+    extra_headers: &str,
+    body: Option<&str>,
+) -> String {
+    http_request_with_headers(addr, method, path, Some(extra_headers), body)
+}
+
+pub fn parse_json_body(response: &str) -> Value {
+    serde_json::from_str(parse_http_body(response)).expect("valid json body")
+}
+
+pub fn assert_status(response: &str, status: &str) {
+    assert!(response.starts_with(&format!("HTTP/1.1 {status}\r\n")), "{response}");
+}
+
+pub fn assert_json_eq(actual: &Value, expected: Value) {
+    assert_eq!(actual, &expected);
 }
 
 pub fn http_request(addr: &str, method: &str, path: &str, body: Option<&str>) -> String {
@@ -237,6 +271,88 @@ pub fn open_sse_stream(addr: &str, path: &str) -> TcpStream {
     stream.write_all(request.as_bytes()).expect("write events request");
     stream.set_read_timeout(Some(Duration::from_millis(200))).expect("set timeout");
     stream
+}
+
+pub fn wait_for_event(stream: &mut TcpStream, needle: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut buffer = String::new();
+    while Instant::now() < deadline {
+        let mut chunk = [0_u8; 512];
+        match stream.read(&mut chunk) {
+            Ok(0) => thread::sleep(Duration::from_millis(50)),
+            Ok(read) => {
+                buffer.push_str(&String::from_utf8_lossy(&chunk[..read]));
+                if buffer.contains(needle) {
+                    return buffer;
+                }
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(err) => panic!("failed to read event stream: {err}"),
+        }
+    }
+    panic!("timed out waiting for event containing '{needle}': {buffer}");
+}
+
+pub struct TestDatasetBuilder {
+    temp: tempfile::TempDir,
+}
+
+impl TestDatasetBuilder {
+    pub fn new() -> Self {
+        Self { temp: tempfile::tempdir().expect("create temp directory") }
+    }
+
+    pub fn path(&self) -> &Path {
+        self.temp.path()
+    }
+
+    pub fn file_path(&self, name: &str) -> PathBuf {
+        self.path().join(name)
+    }
+
+    pub fn json_file(self, name: &str, value: Value) -> Self {
+        self.write_file(
+            name,
+            &format!("{}\n", serde_json::to_string_pretty(&value).expect("json payload")),
+        )
+    }
+
+    pub fn write_file(self, name: &str, contents: &str) -> Self {
+        fs::write(self.path().join(name), contents).expect("write fixture file");
+        self
+    }
+}
+
+pub struct TestServerBuilder<'a> {
+    path: &'a Path,
+    extra_args: Vec<&'a str>,
+}
+
+impl<'a> TestServerBuilder<'a> {
+    pub fn folder(path: &'a Path) -> Self {
+        Self { path, extra_args: Vec::new() }
+    }
+
+    pub fn arg(mut self, arg: &'a str) -> Self {
+        self.extra_args.push(arg);
+        self
+    }
+
+    pub fn args(mut self, args: &[&'a str]) -> Self {
+        self.extra_args.extend_from_slice(args);
+        self
+    }
+
+    pub fn spawn(self) -> (ChildGuard, String) {
+        spawn_folder_server_with_args(self.path, &self.extra_args)
+    }
 }
 
 fn spawn_with_retry(build: impl Fn(&str) -> Command) -> (ChildGuard, String) {

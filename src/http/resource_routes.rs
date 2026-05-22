@@ -111,11 +111,11 @@ fn enforce_per_page_limit(
     if let Some(pagination) = pagination
         && pagination.per_page > state.config.max_per_page
     {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            format!("per_page exceeds configured max of {}", state.config.max_per_page),
-        )
-        .with_code("limit_exceeded"));
+        return Err(AppError::bad_request(format!(
+            "per_page exceeds configured max of {}",
+            state.config.max_per_page
+        ))
+        .with_code(crate::error::ERROR_CODE_LIMIT_EXCEEDED));
     }
     Ok(())
 }

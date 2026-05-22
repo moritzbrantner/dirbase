@@ -30,6 +30,10 @@ tempfile = "3.19"
 tower = { version = "0.5", features = ["util"] }
 
 [[test]]
+name = "api_contracts"
+path = "src/api_contracts_test.rs"
+
+[[test]]
 name = "cli_help"
 path = "src/main_cli_help_test.rs"
 
@@ -88,6 +92,10 @@ path = "src/sql/sql_query_test.rs"
 [[test]]
 name = "startup_output"
 path = "src/main_startup_output_test.rs"
+
+[[test]]
+name = "storage_reliability"
+path = "src/storage_reliability_test.rs"
 
 [[test]]
 name = "watcher_behavior"

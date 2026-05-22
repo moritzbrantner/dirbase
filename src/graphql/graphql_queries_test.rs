@@ -596,6 +596,42 @@ fn graphql_queries_work_in_readonly_mode_and_mutations_are_rejected() {
     assert!(mutation_payload.get("errors").is_some(), "{mutation_payload}");
 }
 
+#[test]
+fn graphql_get_post_variables_and_malformed_bodies_keep_contracts() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
+        .expect("write users");
+
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
+
+    let get_response = http_request(
+        &bind_addr,
+        "GET",
+        "/graphql?query=%7B%20users%20%7B%20id%20name%20%7D%20%7D",
+        None,
+    );
+    assert!(get_response.starts_with("HTTP/1.1 200 OK\r\n"), "{get_response}");
+    let get_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&get_response)).expect("graphql get json");
+    assert_eq!(get_payload["data"]["users"][0]["name"], "Ada");
+
+    let variables_response = http_request(
+        &bind_addr,
+        "POST",
+        "/graphql",
+        Some(
+            r#"{"query":"query($id: String!) { usersById(id: $id) { id name } }","variables":{"id":"1"}}"#,
+        ),
+    );
+    assert!(variables_response.starts_with("HTTP/1.1 200 OK\r\n"), "{variables_response}");
+    let variables_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&variables_response)).expect("variables json");
+    assert_eq!(variables_payload["data"]["usersById"]["name"], "Ada");
+
+    let malformed = http_request(&bind_addr, "POST", "/graphql", Some(r#"{"query":"#));
+    assert!(malformed.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{malformed}");
+}
+
 fn spawn_server(folder: &std::path::Path, readonly: bool) -> (ChildGuard, String) {
     support::spawn_folder_server(folder, readonly)
 }
