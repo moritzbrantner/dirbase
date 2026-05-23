@@ -4,16 +4,22 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="${ROOT_DIR}/benchmarks/.work"
 DATA_DIR="${DATA_DIR:-${WORK_DIR}/benchmark-data}"
+WRITE_DATA_DIR="${WRITE_DATA_DIR:-${WORK_DIR}/write-benchmark-data}"
 RESULTS_DIR="${ROOT_DIR}/benchmarks/results"
 SCENARIOS_FILE="${WORK_DIR}/benchmark-scenarios.tsv"
 FOLDER_PORT="${FOLDER_PORT:-}"
 JSON_SERVER_PORT="${JSON_SERVER_PORT:-}"
+WRITE_FOLDER_PORT="${WRITE_FOLDER_PORT:-}"
+WRITE_JSON_SERVER_PORT="${WRITE_JSON_SERVER_PORT:-}"
 JSON_SERVER_VERSION="${JSON_SERVER_VERSION:-0.17.4}"
 DURATION="${DURATION:-10}"
 CONNECTIONS="${CONNECTIONS:-50}"
 RUNS="${RUNS:-3}"
 WARMUP_DURATION="${WARMUP_DURATION:-3}"
 WARMUP_CONNECTIONS="${WARMUP_CONNECTIONS:-1}"
+WRITE_CONNECTIONS="${WRITE_CONNECTIONS:-${CONNECTIONS}}"
+WRITE_REQUESTS_PER_METHOD="${WRITE_REQUESTS_PER_METHOD:-500}"
+SKIP_WRITE_BENCHMARKS="${SKIP_WRITE_BENCHMARKS:-0}"
 FORCE_REBUILD_DATA="${FORCE_REBUILD_DATA:-0}"
 
 mkdir -p "${WORK_DIR}" "${RESULTS_DIR}"
@@ -36,11 +42,32 @@ if [[ -z "${JSON_SERVER_PORT}" ]]; then
   JSON_SERVER_PORT="$(pick_free_port)"
 fi
 
+if [[ -z "${WRITE_FOLDER_PORT}" ]]; then
+  WRITE_FOLDER_PORT="$(pick_free_port)"
+fi
+
+if [[ -z "${WRITE_JSON_SERVER_PORT}" ]]; then
+  WRITE_JSON_SERVER_PORT="$(pick_free_port)"
+fi
+
 cleanup() {
   if [[ -n "${FOLDER_PID:-}" ]]; then kill "${FOLDER_PID}" 2>/dev/null || true; fi
   if [[ -n "${JSON_SERVER_PID:-}" ]]; then kill "${JSON_SERVER_PID}" 2>/dev/null || true; fi
 }
 trap cleanup EXIT
+
+stop_read_servers() {
+  if [[ -n "${FOLDER_PID:-}" ]]; then
+    kill "${FOLDER_PID}" 2>/dev/null || true
+    wait "${FOLDER_PID}" 2>/dev/null || true
+    unset FOLDER_PID
+  fi
+  if [[ -n "${JSON_SERVER_PID:-}" ]]; then
+    kill "${JSON_SERVER_PID}" 2>/dev/null || true
+    wait "${JSON_SERVER_PID}" 2>/dev/null || true
+    unset JSON_SERVER_PID
+  fi
+}
 
 GENERATOR_ARGS=(--output-dir "${DATA_DIR}")
 if [[ "${FORCE_REBUILD_DATA}" == "1" ]]; then
@@ -220,6 +247,101 @@ for mode in with-warmup without-warmup; do
   done
 done
 
+WRITE_FOLDER_RESULT=""
+WRITE_JSON_SERVER_RESULT=""
+if [[ "${SKIP_WRITE_BENCHMARKS}" != "1" ]]; then
+  stop_read_servers
+
+  WRITE_FOLDER_DATA="${WRITE_DATA_DIR}/folder"
+  WRITE_JSON_SERVER_DATA="${WRITE_DATA_DIR}/json-server"
+  WRITE_JSON_SERVER_DB="${WRITE_JSON_SERVER_DATA}/db.json"
+  rm -rf "${WRITE_DATA_DIR}"
+  mkdir -p "${WRITE_JSON_SERVER_DATA}"
+
+  python3 - <<PY
+import json
+import shutil
+from pathlib import Path
+
+source = Path("${DATA_DIR}")
+folder_target = Path("${WRITE_FOLDER_DATA}")
+json_server_db = Path("${WRITE_JSON_SERVER_DB}")
+delete_count = int("${WRITE_REQUESTS_PER_METHOD}")
+
+shutil.copytree(source / "folder", folder_target)
+shutil.copy2(source / "db.json", json_server_db)
+
+delete_rows = [
+    {"id": index, "label": f"delete-{index:05d}"}
+    for index in range(1, delete_count + 1)
+]
+(folder_target / "write_delete_items.json").write_text(
+    json.dumps(delete_rows, separators=(",", ":")),
+    encoding="utf-8",
+)
+
+db = json.loads(json_server_db.read_text(encoding="utf-8"))
+db["write_delete_items"] = delete_rows
+json_server_db.write_text(json.dumps(db, separators=(",", ":")), encoding="utf-8")
+PY
+
+  "${ROOT_DIR}/target/release/dirbase" \
+    --folder "${WRITE_FOLDER_DATA}" \
+    --bind "127.0.0.1:${WRITE_FOLDER_PORT}" \
+    >"${WORK_DIR}/dirbase-write.log" 2>&1 &
+  FOLDER_PID=$!
+
+  bunx --bun "json-server@${JSON_SERVER_VERSION}" \
+    --host 127.0.0.1 \
+    --port "${WRITE_JSON_SERVER_PORT}" \
+    --quiet \
+    "${WRITE_JSON_SERVER_DB}" \
+    >"${WORK_DIR}/json-server-write.log" 2>&1 &
+  JSON_SERVER_PID=$!
+
+  unset READY
+  for _ in {1..100}; do
+    if curl -fsS "http://127.0.0.1:${WRITE_FOLDER_PORT}/write_delete_items/1" >/dev/null 2>&1 && \
+       curl -fsS "http://127.0.0.1:${WRITE_JSON_SERVER_PORT}/write_delete_items/1" >/dev/null 2>&1; then
+      READY=1
+      break
+    fi
+    sleep 0.2
+  done
+
+  if [[ "${READY:-0}" -ne 1 ]]; then
+    echo "Write benchmark servers did not become ready in time." >&2
+    echo "--- dirbase write log ---" >&2
+    cat "${WORK_DIR}/dirbase-write.log" >&2 || true
+    echo "--- json-server write log ---" >&2
+    cat "${WORK_DIR}/json-server-write.log" >&2 || true
+    exit 1
+  fi
+
+  python3 "${ROOT_DIR}/scripts/run_write_benchmark.py" \
+    --server-url "http://127.0.0.1:${WRITE_FOLDER_PORT}" \
+    --target-name folder \
+    --results-dir "${RESULTS_DIR}" \
+    --stamp "${STAMP}" \
+    --connections "${WRITE_CONNECTIONS}" \
+    --requests-per-method "${WRITE_REQUESTS_PER_METHOD}" \
+    --data-layout folder \
+    --data-root "${WRITE_FOLDER_DATA}"
+
+  python3 "${ROOT_DIR}/scripts/run_write_benchmark.py" \
+    --server-url "http://127.0.0.1:${WRITE_JSON_SERVER_PORT}" \
+    --target-name json-server \
+    --results-dir "${RESULTS_DIR}" \
+    --stamp "${STAMP}" \
+    --connections "${WRITE_CONNECTIONS}" \
+    --requests-per-method "${WRITE_REQUESTS_PER_METHOD}" \
+    --data-layout json-server \
+    --data-root "${WRITE_JSON_SERVER_DB}"
+
+  WRITE_FOLDER_RESULT="${RESULTS_DIR}/write-folder-${STAMP}.json"
+  WRITE_JSON_SERVER_RESULT="${RESULTS_DIR}/write-json-server-${STAMP}.json"
+fi
+
 python3 - <<PY
 import csv
 import json
@@ -275,6 +397,9 @@ summary = {
         "connections": int("${CONNECTIONS}"),
         "warmup_duration": int("${WARMUP_DURATION}"),
         "warmup_connections": int("${WARMUP_CONNECTIONS}"),
+        "write_connections": int("${WRITE_CONNECTIONS}"),
+        "write_requests_per_method": int("${WRITE_REQUESTS_PER_METHOD}"),
+        "skip_write_benchmarks": "${SKIP_WRITE_BENCHMARKS}" == "1",
         "json_server_version": "${JSON_SERVER_VERSION}",
     },
     "dataset": metadata,
@@ -345,6 +470,76 @@ for mode in ("with_warmup", "without_warmup"):
             },
         }
     summary["modes"][mode] = mode_summary
+
+write_measured = "${SKIP_WRITE_BENCHMARKS}" != "1"
+summary["write_workloads"] = {}
+summary["write_correctness"] = {}
+if write_measured:
+    write_results = {
+        "folder": Path("${WRITE_FOLDER_RESULT}"),
+        "json_server": Path("${WRITE_JSON_SERVER_RESULT}"),
+    }
+    for target, path in write_results.items():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        summary["write_workloads"][target] = data["workloads"]
+        summary["write_correctness"][target] = data["correctness"]
+
+def coverage_row(dimension, status, evidence):
+    return {"dimension": dimension, "status": status, "evidence": evidence}
+
+write_status = "measured" if write_measured else "not_measured"
+summary["coverage_matrix"] = [
+    coverage_row(
+        "Read latency and throughput",
+        "measured",
+        "autocannon request rate, latency, non-2xx, errors, and timeout counts for item, filter, text, sort, page, and composite reads",
+    ),
+    coverage_row(
+        "Write latency",
+        write_status,
+        "POST, PUT, PATCH, and DELETE request rate, latency, non-2xx, errors, and timeout counts",
+    ),
+    coverage_row(
+        "Persisted-write correctness",
+        write_status,
+        "post-run JSON parse, row-count, replacement, patch, and delete validations",
+    ),
+    coverage_row(
+        "Cold start time",
+        "not_measured",
+        "time from process spawn to ready endpoint success across small, medium, and large datasets",
+    ),
+    coverage_row(
+        "Memory usage",
+        "not_measured",
+        "resident memory after startup and during sustained load for each dataset size",
+    ),
+    coverage_row(
+        "File watcher latency",
+        "not_measured",
+        "time from external file add, edit, delete, or rename to updated HTTP responses",
+    ),
+    coverage_row(
+        "SSE event latency",
+        "not_measured",
+        "time from filesystem change to /events notification delivery",
+    ),
+    coverage_row(
+        "Schema inference and export time",
+        "not_measured",
+        "duration for schema inference, /schema export, and schema persistence on representative datasets",
+    ),
+    coverage_row(
+        "Query correctness",
+        "not_measured",
+        "pairwise checks that equivalent dirbase and json-server requests return equivalent sorted payloads where feature parity exists",
+    ),
+    coverage_row(
+        "Concurrent write safety",
+        write_status,
+        "parallel mutation workloads followed by JSON parse checks and expected row-count checks",
+    ),
+]
 
 summary_path = Path("${SUMMARY_JSON}")
 summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")

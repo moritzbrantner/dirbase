@@ -21,6 +21,76 @@ def mode_title(mode: str) -> str:
     return "With warm-up" if mode == "with_warmup" else "Without warm-up"
 
 
+def render_coverage_matrix(summary: dict) -> list[str]:
+    rows = summary.get("coverage_matrix") or []
+    if not rows:
+        write_measured = bool(summary.get("write_workloads"))
+        write_status = "measured" if write_measured else "not_measured"
+        rows = [
+            {
+                "dimension": "Read latency and throughput",
+                "status": "measured",
+                "evidence": "autocannon read workload results",
+            },
+            {
+                "dimension": "Write latency",
+                "status": write_status,
+                "evidence": "write workload results" if write_measured else "write phase was not present in this summary",
+            },
+            {
+                "dimension": "Persisted-write correctness",
+                "status": write_status,
+                "evidence": "persisted JSON checks" if write_measured else "write phase was not present in this summary",
+            },
+            {
+                "dimension": "Cold start time",
+                "status": "not_measured",
+                "evidence": "not measured in this benchmark run",
+            },
+            {
+                "dimension": "Memory usage",
+                "status": "not_measured",
+                "evidence": "not measured in this benchmark run",
+            },
+            {
+                "dimension": "File watcher latency",
+                "status": "not_measured",
+                "evidence": "not measured in this benchmark run",
+            },
+            {
+                "dimension": "SSE event latency",
+                "status": "not_measured",
+                "evidence": "not measured in this benchmark run",
+            },
+            {
+                "dimension": "Schema inference and export time",
+                "status": "not_measured",
+                "evidence": "not measured in this benchmark run",
+            },
+            {
+                "dimension": "Query correctness",
+                "status": "not_measured",
+                "evidence": "not measured in this benchmark run",
+            },
+            {
+                "dimension": "Concurrent write safety",
+                "status": write_status,
+                "evidence": "parallel write workload results" if write_measured else "write phase was not present in this summary",
+            },
+        ]
+
+    lines = [
+        "## Benchmark coverage",
+        "",
+        "| Dimension | Status | Evidence |",
+        "|---|---|---|",
+    ]
+    for row in rows:
+        lines.append(f"| {row['dimension']} | `{row['status']}` | {row['evidence']} |")
+    lines.append("")
+    return lines
+
+
 def render_mode(summary: dict, mode: str) -> list[str]:
     lines = [
         f"## {mode_title(mode)}",
@@ -67,6 +137,62 @@ def render_mode(summary: dict, mode: str) -> list[str]:
     return lines
 
 
+def render_write_benchmarks(summary: dict) -> list[str]:
+    write_workloads = summary.get("write_workloads") or {}
+    folder_workloads = {item["key"]: item for item in write_workloads.get("folder", [])}
+    json_server_workloads = {
+        item["key"]: item for item in write_workloads.get("json_server", [])
+    }
+    lines = ["## Write benchmarks", ""]
+
+    if not folder_workloads or not json_server_workloads:
+        lines.extend(["Write benchmarks were not measured in this run.", ""])
+        return lines
+
+    lines.extend(
+        [
+            "| Workload | Category | dirbase req/s | json-server req/s | dirbase latency (ms) | json-server latency (ms) | dirbase non-2xx | json-server non-2xx |",
+            "|---|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for key in (
+        "post-members",
+        "put-members",
+        "patch-members",
+        "delete-write-delete-items",
+    ):
+        folder = folder_workloads[key]
+        json_server = json_server_workloads[key]
+        lines.append(
+            "| "
+            f"`{folder['label']}` | {folder['category']} "
+            f"| {fmt_num(folder['requests_per_sec'])} "
+            f"| {fmt_num(json_server['requests_per_sec'])} "
+            f"| {fmt_num(folder['latency_ms']['median'])} "
+            f"| {fmt_num(json_server['latency_ms']['median'])} "
+            f"| {folder['non_2xx']} "
+            f"| {json_server['non_2xx']} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "### Persisted write correctness",
+            "",
+            "| Target | Status | Failed checks |",
+            "|---|---|---:|",
+        ]
+    )
+    for target, correctness in (summary.get("write_correctness") or {}).items():
+        failed = [
+            item for item in correctness.get("checks", []) if item.get("status") != "passed"
+        ]
+        lines.append(f"| `{target}` | `{correctness.get('status', 'unknown')}` | {len(failed)} |")
+
+    lines.append("")
+    return lines
+
+
 def render_report(summary: dict) -> str:
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     config = summary["config"]
@@ -103,6 +229,8 @@ def render_report(summary: dict) -> str:
             f"- Benchmark duration: {config['duration']}s",
             f"- Connections: {config['connections']}",
             f"- Warm-up: {config['warmup_connections']} connections for {config['warmup_duration']}s",
+            f"- Write requests per method: {config.get('write_requests_per_method', 'not configured')}",
+            f"- Write connections: {config.get('write_connections', 'not configured')}",
             f"- json-server version: `{config['json_server_version']}`",
             f"- Scenario count: {len(summary['scenarios'])}",
             "",
@@ -121,8 +249,10 @@ def render_report(summary: dict) -> str:
             )
 
     lines.append("")
+    lines.extend(render_coverage_matrix(summary))
     for mode in ("with_warmup", "without_warmup"):
         lines.extend(render_mode(summary, mode))
+    lines.extend(render_write_benchmarks(summary))
 
     return "\n".join(lines) + "\n"
 

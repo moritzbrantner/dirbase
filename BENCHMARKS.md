@@ -4,7 +4,7 @@ This document explains what `dirbase` should be compared with, what the benchmar
 
 ## Summary
 
-The primary benchmark compares `dirbase` with `typicode/json-server`, because both tools turn JSON data into a local HTTP API with very little setup. The current automated script uses a deterministic six-resource dataset with 92,252 total rows and measures item lookups, filters, text search, sorting, pagination, and composite query workloads.
+The primary benchmark compares `dirbase` with `typicode/json-server`, because both tools turn JSON data into a local HTTP API with very little setup. The current automated script uses a deterministic six-resource dataset with 92,252 total rows and measures item lookups, filters, text search, sorting, pagination, composite query workloads, write workloads, persisted-write correctness, and concurrent write safety.
 
 The benchmark scope is broader than read throughput alone. Every report should account for read paths, write paths, persistence correctness, startup behavior, memory, file watching, SSE latency, schema work, query correctness, and concurrent write safety. When a dimension has not been measured in a run, say `not measured` instead of omitting it.
 
@@ -84,6 +84,8 @@ The generated data is written in two equivalent layouts:
 - `benchmarks/.work/benchmark-data/folder/`: one JSON file per resource for `dirbase`
 - `benchmarks/.work/benchmark-data/db.json`: one combined JSON database for `json-server`
 
+The write phase copies this read dataset into `benchmarks/.work/write-benchmark-data/` and adds a `write_delete_items` resource. That isolated mutable copy keeps read results stable and makes every write run disposable.
+
 ## Current Scenarios
 
 The automated benchmark currently exercises:
@@ -93,25 +95,27 @@ The automated benchmark currently exercises:
 3. Text search on `tickets.summary`
 4. Sorted and paginated collection reads on `members`, `tickets`, and `deployments`
 5. Composite filter + sort + pagination workloads
+6. Concurrent write workloads for `POST /members`, `PUT /members/{id}`, `PATCH /members/{id}`, and `DELETE /write_delete_items/{id}`
+7. Persisted JSON checks after writes, including row counts, replacement values, patch values, deleted IDs, and JSON parse validity
 
 The script uses equivalent server-specific query syntax where the two tools differ. For example, `dirbase` uses `risk_score:gte=70`, while `json-server` uses `risk_score_gte=70`.
 
 ## Benchmark Coverage
 
-Each benchmark report should include this coverage matrix. The current script fills the read-heavy rows and leaves the remaining rows marked `not measured` until dedicated scenarios are implemented.
+Each benchmark report includes this coverage matrix. The current script measures read throughput, write throughput, persisted-write correctness, and concurrent write safety. Remaining rows stay marked `not_measured` until dedicated scenarios are implemented.
 
 | Dimension | Current status | Required evidence |
 | --- | --- | --- |
 | Read latency and throughput | Measured | `autocannon` request rate, latency, errors, and non-2xx counts for item lookup, filter, text search, sort, pagination, and composite reads |
-| Write latency | Not measured | `POST`, `PUT`, `PATCH`, and `DELETE` latency and throughput against writable resources |
-| Persisted-write correctness | Not measured | Disk reads after mutation workloads proving the JSON files contain the expected rows and remain valid JSON |
+| Write latency | Measured | `POST`, `PUT`, `PATCH`, and `DELETE` latency and throughput against writable resources |
+| Persisted-write correctness | Measured | Disk reads after mutation workloads proving the JSON files contain the expected rows and remain valid JSON |
 | Cold start time | Not measured | Time from process spawn to ready endpoint success across small, medium, and large datasets |
 | Memory usage | Not measured | Resident memory after startup and during sustained load for each dataset size |
 | File watcher latency | Not measured | Time from external file add, edit, delete, or rename to updated HTTP responses |
 | SSE event latency | Not measured | Time from filesystem change to `/events` notification delivery |
 | Schema inference and export time | Not measured | Duration for schema inference, `/schema` export, and schema persistence on representative datasets |
 | Query correctness | Not measured | Pairwise checks that equivalent `dirbase` and `json-server` requests return equivalent sorted payloads where feature parity exists |
-| Concurrent write safety | Not measured | Parallel mutation workloads followed by JSON parse checks and expected row-count checks |
+| Concurrent write safety | Measured | Parallel mutation workloads followed by JSON parse checks and expected row-count checks |
 
 ## Methodology
 
@@ -122,8 +126,12 @@ The benchmark script:
 - waits until both servers are ready
 - runs every scenario with and without warm-up
 - repeats each scenario multiple times
+- copies the dataset into an isolated write workspace
+- runs concurrent `POST`, `PUT`, `PATCH`, and `DELETE` workloads against both servers
+- validates the persisted JSON written by both servers
 - stores raw `autocannon` JSON for each run
-- renders an aggregate Markdown report from the raw JSON
+- stores write workload JSON for each server
+- renders an aggregate Markdown report from the raw JSON and write workload JSON
 
 Default settings:
 
@@ -134,6 +142,8 @@ Default settings:
 | Connections | 50 |
 | Warm-up duration | 3s |
 | Warm-up connections | 1 |
+| Write requests per method | 500 |
+| Write connections | same as `CONNECTIONS` |
 | `json-server` version | `0.17.4` |
 
 Prefer median values when discussing results. Avoid presenting best-run numbers as representative.
@@ -158,10 +168,24 @@ For a longer run:
 FORCE_REBUILD_DATA=1 RUNS=5 DURATION=15 CONNECTIONS=100 scripts/benchmark_vs_json_server.sh
 ```
 
+To keep the older read-only behavior:
+
+```bash
+SKIP_WRITE_BENCHMARKS=1 scripts/benchmark_vs_json_server.sh
+```
+
+To tune write workloads:
+
+```bash
+WRITE_REQUESTS_PER_METHOD=1000 WRITE_CONNECTIONS=100 scripts/benchmark_vs_json_server.sh
+```
+
 The report paths are printed at the end of the run:
 
 - `benchmarks/results/benchmark-summary-<timestamp>.json`
 - `benchmarks/results/benchmark-report-<timestamp>.md`
+- `benchmarks/results/write-folder-<timestamp>.json`
+- `benchmarks/results/write-json-server-<timestamp>.json`
 
 ## Presenting Results
 

@@ -28,6 +28,11 @@ def aggregate_error_counts(summary: dict) -> dict[str, int]:
                 aggregate = scenario.get(server, {}).get("aggregate", {})
                 for key in totals:
                     totals[key] += int(aggregate.get(key, 0) or 0)
+    for workloads in summary.get("write_workloads", {}).values():
+        for workload in workloads:
+            totals["non_2xx"] += int(workload.get("non_2xx", 0) or 0)
+            totals["errors"] += int(workload.get("errors", 0) or 0)
+            totals["timeouts"] += int(workload.get("timeouts", 0) or 0)
     return totals
 
 
@@ -71,6 +76,11 @@ def main() -> None:
     print("- Slowest dirbase scenarios by median latency:")
     for mode, label, latency in slowest_dirbase_scenarios(summary, args.limit):
         print(f"  - `{mode}` `{label}`: {latency:.2f} ms")
+    write_correctness = summary.get("write_correctness") or {}
+    if write_correctness:
+        print("- Write correctness:")
+        for target, correctness in write_correctness.items():
+            print(f"  - `{target}`: {correctness.get('status', 'unknown')}")
 
 
 if __name__ == "__main__":
