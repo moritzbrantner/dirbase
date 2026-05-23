@@ -23,10 +23,12 @@ The default profile contains 92,252 rows across those resources and exercises a 
 3. Text search on `tickets.summary`
 4. Sorted and paginated collection reads on `members`, `tickets`, and `deployments`
 5. Composite filter + sort + pagination workloads
-6. Concurrent `POST /members`, `PUT /members/{id}`, `PATCH /members/{id}`, and `DELETE /write_delete_items/{id}` workloads
-7. Persisted JSON correctness checks after the write workloads
+6. Query correctness checks that compare equivalent `dirbase` and `json-server` read responses
+7. Concurrent `POST /members`, `PUT /members/{id}`, `PATCH /members/{id}`, and `DELETE /write_delete_items/{id}` workloads
+8. Persisted JSON correctness checks after the write workloads
 
 The script uses equivalent server-specific query syntax where `dirbase` and `json-server` differ.
+For paginated reads, `dirbase` responses are normalized to their `data` array before comparison with the `json-server` array response. Other item, object, and array responses are compared exactly.
 
 ## Run
 
@@ -74,6 +76,7 @@ Raw `autocannon` JSON and aggregated reports are written to:
 - `benchmarks/results/<target>-without-warmup-run<run>-<timestamp>.json`
 - `benchmarks/results/write-folder-<timestamp>.json`
 - `benchmarks/results/write-json-server-<timestamp>.json`
+- `benchmarks/results/query-correctness-<timestamp>.json`
 - `benchmarks/results/benchmark-summary-<timestamp>.json`
 - `benchmarks/results/benchmark-report-<timestamp>.md`
 

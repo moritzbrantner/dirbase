@@ -193,6 +193,40 @@ def render_write_benchmarks(summary: dict) -> list[str]:
     return lines
 
 
+def render_query_correctness(summary: dict) -> list[str]:
+    correctness = summary.get("query_correctness") or {}
+    results = correctness.get("results") or []
+    lines = ["## Query correctness", ""]
+
+    if not results:
+        lines.extend(["Query correctness was not measured in this run.", ""])
+        return lines
+
+    lines.extend(
+        [
+            f"Status: `{correctness.get('status', 'unknown')}` "
+            f"({correctness.get('passed', 0)} passed, {correctness.get('failed', 0)} failed)",
+            "",
+            "| Scenario | Category | Status | dirbase count | json-server count | Mismatch |",
+            "|---|---|---|---:|---:|---|",
+        ]
+    )
+    for result in results:
+        folder_count = result.get("folder_count")
+        json_server_count = result.get("json_server_count")
+        lines.append(
+            "| "
+            f"`{result['label']}` | {result['category']} "
+            f"| `{result.get('status', 'unknown')}` "
+            f"| {folder_count if folder_count is not None else ''} "
+            f"| {json_server_count if json_server_count is not None else ''} "
+            f"| {result.get('mismatch') or ''} |"
+        )
+
+    lines.append("")
+    return lines
+
+
 def render_report(summary: dict) -> str:
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     config = summary["config"]
@@ -250,6 +284,7 @@ def render_report(summary: dict) -> str:
 
     lines.append("")
     lines.extend(render_coverage_matrix(summary))
+    lines.extend(render_query_correctness(summary))
     for mode in ("with_warmup", "without_warmup"):
         lines.extend(render_mode(summary, mode))
     lines.extend(render_write_benchmarks(summary))

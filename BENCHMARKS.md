@@ -102,20 +102,22 @@ The script uses equivalent server-specific query syntax where the two tools diff
 
 ## Benchmark Coverage
 
-Each benchmark report includes this coverage matrix. The current script measures read throughput, write throughput, persisted-write correctness, and concurrent write safety. Remaining rows stay marked `not_measured` until dedicated scenarios are implemented.
+Each benchmark report includes this coverage matrix. The current script measures read throughput, write throughput, persisted-write correctness, query correctness, and concurrent write safety. Remaining rows stay marked `not_measured` until dedicated scenarios are implemented.
 
 | Dimension | Current status | Required evidence |
 | --- | --- | --- |
 | Read latency and throughput | Measured | `autocannon` request rate, latency, errors, and non-2xx counts for item lookup, filter, text search, sort, pagination, and composite reads |
 | Write latency | Measured | `POST`, `PUT`, `PATCH`, and `DELETE` latency and throughput against writable resources |
 | Persisted-write correctness | Measured | Disk reads after mutation workloads proving the JSON files contain the expected rows and remain valid JSON |
+| Query correctness | Measured | Pairwise checks that equivalent `dirbase` and `json-server` read scenarios return equivalent JSON payloads after normalizing known pagination response-shape differences |
 | Cold start time | Not measured | Time from process spawn to ready endpoint success across small, medium, and large datasets |
 | Memory usage | Not measured | Resident memory after startup and during sustained load for each dataset size |
 | File watcher latency | Not measured | Time from external file add, edit, delete, or rename to updated HTTP responses |
 | SSE event latency | Not measured | Time from filesystem change to `/events` notification delivery |
 | Schema inference and export time | Not measured | Duration for schema inference, `/schema` export, and schema persistence on representative datasets |
-| Query correctness | Not measured | Pairwise checks that equivalent `dirbase` and `json-server` requests return equivalent sorted payloads where feature parity exists |
 | Concurrent write safety | Measured | Parallel mutation workloads followed by JSON parse checks and expected row-count checks |
+
+Query correctness compares the same scenario table used for read throughput. Paginated `dirbase` responses are normalized to their `data` array before comparison, while paginated `json-server` responses are compared as the returned array body. Item, object, and non-paginated array responses are compared exactly.
 
 ## Methodology
 
@@ -124,6 +126,7 @@ The benchmark script:
 - builds `dirbase` in release mode
 - starts `dirbase` and `json-server` locally on free ports
 - waits until both servers are ready
+- validates equivalent read scenario responses for query correctness
 - runs every scenario with and without warm-up
 - repeats each scenario multiple times
 - copies the dataset into an isolated write workspace

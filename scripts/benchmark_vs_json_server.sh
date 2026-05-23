@@ -218,6 +218,14 @@ fi
 STAMP="$(date +%Y%m%d-%H%M%S)"
 SUMMARY_JSON="${RESULTS_DIR}/benchmark-summary-${STAMP}.json"
 REPORT_MD="${RESULTS_DIR}/benchmark-report-${STAMP}.md"
+QUERY_CORRECTNESS_RESULT="${RESULTS_DIR}/query-correctness-${STAMP}.json"
+
+python3 "${ROOT_DIR}/scripts/run_query_correctness.py" \
+  --folder-url "http://127.0.0.1:${FOLDER_PORT}" \
+  --json-server-url "http://127.0.0.1:${JSON_SERVER_PORT}" \
+  --scenarios-file "${SCENARIOS_FILE}" \
+  --results-dir "${RESULTS_DIR}" \
+  --stamp "${STAMP}"
 
 run_autocannon() {
   local mode="$1"
@@ -484,10 +492,18 @@ if write_measured:
         summary["write_workloads"][target] = data["workloads"]
         summary["write_correctness"][target] = data["correctness"]
 
+query_correctness = json.loads(Path("${QUERY_CORRECTNESS_RESULT}").read_text(encoding="utf-8"))
+summary["query_correctness"] = query_correctness
+
 def coverage_row(dimension, status, evidence):
     return {"dimension": dimension, "status": status, "evidence": evidence}
 
 write_status = "measured" if write_measured else "not_measured"
+query_status = "measured" if query_correctness.get("scenario_count") == len(scenarios) else "not_measured"
+query_evidence = (
+    f"{query_correctness.get('scenario_count', 0)} pairwise scenario checks; "
+    f"{query_correctness.get('passed', 0)} passed, {query_correctness.get('failed', 0)} failed"
+)
 summary["coverage_matrix"] = [
     coverage_row(
         "Read latency and throughput",
@@ -531,8 +547,8 @@ summary["coverage_matrix"] = [
     ),
     coverage_row(
         "Query correctness",
-        "not_measured",
-        "pairwise checks that equivalent dirbase and json-server requests return equivalent sorted payloads where feature parity exists",
+        query_status,
+        query_evidence,
     ),
     coverage_row(
         "Concurrent write safety",
