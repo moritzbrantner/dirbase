@@ -264,6 +264,34 @@ mod tests {
         (name.to_string(), ColumnSchema::new(column_type, nullable))
     }
 
+    fn users_declared_schema() -> DeclaredSchema {
+        declared_schema(
+            "users",
+            DeclaredTableSchema {
+                primary_key: Some("id".to_string()),
+                columns: BTreeMap::from([
+                    declared_column("id", ColumnType::Integer, false),
+                    declared_column("name", ColumnType::String, false),
+                ]),
+                ..DeclaredTableSchema::default()
+            },
+        )
+    }
+
+    fn profile_declared_schema() -> DeclaredSchema {
+        declared_schema(
+            "profile",
+            DeclaredTableSchema {
+                kind: Some(TableKind::Object),
+                columns: BTreeMap::from([
+                    declared_column("name", ColumnType::String, false),
+                    declared_column("theme", ColumnType::String, false),
+                ]),
+                ..DeclaredTableSchema::default()
+            },
+        )
+    }
+
     #[tokio::test]
     async fn create_item_generates_numeric_id_when_missing() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -328,6 +356,19 @@ mod tests {
             .expect("create");
         assert_eq!(created, json!({"id": "user-7", "name": "Ada"}));
         assert_eq!(read_json(&path), json!([{"id": "user-7", "name": "Ada"}]));
+    }
+
+    #[tokio::test]
+    async fn create_item_rejects_schema_constraint_violations_without_persisting() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("users.json");
+        write_json(&path, &json!([{"id": 1, "name": "Ada"}]));
+        let state = test_state_for_folder(temp.path(), &["users"], Some(users_declared_schema()));
+
+        let err = create_item(&state, "users", json!({"name": 42})).await.expect_err("schema");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("invalid type for 'name'"), "{}", err.message);
+        assert_eq!(read_json(&path), json!([{"id": 1, "name": "Ada"}]));
     }
 
     #[tokio::test]
@@ -424,6 +465,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replace_item_rejects_schema_constraint_violations_without_persisting() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("users.json");
+        write_json(&path, &json!([{"id": 1, "name": "Ada"}]));
+        let state = test_state_for_folder(temp.path(), &["users"], Some(users_declared_schema()));
+
+        let err =
+            replace_item(&state, "users", "1", json!({"active": true})).await.expect_err("schema");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("missing non-null column 'name'"), "{}", err.message);
+        assert_eq!(read_json(&path), json!([{"id": 1, "name": "Ada"}]));
+    }
+
+    #[tokio::test]
     async fn replace_item_rejects_non_object_payload() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("posts.json");
@@ -488,6 +543,20 @@ mod tests {
             read_json(&path),
             json!([{"slug": "ada", "name": "Grace", "role": "admin", "active": true}])
         );
+    }
+
+    #[tokio::test]
+    async fn patch_item_rejects_schema_constraint_violations_without_persisting() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("users.json");
+        write_json(&path, &json!([{"id": 1, "name": "Ada"}]));
+        let state = test_state_for_folder(temp.path(), &["users"], Some(users_declared_schema()));
+
+        let err =
+            patch_item(&state, "users", "1", json!({"name": false})).await.expect_err("schema");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("invalid type for 'name'"), "{}", err.message);
+        assert_eq!(read_json(&path), json!([{"id": 1, "name": "Ada"}]));
     }
 
     #[tokio::test]
@@ -687,6 +756,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replace_resource_object_rejects_schema_constraint_violations_without_persisting() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("profile.json");
+        write_json(&path, &json!({"name": "Ada", "theme": "dark"}));
+        let state =
+            test_state_for_folder(temp.path(), &["profile"], Some(profile_declared_schema()));
+
+        let err = replace_resource_object(&state, "profile", json!({"theme": "light"}))
+            .await
+            .expect_err("schema");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("missing non-null column 'name'"), "{}", err.message);
+        assert_eq!(read_json(&path), json!({"name": "Ada", "theme": "dark"}));
+    }
+
+    #[tokio::test]
     async fn replace_resource_object_rejects_non_object_payload() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("profile.json");
@@ -726,6 +811,22 @@ mod tests {
             .expect("patch");
         assert_eq!(updated, json!({"name": "Ada", "theme": "light", "lang": "en"}));
         assert_eq!(read_json(&path), json!({"name": "Ada", "theme": "light", "lang": "en"}));
+    }
+
+    #[tokio::test]
+    async fn patch_resource_object_rejects_schema_constraint_violations_without_persisting() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("profile.json");
+        write_json(&path, &json!({"name": "Ada", "theme": "dark"}));
+        let state =
+            test_state_for_folder(temp.path(), &["profile"], Some(profile_declared_schema()));
+
+        let err = patch_resource_object(&state, "profile", json!({"name": 123}))
+            .await
+            .expect_err("schema");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("invalid type for 'name'"), "{}", err.message);
+        assert_eq!(read_json(&path), json!({"name": "Ada", "theme": "dark"}));
     }
 
     #[tokio::test]

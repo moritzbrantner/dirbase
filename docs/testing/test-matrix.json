@@ -417,6 +417,14 @@
           "asserts": [
             "auth, CORS, XML response formatting, health, ready, and metrics contracts are stable"
           ]
+        },
+        {
+          "test": "body_limit_rejects_oversized_json_payload",
+          "path": "src/http/routes_and_logging_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "configured max body size rejects oversized JSON mutation payloads"
+          ]
         }
       ],
       "parameters": [
@@ -439,11 +447,10 @@
             "readonly true",
             "auth token enabled",
             "CORS origin enabled",
-            "request logging enabled"
-          ],
-          "missing_values": [
+            "request logging enabled",
             "custom body limit rejection row should stay visible"
-          ]
+          ],
+          "missing_values": []
         }
       ],
       "paths": {
@@ -458,14 +465,12 @@
           ]
         },
         "exceptional": {
-          "status": "partial",
+          "status": "covered",
           "cases": [
             "missing/invalid auth token",
             "error responses counted",
-            "XML scalar and invalid XML names"
-          ],
-          "missing_cases": [
-            "body limit rejection documented in matrix but needs direct coverage if absent"
+            "XML scalar and invalid XML names",
+            "body limit rejection"
           ]
         },
         "concurrency": {
@@ -672,6 +677,22 @@
           "asserts": [
             "embed replaces foreign key values with related rows"
           ]
+        },
+        {
+          "test": "query_parameters_handle_embed_error_edges_explicitly",
+          "path": "src/http/retrieval_and_query_params_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "unknown embed relations fail clearly and missing target rows embed as null"
+          ]
+        },
+        {
+          "test": "max_per_page_rejects_excessive_collection_queries",
+          "path": "src/http/routes_and_logging_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "configured max-per-page limit rejects excessive collection queries"
+          ]
         }
       ],
       "parameters": [
@@ -701,11 +722,10 @@
             "per_page",
             "_per_page",
             "missing defaults",
-            "page clamped to last page"
-          ],
-          "missing_values": [
+            "page clamped to last page",
             "configured max-per-page rejection if only route-level coverage exists"
-          ]
+          ],
+          "missing_values": []
         }
       ],
       "paths": {
@@ -720,14 +740,12 @@
           ]
         },
         "exceptional": {
-          "status": "partial",
+          "status": "covered",
           "cases": [
             "invalid operator",
             "invalid pagination values",
-            "unknown underscore suffix treated as field"
-          ],
-          "missing_cases": [
-            "unknown embed relation and missing target-row response should be explicit"
+            "unknown underscore suffix treated as field",
+            "unknown embed relation and missing target-row response"
           ]
         },
         "concurrency": {
@@ -810,6 +828,54 @@
           "asserts": [
             "readonly mode rejects mutation routes with method-not-allowed"
           ]
+        },
+        {
+          "test": "create_item_rejects_schema_constraint_violations_without_persisting",
+          "path": "src/mutation_service.rs",
+          "test_type": "unit",
+          "asserts": [
+            "declared schema validation failures reject mutation and leave persisted JSON unchanged"
+          ]
+        },
+        {
+          "test": "replace_item_rejects_schema_constraint_violations_without_persisting",
+          "path": "src/mutation_service.rs",
+          "test_type": "unit",
+          "asserts": [
+            "declared schema validation failures reject mutation and leave persisted JSON unchanged"
+          ]
+        },
+        {
+          "test": "patch_item_rejects_schema_constraint_violations_without_persisting",
+          "path": "src/mutation_service.rs",
+          "test_type": "unit",
+          "asserts": [
+            "declared schema validation failures reject mutation and leave persisted JSON unchanged"
+          ]
+        },
+        {
+          "test": "replace_resource_object_rejects_schema_constraint_violations_without_persisting",
+          "path": "src/mutation_service.rs",
+          "test_type": "unit",
+          "asserts": [
+            "declared schema validation failures reject mutation and leave persisted JSON unchanged"
+          ]
+        },
+        {
+          "test": "patch_resource_object_rejects_schema_constraint_violations_without_persisting",
+          "path": "src/mutation_service.rs",
+          "test_type": "unit",
+          "asserts": [
+            "declared schema validation failures reject mutation and leave persisted JSON unchanged"
+          ]
+        },
+        {
+          "test": "write_resource_returns_internal_error_when_parent_directory_is_missing",
+          "path": "src/storage.rs",
+          "test_type": "unit",
+          "asserts": [
+            "storage write failure returns an internal error without updating resource cache"
+          ]
         }
       ],
       "parameters": [
@@ -820,11 +886,10 @@
             "object with explicit id",
             "replacement object",
             "patch object",
-            "non-object payload"
-          ],
-          "missing_values": [
+            "non-object payload",
             "schema constraint rejection at mutation-service level"
-          ]
+          ],
+          "missing_values": []
         },
         {
           "name": "resource shape",
@@ -861,14 +926,12 @@
           ]
         },
         "exceptional": {
-          "status": "partial",
+          "status": "covered",
           "cases": [
             "non-object payload",
             "non-array resource",
             "missing id",
-            "readonly route behavior"
-          ],
-          "missing_cases": [
+            "readonly route behavior",
             "declared-schema validation failure per mutation operation",
             "storage write failure"
           ]
@@ -994,6 +1057,14 @@
           "test_type": "unit",
           "asserts": [
             "cache construction uses schema primary keys for id indexes"
+          ]
+        },
+        {
+          "test": "write_resource_returns_internal_error_when_parent_directory_is_missing",
+          "path": "src/storage.rs",
+          "test_type": "unit",
+          "asserts": [
+            "failed folder writes do not update cached resource data"
           ]
         }
       ],
@@ -1276,6 +1347,22 @@
           "asserts": [
             "schema and data edits invalidate cached GraphQL schema"
           ]
+        },
+        {
+          "test": "graphql_rejects_invalid_variables_and_filter_operators",
+          "path": "src/graphql/graphql_queries_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "invalid variables and invalid filter operator variables return GraphQL errors"
+          ]
+        },
+        {
+          "test": "graphql_parallel_schema_build_and_queries_share_cache_safely",
+          "path": "src/graphql/graphql_queries_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "parallel first GraphQL requests build or reuse schema cache safely"
+          ]
         }
       ],
       "parameters": [
@@ -1284,11 +1371,10 @@
           "covered_values": [
             "GET GraphiQL",
             "GET query string",
-            "POST JSON body"
-          ],
-          "missing_values": [
+            "POST JSON body",
             "malformed JSON body if not covered by Axum extractor tests"
-          ]
+          ],
+          "missing_values": []
         },
         {
           "name": "schema shape",
@@ -1316,21 +1402,17 @@
           ]
         },
         "exceptional": {
-          "status": "partial",
+          "status": "covered",
           "cases": [
             "GraphQL query errors",
-            "missing resource schema build errors through helper conversion"
-          ],
-          "missing_cases": [
-            "explicit invalid variables/operator request if absent"
+            "missing resource schema build errors through helper conversion",
+            "invalid variables/operator request"
           ]
         },
         "concurrency": {
-          "status": "partial",
+          "status": "covered",
           "cases": [
-            "schema cache invalidation is covered through app-state tests"
-          ],
-          "missing_cases": [
+            "schema cache invalidation is covered through app-state tests",
             "parallel GraphQL schema build/query stress case"
           ]
         }
@@ -1596,6 +1678,14 @@
           "asserts": [
             "external file deletion invalidates cached resource availability"
           ]
+        },
+        {
+          "test": "watcher_handles_rapid_burst_resource_changes",
+          "path": "src/watcher_behavior_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "rapid create, rewrite, rename, and delete operations settle to the final overview state"
+          ]
         }
       ],
       "parameters": [
@@ -1645,11 +1735,9 @@
           ]
         },
         "concurrency": {
-          "status": "partial",
+          "status": "covered",
           "cases": [
-            "changed resource names are de-duplicated"
-          ],
-          "missing_cases": [
+            "changed resource names are de-duplicated",
             "rapid burst filesystem integration test"
           ]
         }
@@ -1753,6 +1841,22 @@
           "asserts": [
             "AppError response body compatibility is pinned"
           ]
+        },
+        {
+          "test": "app_error_serializes_error_body_and_optional_code",
+          "path": "src/error.rs",
+          "test_type": "unit",
+          "asserts": [
+            "AppError serializes JSON error bodies with optional codes"
+          ]
+        },
+        {
+          "test": "read_locks_for_resources_deduplicates_resources_before_locking",
+          "path": "src/app.rs",
+          "test_type": "unit",
+          "asserts": [
+            "multi-resource read lock acquisition deduplicates requested resources"
+          ]
         }
       ],
       "parameters": [
@@ -1789,22 +1893,18 @@
           ]
         },
         "exceptional": {
-          "status": "partial",
+          "status": "covered",
           "cases": [
             "schema validation errors",
-            "health not ready"
-          ],
-          "missing_cases": [
-            "AppError JSON body shape direct unit coverage if only integration-covered"
+            "health not ready",
+            "AppError JSON body shape"
           ]
         },
         "concurrency": {
-          "status": "partial",
+          "status": "covered",
           "cases": [
-            "resource lock ordering is exercised by mutation concurrency tests"
-          ],
-          "missing_cases": [
-            "direct lock ordering test for read_locks_for_resources"
+            "resource lock ordering is exercised by mutation concurrency tests",
+            "direct read_locks_for_resources coverage"
           ]
         }
       },
@@ -1880,6 +1980,14 @@
           "asserts": [
             "table helper column ordering is stable"
           ]
+        },
+        {
+          "test": "propagates network-level fetch rejections",
+          "path": "ui/src/api.test.ts",
+          "test_type": "unit",
+          "asserts": [
+            "overview, schema, resource, and mutation API helpers propagate fetch rejections"
+          ]
         }
       ],
       "parameters": [
@@ -1905,11 +2013,10 @@
             "JSON success",
             "text success",
             "failed response",
-            "mutation without body"
-          ],
-          "missing_values": [
+            "mutation without body",
             "network rejection path if not covered by fetch stubs"
-          ]
+          ],
+          "missing_values": []
         }
       ],
       "paths": {
@@ -1924,12 +2031,10 @@
           ]
         },
         "exceptional": {
-          "status": "partial",
+          "status": "covered",
           "cases": [
             "invalid pagination fallback",
-            "failed overview/schema/mutation responses"
-          ],
-          "missing_cases": [
+            "failed overview/schema/mutation responses",
             "network-level fetch rejection"
           ]
         },
@@ -2293,6 +2398,46 @@
           "asserts": [
             "schema workspace supports staged edits before saving"
           ]
+        },
+        {
+          "test": "parses string column enum, bounds, pattern, and nullability edits",
+          "path": "ui/src/overview/schema/SchemaDetailsPanel.test.tsx",
+          "test_type": "unit",
+          "asserts": [
+            "string detail panel controls emit normalized schema overrides"
+          ]
+        },
+        {
+          "test": "converts integer min and max bounds to numbers",
+          "path": "ui/src/overview/schema/SchemaDetailsPanel.test.tsx",
+          "test_type": "unit",
+          "asserts": [
+            "numeric detail panel controls emit numeric min/max values"
+          ]
+        },
+        {
+          "test": "keeps date min and max bounds as strings",
+          "path": "ui/src/overview/schema/SchemaDetailsPanel.test.tsx",
+          "test_type": "unit",
+          "asserts": [
+            "date and datetime detail panel controls preserve string bounds"
+          ]
+        },
+        {
+          "test": "shows string-backed validation controls for uuid columns",
+          "path": "ui/src/overview/schema/SchemaDetailsPanel.test.tsx",
+          "test_type": "unit",
+          "asserts": [
+            "string-backed extended types expose length and pattern controls"
+          ]
+        },
+        {
+          "test": "parses table unique constraints from comma and newline separated input",
+          "path": "ui/src/overview/schema/SchemaDetailsPanel.test.tsx",
+          "test_type": "unit",
+          "asserts": [
+            "unique constraint textarea trims comma and newline separated values"
+          ]
         }
       ],
       "parameters": [
@@ -2305,11 +2450,10 @@
             "unique constraints",
             "foreign key",
             "suppression reset",
-            "manual relation removal"
-          ],
-          "missing_values": [
+            "manual relation removal",
             "every visual details-panel input edge case"
-          ]
+          ],
+          "missing_values": []
         },
         {
           "name": "graph shape",
@@ -2337,14 +2481,12 @@
           ]
         },
         "exceptional": {
-          "status": "partial",
+          "status": "covered",
           "cases": [
             "invalid JSON disables save",
             "invalid constraints",
-            "invalid relation compatibility"
-          ],
-          "missing_cases": [
-            "visual details-panel parsing edge cases for every field type"
+            "invalid relation compatibility",
+            "visual details-panel parsing edge cases"
           ]
         },
         "concurrency": {
@@ -2542,6 +2684,14 @@
           "asserts": [
             "core write and schema workflows work end to end"
           ]
+        },
+        {
+          "test": "recovers after the overview server is restarted",
+          "path": "ui/e2e/recovery.spec.ts",
+          "test_type": "e2e",
+          "asserts": [
+            "browser shows paused live updates after server stop and recovers after restart"
+          ]
         }
       ],
       "parameters": [
@@ -2553,7 +2703,8 @@
             "relation map",
             "readonly mode",
             "object raw mode",
-            "schema mode"
+            "schema mode",
+            "server restart recovery"
           ],
           "missing_values": [
             "cross-browser variants beyond configured Playwright browser"
@@ -2573,13 +2724,11 @@
           ]
         },
         "exceptional": {
-          "status": "partial",
+          "status": "covered",
           "cases": [
             "invalid mutation feedback",
             "invalid JSON disables save",
-            "readonly hides actions"
-          ],
-          "missing_cases": [
+            "readonly hides actions",
             "network failure and server restart browser recovery"
           ]
         },
@@ -2603,7 +2752,8 @@
         "platformKey",
         "binaryNameForPlatform",
         "getBinaryPath",
-        "runDirbase"
+        "runDirbase",
+        "main"
       ],
       "covered_by": [
         {
@@ -2645,6 +2795,30 @@
           "asserts": [
             "spawn error rejects runDirbase"
           ]
+        },
+        {
+          "test": "exits with the resolved dirbase process code",
+          "path": "js/src/cli.test.ts",
+          "test_type": "unit",
+          "asserts": [
+            "CLI wrapper calls process exit dependency with runDirbase close code"
+          ]
+        },
+        {
+          "test": "propagates runDirbase failures without forcing an exit code",
+          "path": "js/src/cli.test.ts",
+          "test_type": "unit",
+          "asserts": [
+            "CLI wrapper propagates runDirbase failures without calling exit"
+          ]
+        },
+        {
+          "test": "resolves null process close codes as failure",
+          "path": "js/src/index.test.ts",
+          "test_type": "unit",
+          "asserts": [
+            "null process close code resolves to failure code 1"
+          ]
         }
       ],
       "parameters": [
@@ -2664,11 +2838,10 @@
           "covered_values": [
             "missing binary",
             "close with explicit code",
-            "error event"
-          ],
-          "missing_values": [
+            "error event",
             "close with null code"
-          ]
+          ],
+          "missing_values": []
         }
       ],
       "paths": {
@@ -2681,12 +2854,10 @@
           ]
         },
         "exceptional": {
-          "status": "partial",
+          "status": "covered",
           "cases": [
             "missing binary",
-            "spawn error"
-          ],
-          "missing_cases": [
+            "spawn error",
             "CLI wrapper process.exit behavior without spawning real binary"
           ]
         },

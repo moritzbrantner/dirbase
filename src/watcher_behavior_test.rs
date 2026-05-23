@@ -57,6 +57,38 @@ fn watcher_renames_folder_resources() {
 }
 
 #[test]
+fn watcher_handles_rapid_burst_resource_changes() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
+        .expect("write users");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    fs::write(temp.path().join("teams.json"), "[{\"id\":10,\"name\":\"Core\"}]\n")
+        .expect("write teams");
+    fs::write(temp.path().join("projects.json"), "[{\"id\":20,\"name\":\"Alpha\"}]\n")
+        .expect("write projects");
+    fs::write(
+        temp.path().join("users.json"),
+        "[{\"id\":1,\"name\":\"Ada\"},{\"id\":2,\"name\":\"Grace\"}]\n",
+    )
+    .expect("rewrite users");
+    fs::rename(temp.path().join("projects.json"), temp.path().join("work.json"))
+        .expect("rename projects");
+    fs::remove_file(temp.path().join("teams.json")).expect("delete teams");
+
+    let overview = wait_for_json(&bind_addr, "GET", "/overview.json", None, |payload| {
+        let names = overview_resource_names(payload);
+        names == vec!["users".to_string(), "work".to_string()]
+    });
+    assert_eq!(overview_resource_names(&overview), vec!["users".to_string(), "work".to_string()]);
+
+    let users = http_request(&bind_addr, "GET", "/users", None);
+    assert!(users.starts_with("HTTP/1.1 200 OK\r\n"), "{users}");
+    assert!(users.contains("\"name\":\"Grace\""), "{users}");
+}
+
+#[test]
 fn watcher_invalid_json_toggles_readyz_and_recovers() {
     let temp = tempfile::tempdir().expect("create temp directory");
     let teams_path = temp.path().join("teams.json");
@@ -200,4 +232,15 @@ fn watcher_schema_rewrite_updates_effective_schema_and_reserved_files_stay_hidde
         serde_json::from_str(parse_http_body(&sql)).expect("sql json");
     assert_eq!(sql_payload["rows"][0]["u.name"], "Ada");
     assert_eq!(sql_payload["rows"][0]["p.title"], "Hello");
+}
+
+fn overview_resource_names(payload: &serde_json::Value) -> Vec<String> {
+    let mut names = payload["resources"]
+        .as_array()
+        .expect("resources array")
+        .iter()
+        .map(|resource| resource["name"].as_str().expect("resource name").to_string())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
 }

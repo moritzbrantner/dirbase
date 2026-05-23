@@ -75,6 +75,22 @@ describe('api client', () => {
     );
   });
 
+  it('propagates network-level fetch rejections', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('network down');
+      })
+    );
+
+    await expect(fetchOverview('/overview.json')).rejects.toThrow('network down');
+    await expect(fetchSchema()).rejects.toThrow('network down');
+    await expect(fetchResource('/members')).rejects.toThrow('network down');
+    await expect(mutateResource({ method: 'DELETE', path: '/members/1' })).rejects.toThrow(
+      'network down'
+    );
+  });
+
   it('fetches schema editor payloads', async () => {
     const payload = {
       inferred: { tables: {} },

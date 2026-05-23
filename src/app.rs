@@ -233,8 +233,9 @@ impl AppState {
         &self,
         resources: &[String],
     ) -> Vec<OwnedRwLockReadGuard<()>> {
-        let mut guards = Vec::with_capacity(resources.len());
-        for resource in resources {
+        let ordered_resources = resources.iter().collect::<BTreeSet<_>>();
+        let mut guards = Vec::with_capacity(ordered_resources.len());
+        for resource in ordered_resources {
             guards.push(self.read_lock_for_resource(resource).await);
         }
         guards
@@ -579,5 +580,31 @@ mod tests {
         let users = state.schema_snapshot().tables["users"].clone();
         assert!(users.columns.contains_key("city"));
         assert!(users.columns.contains_key("email"));
+    }
+
+    #[tokio::test]
+    async fn read_locks_for_resources_deduplicates_resources_before_locking() {
+        let state = app_state(None, Schema::default());
+        let guards = state
+            .read_locks_for_resources(&[
+                "teams".to_string(),
+                "users".to_string(),
+                "teams".to_string(),
+            ])
+            .await;
+
+        assert_eq!(guards.len(), 2);
+        let write_attempt = state.write_lock_for_resource("teams");
+        tokio::pin!(write_attempt);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut write_attempt)
+                .await
+                .is_err()
+        );
+
+        drop(guards);
+        let _write_guard = tokio::time::timeout(std::time::Duration::from_secs(1), write_attempt)
+            .await
+            .expect("write lock should be available after read guards are dropped");
     }
 }

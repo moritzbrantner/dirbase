@@ -139,6 +139,74 @@ fn graphql_collection_query_fields_support_filter_sort_and_pagination() {
 }
 
 #[test]
+fn graphql_rejects_invalid_variables_and_filter_operators() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
+        .expect("write users");
+
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
+
+    let invalid_id = graphql_raw_body(
+        &bind_addr,
+        r#"{"query":"query($id: String!) { usersById(id: $id) { id name } }","variables":{"id":{"bad":1}}}"#,
+    );
+    assert!(invalid_id.starts_with("HTTP/1.1 200 OK\r\n"), "{invalid_id}");
+    let invalid_id_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&invalid_id)).expect("graphql json");
+    assert!(invalid_id_payload.get("errors").is_some(), "{invalid_id_payload}");
+    assert!(
+        invalid_id_payload.get("data").is_none() || invalid_id_payload["data"].is_null(),
+        "{invalid_id_payload}"
+    );
+
+    let invalid_operator = graphql_raw_body(
+        &bind_addr,
+        r#"{"query":"query($filter: [CollectionFilterInput!]) { usersQuery(filter: $filter) { data { id name } } }","variables":{"filter":[{"field":"name","operator":"UNKNOWN","value":"Ada"}]}}"#,
+    );
+    assert!(invalid_operator.starts_with("HTTP/1.1 200 OK\r\n"), "{invalid_operator}");
+    let invalid_operator_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&invalid_operator)).expect("graphql json");
+    assert!(invalid_operator_payload.get("errors").is_some(), "{invalid_operator_payload}");
+    assert!(
+        invalid_operator_payload.get("data").is_none()
+            || invalid_operator_payload["data"].is_null(),
+        "{invalid_operator_payload}"
+    );
+}
+
+#[test]
+fn graphql_parallel_schema_build_and_queries_share_cache_safely() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[
+  {"id": 1, "name": "Ada"},
+  {"id": 2, "name": "Grace"}
+]
+"#,
+    )
+    .expect("write users");
+
+    let (_child, bind_addr) = spawn_server(temp.path(), false);
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let bind_addr = bind_addr.clone();
+        handles.push(thread::spawn(move || {
+            let raw = graphql_raw(&bind_addr, "{ users { id name } }");
+            assert!(raw.starts_with("HTTP/1.1 200 OK\r\n"), "{raw}");
+            let payload: serde_json::Value =
+                serde_json::from_str(parse_http_body(&raw)).expect("graphql json");
+            assert!(payload.get("errors").is_none(), "{payload}");
+            assert_eq!(payload["data"]["users"][0]["name"], "Ada");
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("graphql worker");
+    }
+}
+
+#[test]
 fn graphql_exposes_extended_schema_types_as_strings() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(
@@ -661,10 +729,12 @@ fn graphql_json(addr: &str, query: &str) -> serde_json::Value {
 }
 
 fn graphql_raw(addr: &str, query: &str) -> String {
-    http_request(
+    graphql_raw_body(
         addr,
-        "POST",
-        "/graphql",
-        Some(&format!(r#"{{"query":{}}}"#, serde_json::to_string(query).expect("query json"))),
+        &format!(r#"{{"query":{}}}"#, serde_json::to_string(query).expect("query json")),
     )
+}
+
+fn graphql_raw_body(addr: &str, body: &str) -> String {
+    http_request(addr, "POST", "/graphql", Some(body))
 }

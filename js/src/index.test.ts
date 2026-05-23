@@ -56,6 +56,22 @@ describe('runDirbase', () => {
     expect(spawnProcess).toHaveBeenCalledTimes(1);
   });
 
+  test('resolves null process close codes as failure', async () => {
+    const child = new EventEmitter();
+    const spawnProcess = mock(() => {
+      queueMicrotask(() => child.emit('close', null));
+      return child as ReturnType<typeof import('node:child_process').spawn>;
+    });
+
+    await expect(
+      runDirbase([], {
+        binaryPath: '/tmp/dirbase',
+        exists: () => true,
+        spawnProcess
+      })
+    ).resolves.toBe(1);
+  });
+
   test('rejects when the spawned process emits an error', async () => {
     const child = new EventEmitter();
     const error = new Error('spawn failed');

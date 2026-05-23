@@ -178,4 +178,21 @@ mod tests {
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(err.message.contains("Database file must contain a JSON object"));
     }
+
+    #[tokio::test]
+    async fn write_resource_returns_internal_error_when_parent_directory_is_missing() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let missing_folder = temp.path().join("missing");
+        let state = test_state(DataSource::Folder(missing_folder));
+        state.resources.write().await.insert("users".to_string());
+
+        let err = write_resource(&state, "users", &serde_json::json!([{"id": 1}]))
+            .await
+            .expect_err("write should fail");
+        assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            state.resource_cache.read().await.get("users").is_none(),
+            "failed writes must not update cache"
+        );
+    }
 }

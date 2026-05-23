@@ -3,7 +3,7 @@ use std::fs;
 #[path = "../test_support/mod.rs"]
 mod support;
 
-use support::{http_get, http_request, parse_http_body, spawn_folder_server};
+use support::{http_get, http_request, parse_http_body, spawn_folder_server, wait_for_http};
 
 #[test]
 fn retrieval_supports_string_ids_and_returns_404_for_missing_item() {
@@ -177,6 +177,63 @@ Table posts {
     assert_eq!(payload[0]["author_id"]["name"], "Ada");
     assert_eq!(payload[1]["author_id"]["id"], 2);
     assert_eq!(payload[1]["author_id"]["name"], "Grace");
+}
+
+#[test]
+fn query_parameters_handle_embed_error_edges_explicitly() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("schema.dbml"),
+        r#"
+Table users {
+  id int [pk]
+  name varchar
+}
+
+Table posts {
+  id int [pk]
+  title varchar
+  author_id int [ref: > users.id]
+}
+"#,
+    )
+    .expect("write schema");
+    fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#).expect("write users");
+    fs::write(
+        temp.path().join("posts.json"),
+        r#"[
+  {"id":1,"title":"Known author","author_id":1},
+  {"id":2,"title":"Missing author","author_id":99}
+]
+"#,
+    )
+    .expect("write posts");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    let unknown_embed = http_get(&bind_addr, "/posts?embed=unknown");
+    assert!(unknown_embed.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{unknown_embed}");
+    assert!(
+        unknown_embed.contains("\"error\":\"Cannot embed 'unknown' for resource 'posts'\""),
+        "{unknown_embed}"
+    );
+
+    let missing_target_row = http_get(&bind_addr, "/posts?embed=author_id");
+    assert!(missing_target_row.starts_with("HTTP/1.1 200 OK\r\n"), "{missing_target_row}");
+    let payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&missing_target_row)).expect("valid json body");
+    assert_eq!(payload[0]["author_id"]["name"], "Ada");
+    assert_eq!(payload[1]["author_id"], serde_json::Value::Null);
+
+    fs::remove_file(temp.path().join("users.json")).expect("delete users");
+    let missing_resource =
+        wait_for_http(&bind_addr, "GET", "/posts?embed=author_id", None, |response| {
+            response.starts_with("HTTP/1.1 404 Not Found\r\n")
+        });
+    assert!(
+        missing_resource.contains("\"error\":\"Resource 'users' not found\""),
+        "{missing_resource}"
+    );
 }
 
 #[test]
