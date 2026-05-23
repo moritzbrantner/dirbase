@@ -190,6 +190,79 @@ fn sql_supports_in_and_simple_like_filters() {
 }
 
 #[test]
+fn sql_supports_between_filters() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let users = serde_json::json!([
+        {"id": 1, "name": "Ada", "age": 30, "score": "9.50"},
+        {"id": 2, "name": "Bob", "age": 20, "score": "8.75"},
+        {"id": 3, "name": "Cara", "age": 25, "score": "9.25"},
+        {"id": 4, "name": "Drew", "age": 40, "score": "7.00"}
+    ]);
+    std::fs::write(
+        temp.path().join("users.json"),
+        serde_json::to_string_pretty(&users).expect("serialize users"),
+    )
+    .expect("write users json");
+    std::fs::write(
+        temp.path().join("schema.dbml"),
+        r#"
+        Table users {
+          id int [pk]
+          name varchar
+          age int
+          score decimal
+        }
+        "#,
+    )
+    .expect("write schema");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    let numeric_response = http_post_json(
+        &bind_addr,
+        "/sql",
+        serde_json::json!({
+            "query": "SELECT id,name FROM users WHERE age BETWEEN 25 AND 35 ORDER BY id ASC LIMIT 4"
+        }),
+    );
+    assert!(numeric_response.starts_with("HTTP/1.1 200 OK\r\n"), "{numeric_response}");
+    let numeric_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&numeric_response)).expect("numeric payload");
+    assert_eq!(
+        numeric_payload["rows"],
+        serde_json::json!([{"id": 1, "name": "Ada"}, {"id": 3, "name": "Cara"}])
+    );
+
+    let decimal_response = http_post_json(
+        &bind_addr,
+        "/sql",
+        serde_json::json!({
+            "query": "SELECT id,name FROM users WHERE score BETWEEN 9 AND 10 ORDER BY id ASC LIMIT 4"
+        }),
+    );
+    assert!(decimal_response.starts_with("HTTP/1.1 200 OK\r\n"), "{decimal_response}");
+    let decimal_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&decimal_response)).expect("decimal payload");
+    assert_eq!(
+        decimal_payload["rows"],
+        serde_json::json!([{"id": 1, "name": "Ada"}, {"id": 3, "name": "Cara"}])
+    );
+
+    let unsupported_between = http_post_json(
+        &bind_addr,
+        "/sql",
+        serde_json::json!({"query": "SELECT id FROM users WHERE age NOT BETWEEN 25 AND 35 LIMIT 4"}),
+    );
+    assert!(
+        unsupported_between.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+        "{unsupported_between}"
+    );
+    let unsupported_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&unsupported_between)).expect("unsupported payload");
+    assert_eq!(unsupported_payload["code"], "unsupported_feature");
+}
+
+#[test]
 fn sql_rejects_ambiguous_null_and_invalid_identifiers() {
     let temp = tempfile::tempdir().expect("create temp directory");
     let users_path = temp.path().join("users.json");

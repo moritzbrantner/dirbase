@@ -1388,6 +1388,14 @@
           ]
         },
         {
+          "test": "sql_supports_between_filters",
+          "path": "src/sql/sql_query_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "SQL WHERE supports BETWEEN ranges with schema-aware coercion"
+          ]
+        },
+        {
           "test": "export_sql_respects_schema_when_present",
           "path": "src/sql/sql_and_export_endpoints_test.rs",
           "test_type": "integration",
@@ -1411,6 +1419,7 @@
             "SELECT *",
             "projection",
             "WHERE",
+            "BETWEEN",
             "IN",
             "LIKE",
             "ORDER BY",

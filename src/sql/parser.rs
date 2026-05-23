@@ -414,6 +414,21 @@ fn parse_sql_where(expr: &Expr) -> Result<Vec<FilterCondition>, AppError> {
                 list.iter().map(parse_sql_literal).collect::<Result<Vec<_>, _>>()?.join(",");
             Ok(vec![FilterCondition::new(field_path, FilterOperator::In, values)])
         }
+        Expr::Between { expr, negated, low, high } => {
+            if *negated {
+                return Err(AppError::new(StatusCode::BAD_REQUEST, "NOT BETWEEN is not supported")
+                    .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
+            }
+            let field_path = parse_sql_column_expr(expr)?;
+            Ok(vec![
+                FilterCondition::new(
+                    field_path.clone(),
+                    FilterOperator::Gte,
+                    parse_sql_literal(low)?,
+                ),
+                FilterCondition::new(field_path, FilterOperator::Lte, parse_sql_literal(high)?),
+            ])
+        }
         Expr::Like { negated, any, expr, pattern, escape_char } => {
             parse_sql_like(expr, pattern, *negated, *any, escape_char.as_deref())
         }
