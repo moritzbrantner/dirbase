@@ -1380,6 +1380,14 @@
           ]
         },
         {
+          "test": "sql_supports_in_and_simple_like_filters",
+          "path": "src/sql/sql_query_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "SQL WHERE supports IN lists and simple LIKE wildcard placement"
+          ]
+        },
+        {
           "test": "export_sql_respects_schema_when_present",
           "path": "src/sql/sql_and_export_endpoints_test.rs",
           "test_type": "integration",
@@ -1403,6 +1411,8 @@
             "SELECT *",
             "projection",
             "WHERE",
+            "IN",
+            "LIKE",
             "ORDER BY",
             "LIMIT",
             "OFFSET",

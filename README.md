@@ -122,7 +122,7 @@ you get:
 | --- | --- | --- | --- | --- | --- |
 | REST | Yes | Yes unless `--readonly` | Yes | `embed` plus item routes | Primary API surface |
 | GraphQL | Yes | No | `*Query` fields support filter / sort / pagination | Foreign-key traversal | GraphiQL at `GET /graphql` |
-| SQL | Yes | No | `SELECT`, projection, `WHERE`, `ORDER BY`, `LIMIT/OFFSET` | Schema-backed `INNER JOIN` | Query endpoint at `/sql` |
+| SQL | Yes | No | `SELECT`, projection, `WHERE` with comparisons / `IN` / simple `LIKE`, `ORDER BY`, `LIMIT/OFFSET` | Schema-backed `INNER JOIN` | Query endpoint at `/sql` |
 | Overview UI | Yes | Yes unless `--readonly` | Explorer drives REST params | Live-updating relation map | Root HTML at `GET /` |
 
 ## Why dirbase?

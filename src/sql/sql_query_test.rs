@@ -116,6 +116,80 @@ fn sql_supports_is_null_and_projection_and_coercion() {
 }
 
 #[test]
+fn sql_supports_in_and_simple_like_filters() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let users = serde_json::json!([
+        {"id": 1, "name": "Ada Lovelace", "role": "admin"},
+        {"id": 2, "name": "Grace Hopper", "role": "owner"},
+        {"id": 3, "name": "Linus Torvalds", "role": "member"},
+        {"id": 4, "name": "Margaret Hamilton", "role": "admin"}
+    ]);
+    std::fs::write(
+        temp.path().join("users.json"),
+        serde_json::to_string_pretty(&users).expect("serialize users"),
+    )
+    .expect("write users json");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    let in_response = http_post_json(
+        &bind_addr,
+        "/sql",
+        serde_json::json!({
+            "query": "SELECT id,name FROM users WHERE role IN ('admin', 'owner') ORDER BY id ASC LIMIT 4"
+        }),
+    );
+    assert!(in_response.starts_with("HTTP/1.1 200 OK\r\n"), "{in_response}");
+    let in_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&in_response)).expect("in payload");
+    assert_eq!(
+        in_payload["rows"],
+        serde_json::json!([
+            {"id": 1, "name": "Ada Lovelace"},
+            {"id": 2, "name": "Grace Hopper"},
+            {"id": 4, "name": "Margaret Hamilton"}
+        ])
+    );
+
+    let like_response = http_post_json(
+        &bind_addr,
+        "/sql",
+        serde_json::json!({
+            "query": "SELECT id,name FROM users WHERE name LIKE '%ace' ORDER BY id ASC LIMIT 4"
+        }),
+    );
+    assert!(like_response.starts_with("HTTP/1.1 200 OK\r\n"), "{like_response}");
+    let like_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&like_response)).expect("like payload");
+    assert_eq!(like_payload["rows"], serde_json::json!([{"id": 1, "name": "Ada Lovelace"}]));
+
+    let contains_response = http_post_json(
+        &bind_addr,
+        "/sql",
+        serde_json::json!({
+            "query": "SELECT id,name FROM users WHERE name LIKE '%ham%' ORDER BY id ASC LIMIT 4"
+        }),
+    );
+    assert!(contains_response.starts_with("HTTP/1.1 200 OK\r\n"), "{contains_response}");
+    let contains_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&contains_response)).expect("contains payload");
+    assert_eq!(
+        contains_payload["rows"],
+        serde_json::json!([{"id": 4, "name": "Margaret Hamilton"}])
+    );
+
+    let unsupported_like = http_post_json(
+        &bind_addr,
+        "/sql",
+        serde_json::json!({"query": "SELECT id FROM users WHERE name LIKE 'A%a' LIMIT 4"}),
+    );
+    assert!(unsupported_like.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{unsupported_like}");
+    let unsupported_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&unsupported_like)).expect("unsupported payload");
+    assert_eq!(unsupported_payload["code"], "unsupported_feature");
+}
+
+#[test]
 fn sql_rejects_ambiguous_null_and_invalid_identifiers() {
     let temp = tempfile::tempdir().expect("create temp directory");
     let users_path = temp.path().join("users.json");

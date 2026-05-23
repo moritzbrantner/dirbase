@@ -397,6 +397,29 @@ fn parse_sql_where(expr: &Expr) -> Result<Vec<FilterCondition>, AppError> {
             }
             Ok(vec![FilterCondition::new(field_path, operator, value)])
         }
+        Expr::InList { expr, list, negated } => {
+            if *negated {
+                return Err(AppError::new(StatusCode::BAD_REQUEST, "NOT IN is not supported")
+                    .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
+            }
+            if list.is_empty() {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "IN requires at least one value",
+                )
+                .with_code(crate::error::ERROR_CODE_INVALID_SQL));
+            }
+            let field_path = parse_sql_column_expr(expr)?;
+            let values =
+                list.iter().map(parse_sql_literal).collect::<Result<Vec<_>, _>>()?.join(",");
+            Ok(vec![FilterCondition::new(field_path, FilterOperator::In, values)])
+        }
+        Expr::Like { negated, any, expr, pattern, escape_char } => {
+            parse_sql_like(expr, pattern, *negated, *any, escape_char.as_deref())
+        }
+        Expr::ILike { negated, any, expr, pattern, escape_char } => {
+            parse_sql_like(expr, pattern, *negated, *any, escape_char.as_deref())
+        }
         Expr::IsNull(expr) => Ok(vec![FilterCondition::new(
             parse_sql_column_expr(expr)?,
             FilterOperator::IsNull,
@@ -412,6 +435,61 @@ fn parse_sql_where(expr: &Expr) -> Result<Vec<FilterCondition>, AppError> {
             "Unsupported WHERE clause. Only AND-combined simple predicates are supported",
         )),
     }
+}
+
+fn parse_sql_like(
+    expr: &Expr,
+    pattern: &Expr,
+    negated: bool,
+    any: bool,
+    escape_char: Option<&str>,
+) -> Result<Vec<FilterCondition>, AppError> {
+    if negated {
+        return Err(AppError::new(StatusCode::BAD_REQUEST, "NOT LIKE is not supported")
+            .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
+    }
+    if any {
+        return Err(AppError::new(StatusCode::BAD_REQUEST, "LIKE ANY is not supported")
+            .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
+    }
+    if escape_char.is_some() {
+        return Err(AppError::new(StatusCode::BAD_REQUEST, "LIKE ESCAPE is not supported")
+            .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
+    }
+
+    let field_path = parse_sql_column_expr(expr)?;
+    let pattern = parse_sql_literal(pattern)?;
+    let (operator, value) = sql_like_pattern_to_filter(&pattern)?;
+    Ok(vec![FilterCondition::new(field_path, operator, value)])
+}
+
+fn sql_like_pattern_to_filter(pattern: &str) -> Result<(FilterOperator, String), AppError> {
+    if pattern.contains('_') {
+        return Err(AppError::new(StatusCode::BAD_REQUEST, "LIKE '_' wildcards are not supported")
+            .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
+    }
+
+    let leading = pattern.starts_with('%');
+    let trailing = pattern.ends_with('%');
+    let inner_start = usize::from(leading);
+    let inner_end = pattern.len().saturating_sub(usize::from(trailing));
+    let value = pattern[inner_start..inner_end].to_string();
+
+    if value.contains('%') {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            "LIKE only supports '%' at the beginning or end of the pattern",
+        )
+        .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
+    }
+
+    let operator = match (leading, trailing) {
+        (true, true) => FilterOperator::Contains,
+        (false, true) => FilterOperator::StartsWith,
+        (true, false) => FilterOperator::EndsWith,
+        (false, false) => FilterOperator::Eq,
+    };
+    Ok((operator, value))
 }
 
 fn parse_sql_column_expr(expr: &Expr) -> Result<String, AppError> {
