@@ -301,6 +301,268 @@ fn sql_returns_structured_codes_for_invalid_and_unknown_table() {
 }
 
 #[test]
+fn sql_rejects_statement_and_limit_edge_cases() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
+        .expect("write users");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    assert_sql_error(
+        &bind_addr,
+        "SELECT * FROM users LIMIT 1; SELECT * FROM users LIMIT 1",
+        "unsupported_feature",
+        "Only a single SQL statement is supported",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT * FROM users OFFSET 1",
+        "invalid_sql",
+        "OFFSET requires LIMIT",
+    );
+    assert_sql_error(&bind_addr, "SELECT * FROM users LIMIT 0", "", "LIMIT must be greater than 0");
+    assert_sql_error(
+        &bind_addr,
+        "SELECT * FROM users LIMIT -1",
+        "",
+        "LIMIT must be a non-negative integer",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT * FROM users LIMIT 1 OFFSET -1",
+        "",
+        "OFFSET must be a non-negative integer",
+    );
+
+    let long_query = format!("SELECT * FROM users WHERE name = '{}'", "a".repeat(17_000));
+    assert_sql_error(&bind_addr, &long_query, "invalid_sql", "SQL query length exceeds");
+}
+
+#[test]
+fn sql_rejects_unsupported_projection_where_and_order_expressions() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(
+        temp.path().join("users.json"),
+        r#"[{"id":1,"name":"Ada","age":30},{"id":2,"name":"Bob","age":20}]"#,
+    )
+    .expect("write users");
+    std::fs::write(
+        temp.path().join("schema.dbml"),
+        r#"
+        Table users {
+          id int [pk]
+          name varchar
+          age int
+        }
+        "#,
+    )
+    .expect("write schema");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    assert_sql_error(
+        &bind_addr,
+        "SELECT COUNT(*) FROM users LIMIT 1",
+        "unsupported_feature",
+        "Unsupported SELECT projection",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id AS user_id FROM users LIMIT 1",
+        "unsupported_feature",
+        "Unsupported SELECT projection",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users WHERE age + 1 > 30 LIMIT 1",
+        "",
+        "Expected a column identifier",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users WHERE name = lower('ada') LIMIT 1",
+        "",
+        "Expected a literal value",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users WHERE name = 'Ada' OR age = 20 LIMIT 1",
+        "",
+        "Expected a column identifier",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users ORDER BY age + 1 LIMIT 1",
+        "",
+        "Expected a column identifier",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users WHERE missing = 1 LIMIT 1",
+        "",
+        "Unknown column 'missing' in WHERE clause",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users ORDER BY missing LIMIT 1",
+        "",
+        "Unknown column 'missing' in ORDER BY clause",
+    );
+}
+
+#[test]
+fn sql_rejects_unsupported_where_operator_variants() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada","age":30}]"#)
+        .expect("write users");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users WHERE id NOT IN (1, 2) LIMIT 1",
+        "unsupported_feature",
+        "NOT IN is not supported",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users WHERE age NOT BETWEEN 20 AND 40 LIMIT 1",
+        "unsupported_feature",
+        "NOT BETWEEN is not supported",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users WHERE name NOT LIKE 'A%' LIMIT 1",
+        "unsupported_feature",
+        "NOT LIKE is not supported",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users WHERE name LIKE 'A_a' LIMIT 1",
+        "unsupported_feature",
+        "LIKE '_' wildcards are not supported",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users WHERE name LIKE 'A\\_%' ESCAPE '\\' LIMIT 1",
+        "unsupported_feature",
+        "LIKE ESCAPE is not supported",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users WHERE id IN (SELECT id FROM users) LIMIT 1",
+        "",
+        "Unsupported WHERE clause",
+    );
+}
+
+#[test]
+fn sql_rejects_unsupported_select_shapes_and_join_edges() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
+        .expect("write users");
+    std::fs::write(temp.path().join("teams.json"), r#"[{"id":10,"user_id":1,"name":"Core"}]"#)
+        .expect("write teams");
+    std::fs::write(
+        temp.path().join("schema.dbml"),
+        r#"
+        Table users {
+          id int [pk]
+          name varchar
+        }
+
+        Table teams {
+          id int [pk]
+          user_id int [ref: > users.id]
+          name varchar
+        }
+        "#,
+    )
+    .expect("write schema");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    assert_sql_error(&bind_addr, "SELECT 1", "invalid_sql", "Exactly one table/resource");
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users GROUP BY id LIMIT 1",
+        "unsupported_feature",
+        "GROUP BY is not supported",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT id FROM users HAVING COUNT(*) > 0 LIMIT 1",
+        "unsupported_feature",
+        "HAVING is not supported",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT * FROM users, teams LIMIT 1",
+        "invalid_sql",
+        "Exactly one table/resource in FROM is required",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT * FROM users u JOIN teams u ON u.id = u.user_id LIMIT 1",
+        "invalid_sql",
+        "Duplicate table alias 'u'",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT * FROM users u JOIN missing m ON u.id = m.user_id LIMIT 1",
+        "unknown_table",
+        "Unknown table/resource 'missing'",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT * FROM users u JOIN teams t LIMIT 1",
+        "unsupported_feature",
+        "INNER JOIN requires an ON clause",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT * FROM users u JOIN teams t ON u.id > t.user_id LIMIT 1",
+        "unsupported_feature",
+        "JOIN ON only supports equality",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT * FROM users u JOIN teams t ON id = t.user_id LIMIT 1",
+        "invalid_sql",
+        "JOIN columns must use qualified references",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT * FROM users u JOIN teams t ON x.id = t.user_id LIMIT 1",
+        "invalid_sql",
+        "JOIN references unknown alias 'x'",
+    );
+}
+
+#[test]
+fn sql_rejects_non_array_and_non_object_rows() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(temp.path().join("profile.json"), r#"{"id":1,"name":"Ada"}"#)
+        .expect("write profile");
+    std::fs::write(temp.path().join("values.json"), r#"[1,2,3]"#).expect("write values");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    assert_sql_error(
+        &bind_addr,
+        "SELECT * FROM profile LIMIT 1",
+        "",
+        "Resource is not a JSON array",
+    );
+    assert_sql_error(
+        &bind_addr,
+        "SELECT * FROM values LIMIT 1",
+        "",
+        "Resource row is not a JSON object",
+    );
+}
+
+#[test]
 fn sql_enforces_limit_guards() {
     let temp = tempfile::tempdir().expect("create temp directory");
     let users_path = temp.path().join("users.json");
@@ -369,5 +631,23 @@ fn sql_custom_limit_guards_apply_to_get_and_post() {
             .expect("error")
             .contains("LIMIT exceeds max selected rows (1)"),
         "{selected_guard}"
+    );
+}
+
+fn assert_sql_error(bind_addr: &str, query: &str, expected_code: &str, expected_message: &str) {
+    let response = http_post_json(bind_addr, "/sql", serde_json::json!({ "query": query }));
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request\r\n")
+            || response.starts_with("HTTP/1.1 404 Not Found\r\n"),
+        "query: {query}\n{response}"
+    );
+    let payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&response)).expect("error payload");
+    if !expected_code.is_empty() {
+        assert_eq!(payload["code"], expected_code, "query: {query}\n{response}");
+    }
+    assert!(
+        payload["error"].as_str().expect("error").contains(expected_message),
+        "query: {query}\n{response}"
     );
 }

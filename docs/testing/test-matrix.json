@@ -1396,6 +1396,54 @@
           ]
         },
         {
+          "test": "sql_rejects_statement_and_limit_edge_cases",
+          "path": "src/sql/sql_query_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "SQL parser rejects multiple statements, invalid limit/offset values, and oversized queries"
+          ]
+        },
+        {
+          "test": "sql_rejects_unsupported_projection_where_and_order_expressions",
+          "path": "src/sql/sql_query_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "SQL parser rejects unsupported projections, non-literal predicates, OR predicates, and invalid ordered fields"
+          ]
+        },
+        {
+          "test": "sql_rejects_unsupported_where_operator_variants",
+          "path": "src/sql/sql_query_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "SQL parser rejects NOT IN, NOT BETWEEN, NOT LIKE, unsupported LIKE wildcards, LIKE ESCAPE, and subquery predicates"
+          ]
+        },
+        {
+          "test": "sql_rejects_unsupported_select_shapes_and_join_edges",
+          "path": "src/sql/sql_query_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "SQL parser rejects missing FROM clauses, GROUP BY, HAVING, multiple FROM entries, duplicate aliases, bad joins, and unknown join aliases"
+          ]
+        },
+        {
+          "test": "sql_rejects_non_array_and_non_object_rows",
+          "path": "src/sql/sql_query_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "SQL query endpoint rejects object resources and array rows that are not JSON objects"
+          ]
+        },
+        {
+          "test": "export_sql_rejects_unsupported_dialect_and_invalid_resource_shapes",
+          "path": "src/sql/sql_and_export_endpoints_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "SQL export rejects unsupported dialects, scalar resources, and non-object array rows"
+          ]
+        },
+        {
           "test": "export_sql_respects_schema_when_present",
           "path": "src/sql/sql_and_export_endpoints_test.rs",
           "test_type": "integration",
@@ -1425,6 +1473,9 @@
             "ORDER BY",
             "LIMIT",
             "OFFSET",
+            "GROUP BY unsupported",
+            "HAVING unsupported",
+            "multiple statements unsupported",
             "alias",
             "INNER JOIN"
           ],
@@ -1437,7 +1488,8 @@
           "covered_values": [
             "postgres",
             "postgresql",
-            "sqlite"
+            "sqlite",
+            "unsupported dialect"
           ],
           "missing_values": []
         }
@@ -1462,11 +1514,11 @@
             "unsupported query",
             "invalid fields",
             "unsupported dialect",
-            "query length or scan/selected row guard"
+            "query length or scan/selected row guard",
+            "malformed SQL literal edge cases",
+            "invalid resource shapes"
           ],
-          "missing_cases": [
-            "explicit malformed SQL literal edge cases"
-          ]
+          "missing_cases": []
         },
         "concurrency": {
           "status": "not_applicable",

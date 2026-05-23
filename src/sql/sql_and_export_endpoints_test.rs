@@ -217,6 +217,59 @@ fn export_sql_maps_extended_schema_types() {
 }
 
 #[test]
+fn export_sql_rejects_unsupported_dialect_and_invalid_resource_shapes() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
+        .expect("write users");
+
+    let (_child, bind_addr) = start_server(temp.path(), false);
+
+    let unsupported = http_get(&bind_addr, "/export.sql?dialect=mysql");
+    assert!(unsupported.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{unsupported}");
+    let unsupported_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&unsupported)).expect("unsupported payload");
+    assert!(
+        unsupported_payload["error"]
+            .as_str()
+            .expect("error")
+            .contains("Unsupported SQL dialect 'mysql'"),
+        "{unsupported}"
+    );
+
+    let scalar_temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(scalar_temp.path().join("count.json"), "1").expect("write count");
+    let (_child, scalar_addr) = start_server(scalar_temp.path(), false);
+
+    let scalar = http_get(&scalar_addr, "/export.sql");
+    assert!(scalar.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{scalar}");
+    let scalar_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&scalar)).expect("scalar payload");
+    assert!(
+        scalar_payload["error"]
+            .as_str()
+            .expect("error")
+            .contains("Resource must be a JSON array or object for SQL export"),
+        "{scalar}"
+    );
+
+    let row_temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(row_temp.path().join("values.json"), "[1,2,3]").expect("write values");
+    let (_child, row_addr) = start_server(row_temp.path(), false);
+
+    let non_object_row = http_get(&row_addr, "/export.sql");
+    assert!(non_object_row.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{non_object_row}");
+    let non_object_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&non_object_row)).expect("non object payload");
+    assert!(
+        non_object_payload["error"]
+            .as_str()
+            .expect("error")
+            .contains("Array resource row is not an object"),
+        "{non_object_row}"
+    );
+}
+
+#[test]
 fn readonly_mode_allows_sql_and_export_and_rejects_post_sql() {
     let temp = tempfile::tempdir().expect("create temp directory");
     std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
