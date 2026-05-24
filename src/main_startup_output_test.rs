@@ -22,6 +22,7 @@ fn startup_prints_clickable_server_url_and_summary() {
         .arg("--readonly")
         .arg("--auth-token")
         .arg("secret")
+        .arg("--protect-ops")
         .arg("--cors-origin")
         .arg("http://localhost:3000")
         .stdout(Stdio::piped())
@@ -48,4 +49,5 @@ fn startup_prints_clickable_server_url_and_summary() {
     assert!(combined.contains("Mode: readonly"), "startup output was: {combined}");
     assert!(combined.contains("Auth: bearer token enabled"), "startup output was: {combined}");
     assert!(combined.contains("CORS: http://localhost:3000"), "startup output was: {combined}");
+    assert!(combined.contains("Ops auth: protected"), "startup output was: {combined}");
 }

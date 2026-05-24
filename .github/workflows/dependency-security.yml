@@ -14,7 +14,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
 
       - name: Setup project
         uses: ./.github/actions/setup-project
@@ -22,13 +24,13 @@ jobs:
           js-deps: "true"
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@cargo-deny
+        uses: taiki-e/install-action@b973825fbfcd4b824690c4c974a257790eae84a1
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@cargo-audit
+        uses: taiki-e/install-action@81313212648f71da8e15fd1ace469e89d449e63b
 
       - name: Check Rust dependency policy
-        run: cargo deny check advisories bans sources
+        run: cargo deny check advisories bans sources licenses
 
       - name: Audit Rust dependencies
         run: cargo audit

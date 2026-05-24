@@ -20,6 +20,15 @@ use super::types::GraphqlRelationCache;
 
 pub async fn graphql_get(State(state): State<AppState>, headers: HeaderMap, uri: Uri) -> Response {
     let raw_query = uri.query().unwrap_or_default();
+    if raw_query.len() > state.config.max_query_bytes {
+        return graphql_error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "GraphQL query exceeds configured max of {} bytes",
+                state.config.max_query_bytes
+            ),
+        );
+    }
     if raw_query.is_empty() && request_prefers_html(&headers) {
         return Html(GraphiQLSource::build().endpoint("/graphql").finish()).into_response();
     }
@@ -37,6 +46,15 @@ pub async fn graphql_post(
     State(state): State<AppState>,
     Json(request): Json<GraphqlRequest>,
 ) -> Response {
+    if request.query.len() > state.config.max_query_bytes {
+        return graphql_error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "GraphQL query exceeds configured max of {} bytes",
+                state.config.max_query_bytes
+            ),
+        );
+    }
     execute_graphql_request(&state, request).await
 }
 pub(crate) fn request_prefers_html(headers: &HeaderMap) -> bool {

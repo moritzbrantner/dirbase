@@ -110,8 +110,10 @@ you get:
 - `--readonly` disables mutation routes and only serves `GET` endpoints.
 - `--auth-token <token>` enables bearer-token auth for application routes.
 - `--cors-origin <origin>` enables explicit CORS for a single allowed origin.
-- `--max-body-bytes`, `--max-per-page`, `--max-sql-scan-rows`, and `--max-sql-selected-rows` configure request and query limits.
+- `--protect-ops` requires bearer auth for `/readyz` and `/metrics` when `--auth-token` is set.
+- `--max-body-bytes`, `--max-query-bytes`, `--max-per-page`, `--max-sql-scan-rows`, and `--max-sql-selected-rows` configure request and query limits.
 - `GET /healthz`, `GET /readyz`, and `GET /metrics` expose operational status and counters.
+- See [`docs/security.md`](./docs/security.md) for runtime exposure, auth, CORS, and release-integrity guidance.
 - Schema metadata is inferred automatically for array-of-object resources. Object tables prefer `id` as the primary key and also detect `<table>_id` or `<singular_table>_id` when those columns are unique and present on every row. Foreign keys are inferred conservatively from `*_id` columns.
 - Declared schema overlays are enabled automatically when `{folder}/schema.json`, `{folder}/schema.xsd`, or `{folder}/schema.dbml` exists.
 - Use `--schema <path>` to load a custom `.json`, `.xsd`, or `.dbml` schema file.
@@ -323,6 +325,7 @@ bunx --bun dirbase ./data --bind 127.0.0.1:4444
 - Item-level endpoints (`/{resource}/{id}`) expect array-based resources (`[{"id": ...}, ...]`).
 - Object resources support `GET /{resource}`, `PUT /{resource}`, and `PATCH /{resource}`.
 - Invalid JSON in a file returns a 500 with an error payload.
+- See [`docs/security.md`](./docs/security.md) before exposing a server beyond loopback.
 
 ## Rust toolchain and formatting
 

@@ -293,6 +293,32 @@ fn readonly_mode_allows_sql_and_export_and_rejects_post_sql() {
 }
 
 #[test]
+fn sql_get_and_post_reject_queries_over_configured_byte_limit() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
+        .expect("write users");
+
+    let (_child, bind_addr) =
+        support::spawn_folder_server_with_args(temp.path(), &["--max-query-bytes", "16"]);
+
+    let get = http_get(&bind_addr, "/sql?q=SELECT%20*%20FROM%20users%20LIMIT%201");
+    assert!(get.starts_with("HTTP/1.1 413 Payload Too Large\r\n"), "{get}");
+    let get_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&get)).expect("get limit payload");
+    assert_eq!(get_payload["code"], "limit_exceeded");
+
+    let post = http_post_json(
+        &bind_addr,
+        "/sql",
+        serde_json::json!({"query": "SELECT * FROM users LIMIT 1"}),
+    );
+    assert!(post.starts_with("HTTP/1.1 413 Payload Too Large\r\n"), "{post}");
+    let post_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&post)).expect("post limit payload");
+    assert_eq!(post_payload["code"], "limit_exceeded");
+}
+
+#[test]
 fn sql_inner_join_supports_schema_backed_relations() {
     let temp = tempfile::tempdir().expect("create temp directory");
     std::fs::write(

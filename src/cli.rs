@@ -1,5 +1,6 @@
 use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
+use axum::http::{HeaderValue, Uri};
 use clap::{CommandFactory, Parser, parser::ValueSource};
 
 use crate::app::ResponseFormat;
@@ -8,6 +9,7 @@ const CONFIG_FILE_NAME: &str = "dirbase.conf";
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:4444";
 const DEFAULT_LOGNAME: &str = "requests.log";
 const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
+const DEFAULT_MAX_QUERY_BYTES: usize = 262_144;
 const DEFAULT_MAX_PER_PAGE: usize = 100;
 const DEFAULT_MAX_SQL_SCAN_ROWS: usize = 50_000;
 const DEFAULT_MAX_SQL_SELECTED_ROWS: usize = 1_000;
@@ -81,8 +83,12 @@ struct CliArgs {
     auth_token: Option<String>,
     #[arg(long, help = "Allow CORS requests from this single origin.")]
     cors_origin: Option<String>,
+    #[arg(long, help = "Require bearer auth for /readyz and /metrics when --auth-token is set.")]
+    protect_ops: bool,
     #[arg(long, help = "Reject request bodies larger than this many bytes.")]
     max_body_bytes: Option<usize>,
+    #[arg(long, help = "Reject SQL and GraphQL queries larger than this many bytes.")]
+    max_query_bytes: Option<usize>,
     #[arg(long, help = "Cap REST pagination to this many rows per page.")]
     max_per_page: Option<usize>,
     #[arg(long, help = "Cap how many rows SQL queries may scan before returning an error.")]
@@ -104,12 +110,15 @@ pub(crate) struct Cli {
     pub(crate) logname: PathBuf,
     pub(crate) auth_token: Option<String>,
     pub(crate) cors_origin: Option<String>,
+    pub(crate) protect_ops: bool,
     pub(crate) max_body_bytes: usize,
+    pub(crate) max_query_bytes: usize,
     pub(crate) max_per_page: usize,
     pub(crate) max_sql_scan_rows: usize,
     pub(crate) max_sql_selected_rows: usize,
 }
 
+#[derive(Debug)]
 pub(crate) enum CliLoadError {
     CommandLine(clap::Error),
     Config(String),
@@ -146,7 +155,8 @@ pub(crate) fn load_cli() -> Result<Option<Cli>, CliLoadError> {
         None => None,
     };
 
-    Ok(Some(resolve_cli(&cli_matches, config_matches.as_ref())))
+    let cli = resolve_cli(&cli_matches, config_matches.as_ref())?;
+    Ok(Some(cli))
 }
 
 fn load_config_tokens(path: &std::path::Path) -> Result<Option<Vec<OsString>>, CliLoadError> {
@@ -222,10 +232,13 @@ fn parse_config_args(contents: &str) -> Result<Vec<String>, String> {
     Ok(tokens)
 }
 
-fn resolve_cli(cli_matches: &clap::ArgMatches, config_matches: Option<&clap::ArgMatches>) -> Cli {
+fn resolve_cli(
+    cli_matches: &clap::ArgMatches,
+    config_matches: Option<&clap::ArgMatches>,
+) -> Result<Cli, CliLoadError> {
     let (path, folder, file) = resolve_data_source_args(cli_matches, config_matches);
 
-    Cli {
+    let cli = Cli {
         path,
         folder,
         file,
@@ -242,15 +255,62 @@ fn resolve_cli(cli_matches: &clap::ArgMatches, config_matches: Option<&clap::Arg
             .unwrap_or_else(|| PathBuf::from(DEFAULT_LOGNAME)),
         auth_token: resolve_value("auth_token", cli_matches, config_matches),
         cors_origin: resolve_value("cors_origin", cli_matches, config_matches),
+        protect_ops: resolve_flag("protect_ops", cli_matches, config_matches),
         max_body_bytes: resolve_value("max_body_bytes", cli_matches, config_matches)
             .unwrap_or(DEFAULT_MAX_BODY_BYTES),
+        max_query_bytes: resolve_value("max_query_bytes", cli_matches, config_matches)
+            .unwrap_or(DEFAULT_MAX_QUERY_BYTES),
         max_per_page: resolve_value("max_per_page", cli_matches, config_matches)
             .unwrap_or(DEFAULT_MAX_PER_PAGE),
         max_sql_scan_rows: resolve_value("max_sql_scan_rows", cli_matches, config_matches)
             .unwrap_or(DEFAULT_MAX_SQL_SCAN_ROWS),
         max_sql_selected_rows: resolve_value("max_sql_selected_rows", cli_matches, config_matches)
             .unwrap_or(DEFAULT_MAX_SQL_SELECTED_ROWS),
+    };
+    validate_cli(&cli).map_err(CliLoadError::Config)?;
+    Ok(cli)
+}
+
+fn validate_cli(cli: &Cli) -> Result<(), String> {
+    if cli.auth_token.as_deref().is_some_and(str::is_empty) {
+        return Err("--auth-token cannot be empty".to_string());
     }
+    if let Some(origin) = &cli.cors_origin {
+        validate_cors_origin(origin)?;
+    }
+    validate_positive_limit("--max-body-bytes", cli.max_body_bytes)?;
+    validate_positive_limit("--max-query-bytes", cli.max_query_bytes)?;
+    validate_positive_limit("--max-per-page", cli.max_per_page)?;
+    validate_positive_limit("--max-sql-scan-rows", cli.max_sql_scan_rows)?;
+    validate_positive_limit("--max-sql-selected-rows", cli.max_sql_selected_rows)?;
+    Ok(())
+}
+
+fn validate_positive_limit(name: &str, value: usize) -> Result<(), String> {
+    if value == 0 {
+        return Err(format!("{name} must be greater than 0"));
+    }
+    Ok(())
+}
+
+fn validate_cors_origin(origin: &str) -> Result<(), String> {
+    HeaderValue::from_str(origin)
+        .map_err(|err| format!("--cors-origin must be a valid HTTP header value: {err}"))?;
+    let uri = origin
+        .parse::<Uri>()
+        .map_err(|err| format!("--cors-origin must be a valid origin: {err}"))?;
+    let scheme =
+        uri.scheme_str().ok_or_else(|| "--cors-origin must include a scheme".to_string())?;
+    if !matches!(scheme, "http" | "https") {
+        return Err("--cors-origin scheme must be http or https".to_string());
+    }
+    if uri.authority().is_none() {
+        return Err("--cors-origin must include a host".to_string());
+    }
+    if uri.path_and_query().is_some_and(|path_and_query| path_and_query.as_str() != "/") {
+        return Err("--cors-origin must not include a path, query, or fragment".to_string());
+    }
+    Ok(())
 }
 
 fn resolve_bind_addr(
@@ -362,6 +422,13 @@ mod tests {
     use clap::CommandFactory;
 
     fn resolve_test_cli(cli_args: &[&str], config_args: &[&str]) -> super::Cli {
+        resolve_test_cli_result(cli_args, config_args).expect("valid cli")
+    }
+
+    fn resolve_test_cli_result(
+        cli_args: &[&str],
+        config_args: &[&str],
+    ) -> Result<super::Cli, super::CliLoadError> {
         let cli_matches = matches_for(cli_args);
         let config_matches = (!config_args.is_empty()).then(|| matches_for(config_args));
         resolve_cli(&cli_matches, config_matches.as_ref())
@@ -467,9 +534,21 @@ mod tests {
     }
 
     #[test]
+    fn resolve_cli_loads_protect_ops_from_config() {
+        let resolved = resolve_test_cli(&[], &["--protect-ops"]);
+        assert!(resolved.protect_ops);
+    }
+
+    #[test]
     fn resolve_cli_loads_max_body_bytes_from_config() {
         let resolved = resolve_test_cli(&[], &["--max-body-bytes", "2048"]);
         assert_eq!(resolved.max_body_bytes, 2048);
+    }
+
+    #[test]
+    fn resolve_cli_loads_max_query_bytes_from_config() {
+        let resolved = resolve_test_cli(&[], &["--max-query-bytes", "2048"]);
+        assert_eq!(resolved.max_query_bytes, 2048);
     }
 
     #[test]
@@ -564,10 +643,23 @@ mod tests {
     }
 
     #[test]
+    fn resolve_cli_command_line_protect_ops_overrides_config_default() {
+        let resolved = resolve_test_cli(&["--protect-ops"], &[]);
+        assert!(resolved.protect_ops);
+    }
+
+    #[test]
     fn resolve_cli_command_line_max_body_bytes_overrides_config_max_body_bytes() {
         let resolved =
             resolve_test_cli(&["--max-body-bytes", "4096"], &["--max-body-bytes", "2048"]);
         assert_eq!(resolved.max_body_bytes, 4096);
+    }
+
+    #[test]
+    fn resolve_cli_command_line_max_query_bytes_overrides_config_max_query_bytes() {
+        let resolved =
+            resolve_test_cli(&["--max-query-bytes", "4096"], &["--max-query-bytes", "2048"]);
+        assert_eq!(resolved.max_query_bytes, 4096);
     }
 
     #[test]
@@ -588,5 +680,42 @@ mod tests {
         let resolved =
             resolve_test_cli(&["--max-sql-selected-rows", "9"], &["--max-sql-selected-rows", "3"]);
         assert_eq!(resolved.max_sql_selected_rows, 9);
+    }
+
+    #[test]
+    fn resolve_cli_rejects_empty_auth_token() {
+        let err = resolve_test_cli_result(&["--auth-token", ""], &[]).expect_err("invalid token");
+        assert!(
+            matches!(err, super::CliLoadError::Config(message) if message.contains("--auth-token cannot be empty"))
+        );
+    }
+
+    #[test]
+    fn resolve_cli_rejects_invalid_cors_origins() {
+        for origin in ["http://example.com/path", "http://example.com?x=1", "ftp://example.com"] {
+            let err = resolve_test_cli_result(&["--cors-origin", origin], &[])
+                .expect_err("invalid origin");
+            assert!(
+                matches!(err, super::CliLoadError::Config(ref message) if message.contains("--cors-origin")),
+                "{origin}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_cli_rejects_zero_limits() {
+        for flag in [
+            "--max-body-bytes",
+            "--max-query-bytes",
+            "--max-per-page",
+            "--max-sql-scan-rows",
+            "--max-sql-selected-rows",
+        ] {
+            let err = resolve_test_cli_result(&[flag, "0"], &[]).expect_err("zero limit");
+            assert!(
+                matches!(err, super::CliLoadError::Config(ref message) if message.contains("must be greater than 0")),
+                "{flag}: {err:?}"
+            );
+        }
     }
 }

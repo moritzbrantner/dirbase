@@ -86,6 +86,7 @@ local_only_paths=(
   "ui/playwright-report/index.html"
   "js/dist/index.js"
   "js/bin/linux-x64/dirbase"
+  "js/bin/SHA256SUMS"
   "benchmarks/.work/dirbase.log"
   "benchmarks/results/benchmark-summary-local.json"
 )

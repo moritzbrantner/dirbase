@@ -10,7 +10,8 @@ use axum::{
         Method, Request, StatusCode,
         header::{
             ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
-            ACCESS_CONTROL_ALLOW_ORIGIN, AUTHORIZATION, ORIGIN,
+            ACCESS_CONTROL_ALLOW_ORIGIN, AUTHORIZATION, HeaderName, HeaderValue, ORIGIN,
+            REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
         },
     },
     middleware::Next,
@@ -60,7 +61,7 @@ pub async fn auth_middleware(
         return next.run(request).await;
     }
     let path = request.uri().path();
-    if matches!(path, "/healthz" | "/readyz" | "/metrics") {
+    if path == "/healthz" || (matches!(path, "/readyz" | "/metrics") && !ops_auth_enabled(&state)) {
         return next.run(request).await;
     }
     let Some(expected) = state.config.auth_token.as_deref() else {
@@ -79,6 +80,27 @@ pub async fn auth_middleware(
     AppError::unauthorized("Missing or invalid bearer token")
         .with_code(crate::error::ERROR_CODE_UNAUTHORIZED)
         .into_response()
+}
+
+fn ops_auth_enabled(state: &AppState) -> bool {
+    state.config.protect_ops && state.config.auth_token.is_some()
+}
+
+pub async fn security_headers_middleware(request: Request<Body>, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("sameorigin"));
+    headers.insert(
+        HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+    headers.insert(
+        HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    response
 }
 
 pub async fn cors_middleware(

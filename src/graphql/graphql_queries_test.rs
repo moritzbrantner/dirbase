@@ -700,6 +700,33 @@ fn graphql_get_post_variables_and_malformed_bodies_keep_contracts() {
     assert!(malformed.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{malformed}");
 }
 
+#[test]
+fn graphql_get_and_post_reject_queries_over_configured_byte_limit() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
+        .expect("write users");
+
+    let (_child, bind_addr) =
+        support::spawn_folder_server_with_args(temp.path(), &["--max-query-bytes", "16"]);
+
+    let get_response = http_request(
+        &bind_addr,
+        "GET",
+        "/graphql?query=%7B%20users%20%7B%20id%20name%20%7D%20%7D",
+        None,
+    );
+    assert!(get_response.starts_with("HTTP/1.1 413 Payload Too Large\r\n"), "{get_response}");
+    let get_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&get_response)).expect("graphql get limit json");
+    assert!(get_payload.get("errors").is_some(), "{get_payload}");
+
+    let post_response = graphql_raw(&bind_addr, "{ users { id name } }");
+    assert!(post_response.starts_with("HTTP/1.1 413 Payload Too Large\r\n"), "{post_response}");
+    let post_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&post_response)).expect("graphql post limit json");
+    assert!(post_payload.get("errors").is_some(), "{post_payload}");
+}
+
 fn spawn_server(folder: &std::path::Path, readonly: bool) -> (ChildGuard, String) {
     support::spawn_folder_server(folder, readonly)
 }

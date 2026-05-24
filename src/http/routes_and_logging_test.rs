@@ -406,6 +406,94 @@ fn auth_and_ops_endpoints_respect_bearer_token_and_cors() {
 }
 
 #[test]
+fn security_headers_are_added_to_api_auth_asset_and_cors_responses() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
+        .expect("write users");
+
+    let (_child, bind_addr) = spawn_folder_server_with_args(
+        temp.path(),
+        &["--auth-token", "secret", "--cors-origin", "http://example.com"],
+    );
+
+    let api = http_request_with_headers(
+        &bind_addr,
+        "GET",
+        "/users",
+        Some("Authorization: Bearer secret\r\n"),
+        None,
+    );
+    assert!(api.starts_with("HTTP/1.1 200 OK\r\n"), "{api}");
+    assert_security_headers(&api);
+
+    let unauthorized = http_request(&bind_addr, "GET", "/users", None);
+    assert!(unauthorized.starts_with("HTTP/1.1 401 Unauthorized\r\n"), "{unauthorized}");
+    assert_security_headers(&unauthorized);
+
+    let asset = http_request_with_headers(
+        &bind_addr,
+        "GET",
+        "/assets/overview.js",
+        Some("Authorization: Bearer secret\r\n"),
+        None,
+    );
+    assert!(asset.starts_with("HTTP/1.1 200 OK\r\n"), "{asset}");
+    assert_security_headers(&asset);
+
+    let preflight = http_request_with_headers(
+        &bind_addr,
+        "OPTIONS",
+        "/users",
+        Some("Origin: http://example.com\r\nAccess-Control-Request-Method: POST\r\n"),
+        None,
+    );
+    assert!(preflight.starts_with("HTTP/1.1 204 No Content\r\n"), "{preflight}");
+    assert_security_headers(&preflight);
+}
+
+#[test]
+fn protect_ops_requires_auth_for_ready_and_metrics_when_token_is_configured() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
+        .expect("write users");
+
+    let (_child, bind_addr) =
+        spawn_folder_server_with_args(temp.path(), &["--auth-token", "secret", "--protect-ops"]);
+
+    let health = http_request(&bind_addr, "GET", "/healthz", None);
+    assert!(health.starts_with("HTTP/1.1 200 OK\r\n"), "{health}");
+
+    for path in ["/readyz", "/metrics"] {
+        let rejected = http_request(&bind_addr, "GET", path, None);
+        assert!(rejected.starts_with("HTTP/1.1 401 Unauthorized\r\n"), "{path}: {rejected}");
+        assert!(rejected.contains("\"code\":\"unauthorized\""), "{rejected}");
+
+        let accepted = http_request_with_headers(
+            &bind_addr,
+            "GET",
+            path,
+            Some("Authorization: Bearer secret\r\n"),
+            None,
+        );
+        assert!(accepted.starts_with("HTTP/1.1 200 OK\r\n"), "{path}: {accepted}");
+    }
+}
+
+#[test]
+fn protect_ops_without_auth_token_keeps_ops_endpoints_public() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
+        .expect("write users");
+
+    let (_child, bind_addr) = spawn_folder_server_with_args(temp.path(), &["--protect-ops"]);
+
+    let ready = http_request(&bind_addr, "GET", "/readyz", None);
+    assert!(ready.starts_with("HTTP/1.1 200 OK\r\n"), "{ready}");
+    let metrics = http_request(&bind_addr, "GET", "/metrics", None);
+    assert!(metrics.starts_with("HTTP/1.1 200 OK\r\n"), "{metrics}");
+}
+
+#[test]
 fn events_endpoint_streams_resource_and_schema_changes() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(temp.path().join("users.json"), "[{\"id\":1,\"name\":\"Ada\"}]\n")
@@ -420,6 +508,17 @@ fn events_endpoint_streams_resource_and_schema_changes() {
     let payload = read_stream_until(&mut stream, "event: schema_changed", Duration::from_secs(5));
     assert!(payload.contains("event: resource_changed"), "{payload}");
     assert!(payload.contains("event: overview_changed"), "{payload}");
+}
+
+fn assert_security_headers(response: &str) {
+    assert!(response.contains("x-content-type-options: nosniff"), "{response}");
+    assert!(response.contains("referrer-policy: no-referrer"), "{response}");
+    assert!(response.contains("x-frame-options: sameorigin"), "{response}");
+    assert!(response.contains("cross-origin-resource-policy: same-origin"), "{response}");
+    assert!(
+        response.contains("permissions-policy: camera=(), microphone=(), geolocation=()"),
+        "{response}"
+    );
 }
 
 #[test]

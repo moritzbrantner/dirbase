@@ -68,6 +68,11 @@ pub(crate) fn print_startup_summary(browser_url: &str, cli: &Cli, summary: &Star
     if let Some(origin) = &cli.cors_origin {
         eprintln!("CORS: {origin}");
     }
+    if cli.protect_ops && cli.auth_token.is_some() {
+        eprintln!("Ops auth: protected");
+    } else if cli.protect_ops {
+        eprintln!("Ops auth: disabled; no auth token configured");
+    }
 }
 
 pub(crate) async fn resolve_data_source(cli: &Cli) -> app::DataSource {

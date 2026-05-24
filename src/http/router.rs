@@ -13,6 +13,7 @@ use crate::{
         html_forms::{get_create_item_form, get_item_editor, get_resource_editor},
         middleware::{
             auth_middleware, cors_middleware, log_requests_middleware, metrics_middleware,
+            security_headers_middleware,
         },
         ops::{get_events, healthz, metrics, readyz},
         resource_routes::{
@@ -36,6 +37,7 @@ pub fn build_router(state: AppState) -> Router {
     app = app.layer(middleware::from_fn_with_state(state.clone(), cors_middleware));
     app = app.layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
     app = app.layer(middleware::from_fn_with_state(state.clone(), response_format_middleware));
+    app = app.layer(middleware::from_fn(security_headers_middleware));
     if state.config.enable_log {
         app = app.layer(middleware::from_fn_with_state(state.clone(), log_requests_middleware));
     }

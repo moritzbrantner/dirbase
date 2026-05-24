@@ -111,6 +111,16 @@ fn readonly_auth_cors_xml_and_ops_contracts_are_stable() {
     assert!(metrics.contains("dirbase_requests_total"), "{metrics}");
     assert!(metrics.contains("dirbase_auth_failures_total"), "{metrics}");
 
+    let (_protected_child, protected_addr) = TestServerBuilder::folder(data.path())
+        .args(&["--auth-token", "secret", "--protect-ops"])
+        .spawn();
+    let protected_ready = request_text(&protected_addr, "GET", "/readyz", None);
+    assert_status(&protected_ready, "401 Unauthorized");
+    let protected_metrics = request_text(&protected_addr, "GET", "/metrics", None);
+    assert_status(&protected_metrics, "401 Unauthorized");
+    let public_health = request_text(&protected_addr, "GET", "/healthz", None);
+    assert_status(&public_health, "200 OK");
+
     let (_xml_child, xml_addr) = TestServerBuilder::folder(data.path()).arg("--xml").spawn();
     let xml = request_text(&xml_addr, "GET", "/users", None);
     assert_status(&xml, "200 OK");

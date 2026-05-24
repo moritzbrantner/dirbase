@@ -28,12 +28,14 @@ pub async fn sql_query(
     State(state): State<AppState>,
     Query(params): Query<SqlGetParams>,
 ) -> Result<Json<Value>, AppError> {
+    enforce_query_size(&state, &params.q)?;
     run_sql_query(state, params.q).await
 }
 pub async fn sql_query_post(
     State(state): State<AppState>,
     Json(payload): Json<SqlPostBody>,
 ) -> Result<Json<Value>, AppError> {
+    enforce_query_size(&state, &payload.query)?;
     run_sql_query(state, payload.query).await
 }
 
@@ -46,4 +48,16 @@ pub async fn export_sql(
     let _guards = state.read_locks_for_resources(&resource_names).await;
     let sql = build_sql_export(&state, dialect).await?;
     Ok(([(CONTENT_TYPE, "text/sql; charset=utf-8")], sql))
+}
+
+fn enforce_query_size(state: &AppState, query: &str) -> Result<(), AppError> {
+    let size = query.len();
+    if size > state.config.max_query_bytes {
+        return Err(AppError::payload_too_large(format!(
+            "Query exceeds configured max of {} bytes",
+            state.config.max_query_bytes
+        ))
+        .with_code(crate::error::ERROR_CODE_LIMIT_EXCEEDED));
+    }
+    Ok(())
 }

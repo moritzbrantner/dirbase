@@ -49,6 +49,10 @@ bun run hygiene
 
 Compatibility surfaces and maintenance rules are documented in [`contracts.md`](./contracts.md). When a change affects CLI behavior, routes, error responses, GraphQL, SQL, storage, schema, overview UI workflows, or the JS wrapper, add or update contract coverage before changing internals.
 
+## Security
+
+Runtime exposure, auth, CORS, operational endpoints, browser headers, and npm package integrity are documented in [`security.md`](./security.md). Keep that file current when changing defaults, publish workflows, or HTTP middleware.
+
 ## UI Bundle
 
 The Rust server embeds the checked-in UI bundle in `ui/dist/`. Rebuild it only when UI source changes:

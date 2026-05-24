@@ -6,6 +6,9 @@ on:
       - 'bun-v*'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-binaries:
     strategy:
@@ -26,7 +29,9 @@ jobs:
         working-directory: js
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
 
       - name: Setup project
         uses: ./.github/actions/setup-project
@@ -42,7 +47,7 @@ jobs:
           TARGET_PLATFORM_KEY: ${{ matrix.platform_key }}
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: dirbase-${{ matrix.platform_key }}
           path: js/bin/${{ matrix.platform_key }}
@@ -50,12 +55,17 @@ jobs:
   publish:
     needs: build-binaries
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         working-directory: js
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
 
       - name: Setup project
         uses: ./.github/actions/setup-project
@@ -69,13 +79,20 @@ jobs:
         run: bun run build:js
 
       - name: Download binary artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: js/bin
           pattern: dirbase-*
           merge-multiple: true
 
+      - name: Generate binary checksums
+        run: |
+          find bin -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > bin/SHA256SUMS
+
       - name: Publish package
         run: bun publish --access public
         env:
           NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"

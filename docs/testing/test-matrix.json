@@ -284,6 +284,30 @@
           ]
         },
         {
+          "test": "resolve_cli_rejects_empty_auth_token",
+          "path": "src/cli.rs",
+          "test_type": "unit",
+          "asserts": [
+            "empty bearer tokens are rejected after CLI/config resolution"
+          ]
+        },
+        {
+          "test": "resolve_cli_rejects_invalid_cors_origins",
+          "path": "src/cli.rs",
+          "test_type": "unit",
+          "asserts": [
+            "CORS origins must be valid origins without path or query components"
+          ]
+        },
+        {
+          "test": "resolve_cli_rejects_zero_limits",
+          "path": "src/cli.rs",
+          "test_type": "unit",
+          "asserts": [
+            "security-sensitive numeric limits must be greater than zero"
+          ]
+        },
+        {
           "test": "starts_from_dirbase_conf_in_current_directory",
           "path": "src/main_config_file_test.rs",
           "test_type": "integration",
@@ -314,6 +338,8 @@
             "--xml",
             "--auth-token",
             "--cors-origin",
+            "--protect-ops",
+            "--max-query-bytes",
             "limits"
           ],
           "missing_values": [
@@ -344,7 +370,8 @@
         "exceptional": {
           "status": "partial",
           "cases": [
-            "config parser rejects invalid tokenization through unit coverage"
+            "config parser rejects invalid tokenization through unit coverage",
+            "empty auth tokens, invalid CORS origins, and zero limits are rejected"
           ],
           "missing_cases": [
             "end-to-end malformed config file process exit assertion"
@@ -373,6 +400,7 @@
         "metrics_middleware",
         "log_requests_middleware",
         "response_format_middleware",
+        "security_headers_middleware",
         "metrics",
         "healthz",
         "readyz"
@@ -425,6 +453,30 @@
           "asserts": [
             "configured max body size rejects oversized JSON mutation payloads"
           ]
+        },
+        {
+          "test": "security_headers_are_added_to_api_auth_asset_and_cors_responses",
+          "path": "src/http/routes_and_logging_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "baseline browser security headers are present on successful, unauthorized, asset, and CORS responses"
+          ]
+        },
+        {
+          "test": "protect_ops_requires_auth_for_ready_and_metrics_when_token_is_configured",
+          "path": "src/http/routes_and_logging_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "protect-ops keeps health public and requires bearer auth for ready and metrics when a token is configured"
+          ]
+        },
+        {
+          "test": "protect_ops_without_auth_token_keeps_ops_endpoints_public",
+          "path": "src/http/routes_and_logging_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "protect-ops remains compatible without an auth token"
+          ]
         }
       ],
       "parameters": [
@@ -434,7 +486,8 @@
             "Authorization bearer",
             "Origin",
             "Accept application/xml",
-            "Content-Type JSON"
+            "Content-Type JSON",
+            "security response headers"
           ],
           "missing_values": [
             "multiple Accept values with XML quality factors"
@@ -446,6 +499,7 @@
             "readonly false",
             "readonly true",
             "auth token enabled",
+            "protect ops enabled",
             "CORS origin enabled",
             "request logging enabled",
             "custom body limit rejection row should stay visible"
@@ -461,7 +515,8 @@
             "CORS preflight",
             "metrics rendering",
             "health/ready JSON",
-            "XML conversion"
+            "XML conversion",
+            "security headers on all representative response types"
           ]
         },
         "exceptional": {
@@ -470,7 +525,8 @@
             "missing/invalid auth token",
             "error responses counted",
             "XML scalar and invalid XML names",
-            "body limit rejection"
+            "body limit rejection",
+            "protected ops endpoint auth rejection"
           ]
         },
         "concurrency": {
@@ -1383,6 +1439,14 @@
           ]
         },
         {
+          "test": "graphql_get_and_post_reject_queries_over_configured_byte_limit",
+          "path": "src/graphql/graphql_queries_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "GraphQL GET and POST reject queries over the configured byte limit"
+          ]
+        },
+        {
           "test": "schema_file_edit_invalidates_graphql_schema_cache",
           "path": "src/storage_reliability_test.rs",
           "test_type": "integration",
@@ -1414,6 +1478,7 @@
             "GET GraphiQL",
             "GET query string",
             "POST JSON body",
+            "query byte limit",
             "malformed JSON body if not covered by Axum extractor tests"
           ],
           "missing_values": []
@@ -1448,7 +1513,8 @@
           "cases": [
             "GraphQL query errors",
             "missing resource schema build errors through helper conversion",
-            "invalid variables/operator request"
+            "invalid variables/operator request",
+            "oversized query rejection"
           ]
         },
         "concurrency": {
@@ -1560,6 +1626,14 @@
           ]
         },
         {
+          "test": "sql_get_and_post_reject_queries_over_configured_byte_limit",
+          "path": "src/sql/sql_and_export_endpoints_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "SQL GET and POST reject queries over the configured byte limit"
+          ]
+        },
+        {
           "test": "export_sql_rejects_unsupported_dialect_and_invalid_resource_shapes",
           "path": "src/sql/sql_and_export_endpoints_test.rs",
           "test_type": "integration",
@@ -1602,6 +1676,7 @@
             "GROUP BY unsupported",
             "HAVING unsupported",
             "multiple statements unsupported",
+            "configured query byte limit",
             "alias",
             "INNER JOIN"
           ],
