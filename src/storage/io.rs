@@ -85,6 +85,75 @@ pub async fn persist_resource_value(
     }
 }
 
+pub async fn create_resource_value(
+    data_source: &DataSource,
+    file: &Path,
+    resource: &str,
+    value: &Value,
+) -> Result<(), AppError> {
+    let file_for_write = file.to_path_buf();
+    let resource_name = resource.to_string();
+    let value_for_write = value.clone();
+
+    match data_source {
+        DataSource::Folder(_) => {
+            let content = serde_json::to_string_pretty(value)
+                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            let payload = format!("{content}\n");
+            tokio::task::spawn_blocking(move || create_json_resource_file(&file_for_write, payload))
+                .await
+                .map_err(|e| {
+                    AppError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Resource create task failed: {e}"),
+                    )
+                })?
+        }
+        DataSource::File(_) => tokio::task::spawn_blocking(move || {
+            create_resource_in_db_file(&file_for_write, &resource_name, &value_for_write)
+        })
+        .await
+        .map_err(|e| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Resource create task failed: {e}"),
+            )
+        })?,
+    }
+}
+
+pub async fn delete_resource_value(
+    data_source: &DataSource,
+    file: &Path,
+    resource: &str,
+) -> Result<(), AppError> {
+    let file_for_write = file.to_path_buf();
+    let resource_name = resource.to_string();
+
+    match data_source {
+        DataSource::Folder(_) => tokio::task::spawn_blocking(move || {
+            delete_json_resource_file(&file_for_write, &resource_name)
+        })
+        .await
+        .map_err(|e| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Resource delete task failed: {e}"),
+            )
+        })?,
+        DataSource::File(_) => tokio::task::spawn_blocking(move || {
+            delete_resource_in_db_file(&file_for_write, &resource_name)
+        })
+        .await
+        .map_err(|e| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Resource delete task failed: {e}"),
+            )
+        })?,
+    }
+}
+
 pub fn resource_file_path(data_source: &DataSource, resource: &str) -> Result<PathBuf, AppError> {
     if !is_valid_resource_name(resource) {
         return Err(AppError::new(
@@ -103,7 +172,10 @@ pub fn is_valid_resource_name(name: &str) -> bool {
 }
 
 pub fn is_reserved_resource_name(name: &str) -> bool {
-    matches!(name, "schema" | "graphql" | "sql" | "events" | "healthz" | "readyz" | "metrics")
+    matches!(
+        name,
+        "resources" | "schema" | "graphql" | "sql" | "events" | "healthz" | "readyz" | "metrics"
+    )
 }
 
 pub fn scan_resources(data_source: &DataSource) -> Result<BTreeSet<String>, std::io::Error> {
@@ -152,6 +224,51 @@ fn write_json_atomically(file: &Path, payload: String) -> Result<(), AppError> {
     with_exclusive_file_lock(file, || write_json_atomically_unlocked(file, &payload))
 }
 
+fn create_json_resource_file(file: &Path, payload: String) -> Result<(), AppError> {
+    with_exclusive_file_lock(file, || {
+        let mut handle =
+            OpenOptions::new().create_new(true).write(true).open(file).map_err(|e| {
+                match e.kind() {
+                    std::io::ErrorKind::AlreadyExists => {
+                        AppError::new(StatusCode::CONFLICT, "Resource already exists")
+                    }
+                    _ => AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+                }
+            })?;
+
+        handle
+            .write_all(payload.as_bytes())
+            .and_then(|_| handle.flush())
+            .and_then(|_| handle.sync_all())
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        if let Some(parent) = file.parent() {
+            sync_parent_dir(parent)
+                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+
+        Ok(())
+    })
+}
+
+fn delete_json_resource_file(file: &Path, resource: &str) -> Result<(), AppError> {
+    with_exclusive_file_lock(file, || {
+        std::fs::remove_file(file).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => {
+                AppError::new(StatusCode::NOT_FOUND, format!("Resource '{resource}' not found"))
+            }
+            _ => AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        })?;
+
+        if let Some(parent) = file.parent() {
+            sync_parent_dir(parent)
+                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+
+        Ok(())
+    })
+}
+
 fn write_json_atomically_unlocked(file: &Path, payload: &str) -> Result<(), AppError> {
     let temp_file = temp_file_path(file);
     let mut handle = OpenOptions::new()
@@ -188,6 +305,66 @@ fn write_resource_in_db_file(file: &Path, resource: &str, value: &Value) -> Resu
             AppError::new(StatusCode::BAD_REQUEST, "Database file must contain a JSON object")
         })?;
         root_obj.insert(resource.to_string(), value.clone());
+        let content = serde_json::to_string_pretty(&root)
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        write_json_atomically_unlocked(file, &format!("{content}\n"))
+    })
+}
+
+fn create_resource_in_db_file(file: &Path, resource: &str, value: &Value) -> Result<(), AppError> {
+    with_exclusive_file_lock(file, || {
+        if let Some(parent) = file.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+
+        let mut root = if file.exists() {
+            let raw = std::fs::read_to_string(file)
+                .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            serde_json::from_str::<Value>(&raw).map_err(|e| {
+                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
+            })?
+        } else {
+            Value::Object(serde_json::Map::new())
+        };
+
+        let root_obj = root.as_object_mut().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Database file must contain a JSON object")
+        })?;
+        if root_obj.contains_key(resource) {
+            return Err(AppError::new(StatusCode::CONFLICT, "Resource already exists"));
+        }
+        root_obj.insert(resource.to_string(), value.clone());
+
+        let content = serde_json::to_string_pretty(&root)
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        write_json_atomically_unlocked(file, &format!("{content}\n"))
+    })
+}
+
+fn delete_resource_in_db_file(file: &Path, resource: &str) -> Result<(), AppError> {
+    with_exclusive_file_lock(file, || {
+        let raw = std::fs::read_to_string(file).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => {
+                AppError::new(StatusCode::NOT_FOUND, format!("Resource '{resource}' not found"))
+            }
+            _ => AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        })?;
+        let mut root: Value = serde_json::from_str(&raw).map_err(|e| {
+            AppError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid JSON: {e}"))
+        })?;
+        let root_obj = root.as_object_mut().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, "Database file must contain a JSON object")
+        })?;
+        if root_obj.remove(resource).is_none() {
+            return Err(AppError::new(
+                StatusCode::NOT_FOUND,
+                format!("Resource '{resource}' not found"),
+            ));
+        }
+
         let content = serde_json::to_string_pretty(&root)
             .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         write_json_atomically_unlocked(file, &format!("{content}\n"))

@@ -21,7 +21,8 @@ pub use index::{
     build_id_index, coerce_id_value, find_item_by_key, find_item_index_by_key, next_numeric_id,
 };
 pub use io::{
-    is_reserved_resource_name, is_valid_resource_name, resource_file_path, scan_resources,
+    create_resource_value, delete_resource_value, is_reserved_resource_name,
+    is_valid_resource_name, resource_file_path, scan_resources,
 };
 pub use validation::{validate_resource_data, validate_sql_identifier};
 
@@ -75,7 +76,7 @@ pub async fn resource_exists(state: &AppState, resource: &str) -> Result<bool, A
     Ok(state.resources.read().await.contains(resource))
 }
 
-async fn refresh_inferred_schema(state: &AppState) -> Result<(), AppError> {
+pub(crate) async fn refresh_inferred_schema(state: &AppState) -> Result<(), AppError> {
     let resources = state.resources.read().await.clone();
     let data_source = state.data_source.clone();
     let inferred = tokio::task::spawn_blocking(move || {

@@ -762,7 +762,7 @@
       "kind": "interface",
       "symbol": "REST mutation service",
       "module": "src/mutation_service.rs",
-      "interface": "POST/PUT/PATCH/DELETE /{resource} and /{resource}/{id}",
+      "interface": "POST/PUT/PATCH/DELETE /{resource}, /{resource}/{id}, and /resources",
       "risk": "critical",
       "covered_symbols": [
         "create_item",
@@ -770,9 +770,37 @@
         "patch_item",
         "delete_item",
         "replace_resource_object",
-        "patch_resource_object"
+        "patch_resource_object",
+        "ResourceCreatePayload",
+        "ResourceDeleteParams",
+        "create_resource",
+        "delete_resource"
       ],
       "covered_by": [
+        {
+          "test": "resources_endpoint_creates_and_deletes_folder_resources",
+          "path": "src/resource_management_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "POST /resources creates a folder-mode resource and DELETE /resources/{resource}?confirm=true removes it"
+          ]
+        },
+        {
+          "test": "resources_endpoint_creates_and_deletes_file_mode_resources",
+          "path": "src/resource_management_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "POST /resources and DELETE /resources/{resource}?confirm=true preserve sibling top-level keys in file mode"
+          ]
+        },
+        {
+          "test": "resources_endpoint_validates_names_duplicates_defaults_and_readonly",
+          "path": "src/resource_management_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "resource management rejects duplicates, invalid names, reserved names, and readonly mutations"
+          ]
+        },
         {
           "test": "school_examples_support_students_crud_end_to_end",
           "path": "src/mutation_service_test.rs",
@@ -887,7 +915,9 @@
             "replacement object",
             "patch object",
             "non-object payload",
-            "schema constraint rejection at mutation-service level"
+            "schema constraint rejection at mutation-service level",
+            "new resource initial JSON",
+            "default empty array for new resources"
           ],
           "missing_values": []
         },
@@ -922,6 +952,8 @@
             "DELETE item",
             "PUT object resource",
             "PATCH object resource",
+            "POST resource",
+            "DELETE resource",
             "file mode"
           ]
         },
@@ -932,6 +964,9 @@
             "non-array resource",
             "missing id",
             "readonly route behavior",
+            "duplicate resource name",
+            "reserved resource name",
+            "delete without confirm=true",
             "declared-schema validation failure per mutation operation",
             "storage write failure"
           ]
@@ -945,7 +980,7 @@
           ]
         }
       },
-      "notes": "The initial report intentionally marks schema-validation rejection as a visible gap for follow-up."
+      "notes": "Resource-management routes are covered through HTTP integration tests because their state refresh and persistence behavior are route-visible."
     },
     {
       "id": "rust-storage",
@@ -962,6 +997,8 @@
         "resource_exists",
         "read_resource_value",
         "persist_resource_value",
+        "create_resource_value",
+        "delete_resource_value",
         "resource_file_path",
         "is_valid_resource_name",
         "is_reserved_resource_name",
@@ -1107,6 +1144,10 @@
             "write folder",
             "write file mode",
             "scan resources",
+            "create folder resource",
+            "create file-mode resource",
+            "delete folder resource",
+            "delete file-mode resource",
             "index ids",
             "validate valid schema rows"
           ]
@@ -1117,6 +1158,7 @@
             "missing resource",
             "invalid JSON",
             "invalid resource name",
+            "reserved resource name",
             "wrong declared type",
             "missing non-null column",
             "constraint violations"

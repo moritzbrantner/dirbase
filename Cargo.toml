@@ -70,6 +70,10 @@ name = "retrieval_and_query_params"
 path = "src/http/retrieval_and_query_params_test.rs"
 
 [[test]]
+name = "resource_management"
+path = "src/resource_management_test.rs"
+
+[[test]]
 name = "root_html_overview"
 path = "src/http/root_html_overview_test.rs"
 

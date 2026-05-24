@@ -17,6 +17,7 @@ mod http;
 mod mutation_service;
 mod query;
 mod relations;
+mod resource_service;
 mod schema;
 mod sql;
 mod startup;

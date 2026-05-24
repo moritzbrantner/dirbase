@@ -4,6 +4,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
@@ -18,9 +19,22 @@ use crate::{
         filter_collection_refs, paginate_collection_refs, parse_collection_query_params,
         sort_collection_refs,
     },
+    resource_service,
     schema::primary_key_name,
     storage::{find_item_by_key, load_resource, validate_resource_data},
 };
+
+#[derive(Deserialize)]
+pub struct ResourceCreatePayload {
+    pub name: String,
+    #[serde(default = "default_initial_resource_value")]
+    pub initial: Value,
+}
+
+#[derive(Deserialize)]
+pub struct ResourceDeleteParams {
+    pub confirm: Option<bool>,
+}
 
 pub async fn list_resources(
     State(state): State<AppState>,
@@ -37,6 +51,33 @@ pub async fn get_overview(
     State(state): State<AppState>,
 ) -> Result<Json<overview::OverviewPageData>, AppError> {
     overview::get_overview_json(&state).await
+}
+
+pub async fn create_resource(
+    State(state): State<AppState>,
+    Json(payload): Json<ResourceCreatePayload>,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let created = resource_service::create_resource(&state, &payload.name, payload.initial).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "created": true,
+            "resource": payload.name,
+            "data": created,
+        })),
+    ))
+}
+
+pub async fn delete_resource(
+    State(state): State<AppState>,
+    AxumPath(resource): AxumPath<String>,
+    Query(params): Query<ResourceDeleteParams>,
+) -> Result<StatusCode, AppError> {
+    if params.confirm != Some(true) {
+        return Err(AppError::bad_request("Deleting a resource requires confirm=true"));
+    }
+    resource_service::delete_resource(&state, &resource).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn get_collection(
@@ -215,4 +256,8 @@ fn collection_query_operators_present(
         || !parsed.sort_columns.is_empty()
         || parsed.pagination.is_some()
         || !parsed.embeds.is_empty()
+}
+
+fn default_initial_resource_value() -> Value {
+    Value::Array(Vec::new())
 }

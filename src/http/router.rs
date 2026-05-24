@@ -2,7 +2,7 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     middleware,
-    routing::{MethodRouter, get, post},
+    routing::{MethodRouter, delete, get, post},
 };
 
 use crate::{
@@ -16,8 +16,9 @@ use crate::{
         },
         ops::{get_events, healthz, metrics, readyz},
         resource_routes::{
-            create_item, delete_item, get_collection, get_item, get_overview, list_resources,
-            patch_item, patch_resource_object, replace_item, replace_resource_object,
+            create_item, create_resource, delete_item, delete_resource, get_collection, get_item,
+            get_overview, list_resources, patch_item, patch_resource_object, replace_item,
+            replace_resource_object,
         },
         response_format::response_format_middleware,
         schema_routes::{
@@ -48,6 +49,7 @@ fn build_application_routes(readonly: bool) -> Router<AppState> {
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/metrics", get(metrics))
+        .route("/resources", resources_route(readonly))
         .route("/overview.json", get(get_overview))
         .route("/assets/overview.css", get(get_overview_css))
         .route("/assets/overview.js", get(get_overview_js))
@@ -63,7 +65,17 @@ fn build_application_routes(readonly: bool) -> Router<AppState> {
         .route("/{resource}", collection_route(readonly))
         .route("/{resource}/{id}", item_route(readonly));
 
-    if readonly { app } else { app.route("/schema/infer", post(infer_and_save_schema)) }
+    if readonly {
+        app
+    } else {
+        app.route("/schema/infer", post(infer_and_save_schema))
+            .route("/resources/{resource}", delete(delete_resource))
+    }
+}
+
+fn resources_route(readonly: bool) -> MethodRouter<AppState> {
+    let route = get(list_resources);
+    if readonly { route } else { route.post(create_resource) }
 }
 
 fn schema_route(readonly: bool) -> MethodRouter<AppState> {
