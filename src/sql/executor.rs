@@ -15,7 +15,7 @@ use crate::{
 
 use super::{
     parser::parse_sql_query,
-    types::{ParsedSqlJoin, ParsedSqlQuery},
+    types::{ParsedSqlJoin, ParsedSqlProjection, ParsedSqlQuery},
 };
 
 pub(crate) async fn run_sql_query(state: AppState, query: String) -> Result<Json<Value>, AppError> {
@@ -186,7 +186,7 @@ fn value_to_lookup_key(value: &Value) -> String {
 
 pub(crate) fn apply_column_selection(
     rows: Vec<Value>,
-    selected_columns: Option<Vec<String>>,
+    selected_columns: Option<Vec<ParsedSqlProjection>>,
 ) -> Result<Vec<Value>, AppError> {
     let Some(selected_columns) = selected_columns else {
         return Ok(rows);
@@ -199,8 +199,8 @@ pub(crate) fn apply_column_selection(
             let mut projected = serde_json::Map::new();
             for column in &selected_columns {
                 projected.insert(
-                    column.clone(),
-                    get_value_at_path(&Value::Object(object.clone()), column)
+                    column.output.clone(),
+                    get_value_at_path(&Value::Object(object.clone()), &column.source)
                         .cloned()
                         .unwrap_or(Value::Null),
                 );
@@ -215,7 +215,7 @@ pub(crate) fn validate_sql_query_fields(
     resource: &str,
     resource_alias: &str,
     joins: &[ParsedSqlJoin],
-    selected_columns: Option<&[String]>,
+    selected_columns: Option<&[ParsedSqlProjection]>,
     filters: &[FilterCondition],
     sort_columns: &[SortColumn],
 ) -> Result<(), AppError> {
@@ -226,7 +226,7 @@ pub(crate) fn validate_sql_query_fields(
                 resource,
                 resource_alias,
                 joins,
-                column,
+                &column.source,
                 "SELECT projection",
             )?;
         }

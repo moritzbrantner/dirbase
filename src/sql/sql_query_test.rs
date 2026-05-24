@@ -113,6 +113,15 @@ fn sql_supports_is_null_and_projection_and_coercion() {
     let payload: serde_json::Value = serde_json::from_str(body).expect("json payload");
     assert_eq!(payload["row_count"], 1);
     assert_eq!(payload["rows"][0], serde_json::json!({"id": 1, "name": "Ada"}));
+
+    let alias_response = http_get(
+        &bind_addr,
+        "/sql?q=SELECT%20id%20AS%20user_id,name%20AS%20display_name%20FROM%20users%20WHERE%20age%20%3E%2025%20LIMIT%201",
+    );
+    assert!(alias_response.contains("200 OK"), "{alias_response}");
+    let alias_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&alias_response)).expect("alias json payload");
+    assert_eq!(alias_payload["rows"][0], serde_json::json!({"user_id": 1, "display_name": "Ada"}));
 }
 
 #[test]
@@ -280,6 +289,35 @@ fn sql_rejects_ambiguous_null_and_invalid_identifiers() {
 }
 
 #[test]
+fn sql_rejects_quoted_identifiers_explicitly() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
+        .expect("write users");
+
+    let (_child, bind_addr) = spawn_folder_server(temp.path(), false);
+
+    for query in [
+        r#"SELECT "id" FROM users LIMIT 1"#,
+        r#"SELECT id FROM "users" LIMIT 1"#,
+        r#"SELECT id AS "user_id" FROM users LIMIT 1"#,
+        r#"SELECT u."name" FROM users u LIMIT 1"#,
+        r#"SELECT id FROM users WHERE "name" = 'Ada' LIMIT 1"#,
+        r#"SELECT id FROM users ORDER BY "name" LIMIT 1"#,
+    ] {
+        let response = http_post_json(&bind_addr, "/sql", serde_json::json!({ "query": query }));
+        assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"), "query: {query}\n{response}");
+        let payload: serde_json::Value =
+            serde_json::from_str(parse_http_body(&response)).expect("quoted identifier payload");
+        assert_eq!(payload["code"], "invalid_sql", "query: {query}\n{response}");
+        let error = payload["error"].as_str().expect("error");
+        assert!(
+            error.contains("Quoted") && error.contains("identifiers are not supported"),
+            "query: {query}\n{response}"
+        );
+    }
+}
+
+#[test]
 fn sql_returns_structured_codes_for_invalid_and_unknown_table() {
     let temp = tempfile::tempdir().expect("create temp directory");
     std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
@@ -366,12 +404,15 @@ fn sql_rejects_unsupported_projection_where_and_order_expressions() {
         "unsupported_feature",
         "Unsupported SELECT projection",
     );
-    assert_sql_error(
+    let alias_response = http_post_json(
         &bind_addr,
-        "SELECT id AS user_id FROM users LIMIT 1",
-        "unsupported_feature",
-        "Unsupported SELECT projection",
+        "/sql",
+        serde_json::json!({"query": "SELECT id AS user_id FROM users LIMIT 1"}),
     );
+    assert!(alias_response.starts_with("HTTP/1.1 200 OK\r\n"), "{alias_response}");
+    let alias_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&alias_response)).expect("alias payload");
+    assert_eq!(alias_payload["rows"], serde_json::json!([{"user_id": 1}]));
     assert_sql_error(
         &bind_addr,
         "SELECT id FROM users WHERE age + 1 > 30 LIMIT 1",

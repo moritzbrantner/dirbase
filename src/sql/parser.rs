@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use axum::http::StatusCode;
 use sqlparser::{
     ast::{
-        BinaryOperator, Expr, Join, JoinConstraint, JoinOperator, Select, SelectItem, SetExpr,
-        Statement, TableFactor, Value as SqlValue,
+        BinaryOperator, Expr, Ident, Join, JoinConstraint, JoinOperator, Select, SelectItem,
+        SetExpr, Statement, TableFactor, Value as SqlValue,
     },
     dialect::GenericDialect,
     parser::Parser as SqlParser,
@@ -19,7 +19,7 @@ use crate::{
 
 use super::{
     executor::validate_sql_query_fields,
-    types::{MAX_SQL_QUERY_LENGTH, ParsedSqlJoin, ParsedSqlQuery},
+    types::{MAX_SQL_QUERY_LENGTH, ParsedSqlJoin, ParsedSqlProjection, ParsedSqlQuery},
 };
 
 pub(crate) async fn parse_sql_query(
@@ -119,8 +119,8 @@ async fn parse_sql_select(
     }
     let from = &select.from[0];
     let (resource, resource_alias) = parse_sql_table_factor(&from.relation)?;
-    validate_sql_identifier(&resource, "resource")?;
-    validate_sql_identifier(&resource_alias, "resource alias")?;
+    validate_sql_query_identifier(&resource, "resource")?;
+    validate_sql_query_identifier(&resource_alias, "resource alias")?;
     if !resource_exists(state, &resource).await? {
         return Err(AppError::not_found(format!("Unknown table/resource '{resource}'"))
             .with_code(crate::error::ERROR_CODE_UNKNOWN_TABLE));
@@ -156,6 +156,9 @@ async fn parse_sql_select(
 fn parse_sql_table_factor(relation: &TableFactor) -> Result<(String, String), AppError> {
     match relation {
         TableFactor::Table { name, alias, .. } => {
+            for part in &name.0 {
+                validate_sql_ast_identifier(part, "resource")?;
+            }
             let resource = name
                 .0
                 .last()
@@ -165,10 +168,12 @@ fn parse_sql_table_factor(relation: &TableFactor) -> Result<(String, String), Ap
                 })?
                 .value
                 .clone();
-            let alias = alias
-                .as_ref()
-                .map(|alias| alias.name.value.clone())
-                .unwrap_or_else(|| resource.clone());
+            let alias = if let Some(alias) = alias {
+                validate_sql_ast_identifier(&alias.name, "resource alias")?;
+                alias.name.value.clone()
+            } else {
+                resource.clone()
+            };
             Ok((resource, alias))
         }
         _ => Err(AppError::new(StatusCode::BAD_REQUEST, "Unsupported FROM clause")
@@ -186,8 +191,8 @@ async fn parse_sql_joins(
     let mut aliases = HashMap::from([(base_alias.to_string(), base_resource.to_string())]);
     for join in joins {
         let (resource, alias) = parse_sql_table_factor(&join.relation)?;
-        validate_sql_identifier(&resource, "resource")?;
-        validate_sql_identifier(&alias, "resource alias")?;
+        validate_sql_query_identifier(&resource, "resource")?;
+        validate_sql_query_identifier(&alias, "resource alias")?;
         if !resource_exists(state, &resource).await? {
             return Err(AppError::new(
                 StatusCode::NOT_FOUND,
@@ -282,8 +287,8 @@ fn parse_sql_qualified_column_expr(expr: &Expr) -> Result<(String, String), AppE
             let column = parts.last().ok_or_else(|| {
                 AppError::new(StatusCode::BAD_REQUEST, "Invalid column reference")
             })?;
-            validate_sql_identifier(&prefix.value, "resource alias")?;
-            validate_sql_identifier(&column.value, "column")?;
+            validate_sql_ast_identifier(prefix, "resource alias")?;
+            validate_sql_ast_identifier(column, "column")?;
             Ok((prefix.value.clone(), column.value.clone()))
         }
         _ => Err(AppError::new(
@@ -323,7 +328,9 @@ fn validate_join_relation(
     .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE))
 }
 
-fn parse_sql_projection(projection: &[SelectItem]) -> Result<Option<Vec<String>>, AppError> {
+fn parse_sql_projection(
+    projection: &[SelectItem],
+) -> Result<Option<Vec<ParsedSqlProjection>>, AppError> {
     if projection.len() == 1 && matches!(projection[0], SelectItem::Wildcard(_)) {
         return Ok(None);
     }
@@ -331,20 +338,22 @@ fn parse_sql_projection(projection: &[SelectItem]) -> Result<Option<Vec<String>>
     for item in projection {
         match item {
             SelectItem::UnnamedExpr(Expr::Identifier(identifier)) => {
-                validate_sql_identifier(&identifier.value, "column")?;
-                columns.push(identifier.value.clone());
+                validate_sql_ast_identifier(identifier, "column")?;
+                columns.push(ParsedSqlProjection {
+                    source: identifier.value.clone(),
+                    output: identifier.value.clone(),
+                });
             }
             SelectItem::UnnamedExpr(Expr::CompoundIdentifier(parts)) => {
-                let column = parts.last().ok_or_else(|| {
-                    AppError::new(StatusCode::BAD_REQUEST, "Invalid column reference")
-                })?;
-                for part in parts {
-                    validate_sql_identifier(&part.value, "column")?;
-                }
-                validate_sql_identifier(&column.value, "column")?;
-                columns.push(
-                    parts.iter().map(|part| part.value.clone()).collect::<Vec<_>>().join("."),
-                );
+                let source = parse_sql_compound_column(parts)?;
+                columns.push(ParsedSqlProjection { output: source.clone(), source });
+            }
+            SelectItem::ExprWithAlias { expr, alias } => {
+                validate_sql_ast_identifier(alias, "column alias")?;
+                columns.push(ParsedSqlProjection {
+                    source: parse_sql_column_expr(expr)?,
+                    output: alias.value.clone(),
+                });
             }
             _ => {
                 return Err(AppError::new(
@@ -356,6 +365,17 @@ fn parse_sql_projection(projection: &[SelectItem]) -> Result<Option<Vec<String>>
         }
     }
     Ok(Some(columns))
+}
+
+fn parse_sql_compound_column(parts: &[Ident]) -> Result<String, AppError> {
+    let column = parts
+        .last()
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Invalid column reference"))?;
+    for part in parts {
+        validate_sql_ast_identifier(part, "column")?;
+    }
+    validate_sql_ast_identifier(column, "column")?;
+    Ok(parts.iter().map(|part| part.value.clone()).collect::<Vec<_>>().join("."))
 }
 
 fn parse_sql_where(expr: &Expr) -> Result<Vec<FilterCondition>, AppError> {
@@ -510,19 +530,10 @@ fn sql_like_pattern_to_filter(pattern: &str) -> Result<(FilterOperator, String),
 fn parse_sql_column_expr(expr: &Expr) -> Result<String, AppError> {
     match expr {
         Expr::Identifier(identifier) => {
-            validate_sql_identifier(&identifier.value, "column")?;
+            validate_sql_ast_identifier(identifier, "column")?;
             Ok(identifier.value.clone())
         }
-        Expr::CompoundIdentifier(parts) => {
-            let column = parts.last().ok_or_else(|| {
-                AppError::new(StatusCode::BAD_REQUEST, "Expected a column identifier")
-            })?;
-            for part in parts {
-                validate_sql_identifier(&part.value, "column")?;
-            }
-            validate_sql_identifier(&column.value, "column")?;
-            Ok(parts.iter().map(|part| part.value.clone()).collect::<Vec<_>>().join("."))
-        }
+        Expr::CompoundIdentifier(parts) => parse_sql_compound_column(parts),
         _ => Err(AppError::new(StatusCode::BAD_REQUEST, "Expected a column identifier")),
     }
 }
@@ -573,6 +584,19 @@ fn parse_sql_usize_literal(expr: &Expr, clause: &str) -> Result<usize, AppError>
     Ok(parsed)
 }
 
+fn validate_sql_ast_identifier(identifier: &Ident, kind: &str) -> Result<(), AppError> {
+    if identifier.quote_style.is_some() {
+        return Err(AppError::bad_request(format!("Quoted {kind} identifiers are not supported"))
+            .with_code(crate::error::ERROR_CODE_INVALID_SQL));
+    }
+    validate_sql_query_identifier(&identifier.value, kind)
+}
+
+fn validate_sql_query_identifier(identifier: &str, kind: &str) -> Result<(), AppError> {
+    validate_sql_identifier(identifier, kind)
+        .map_err(|err| err.with_code(crate::error::ERROR_CODE_INVALID_SQL))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,6 +635,9 @@ mod tests {
         let parsed =
             runtime.block_on(parse_sql_query("SELECT id FROM users", &state)).expect("parse");
         assert_eq!(parsed.resource, "users");
-        assert_eq!(parsed.selected_columns.expect("columns"), vec!["id"]);
+        assert_eq!(
+            parsed.selected_columns.expect("columns"),
+            vec![ParsedSqlProjection { source: "id".to_string(), output: "id".to_string() }]
+        );
     }
 }

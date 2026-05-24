@@ -346,6 +346,21 @@ fn sql_inner_join_supports_schema_backed_relations() {
             {"u.name": "Grace", "t.name": "Infra"}
         ])
     );
+
+    let aliased_response = http_get(
+        &bind_addr,
+        "/sql?q=SELECT%20u.name%20AS%20user_name,t.name%20AS%20team_name%20FROM%20users%20u%20JOIN%20teams%20t%20ON%20u.id%20=%20t.user_id%20ORDER%20BY%20u.id%20ASC%20LIMIT%202",
+    );
+    assert!(aliased_response.starts_with("HTTP/1.1 200 OK\r\n"), "{aliased_response}");
+    let aliased_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&aliased_response)).expect("aliased join payload");
+    assert_eq!(
+        aliased_payload["rows"],
+        serde_json::json!([
+            {"user_name": "Ada", "team_name": "Core"},
+            {"user_name": "Grace", "team_name": "Infra"}
+        ])
+    );
 }
 
 #[test]
@@ -419,6 +434,22 @@ fn sql_alias_projection_filter_order_and_invalid_join_paths_are_reported() {
         invalid_payload["error"].as_str().expect("error").contains("not backed by schema metadata"),
         "{invalid_join}"
     );
+
+    let quoted_join_identifier = http_post_json(
+        &bind_addr,
+        "/sql",
+        serde_json::json!({
+            "query": r#"SELECT u.name FROM users u JOIN posts p ON u."id" = p.author_id LIMIT 1"#
+        }),
+    );
+    assert!(
+        quoted_join_identifier.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+        "{quoted_join_identifier}"
+    );
+    let quoted_payload: serde_json::Value =
+        serde_json::from_str(parse_http_body(&quoted_join_identifier))
+            .expect("quoted join identifier payload");
+    assert_eq!(quoted_payload["code"], "invalid_sql");
 }
 
 fn start_server(folder: &std::path::Path, readonly: bool) -> (ChildGuard, String) {

@@ -1552,6 +1552,8 @@
             "BETWEEN",
             "IN",
             "LIKE",
+            "projection aliases",
+            "quoted identifiers rejected",
             "ORDER BY",
             "LIMIT",
             "OFFSET",
@@ -1561,9 +1563,7 @@
             "alias",
             "INNER JOIN"
           ],
-          "missing_values": [
-            "quoted identifiers if intentionally unsupported"
-          ]
+          "missing_values": []
         },
         {
           "name": "dialect",

@@ -50,11 +50,17 @@ impl SqlExportDialect {
 pub(crate) struct ParsedSqlQuery {
     pub(crate) resource: String,
     pub(crate) resource_alias: String,
-    pub(crate) selected_columns: Option<Vec<String>>,
+    pub(crate) selected_columns: Option<Vec<ParsedSqlProjection>>,
     pub(crate) filters: Vec<FilterCondition>,
     pub(crate) sort_columns: Vec<SortColumn>,
     pub(crate) pagination: Option<Pagination>,
     pub(crate) joins: Vec<ParsedSqlJoin>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedSqlProjection {
+    pub(crate) source: String,
+    pub(crate) output: String,
 }
 
 #[derive(Debug, Clone)]
