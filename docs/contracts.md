@@ -1,6 +1,6 @@
 # Public Contracts
 
-This project treats the CLI, HTTP API, GraphQL API, SQL endpoint, overview UI, JavaScript wrapper, and generated UI bundle as compatibility surfaces.
+This project treats the CLI, HTTP API, OpenAPI document, GraphQL API, SQL endpoint, overview UI, JavaScript wrapper, and generated UI bundle as compatibility surfaces.
 
 ## Stable Behavior Surfaces
 
@@ -8,6 +8,7 @@ Keep these stable unless a change is explicitly designed as a behavior change:
 
 - CLI flags, config-file loading, command-line precedence, startup output, and process exit behavior
 - REST route paths, HTTP methods, status codes, response bodies, content types, auth, CORS, XML mode, metrics, and SSE events
+- OpenAPI route availability, readonly operation omission, generated resource paths, operation IDs, and schema component mapping
 - GraphQL schema naming, GraphiQL serving, query execution, relation traversal, and error response shape
 - SQL query endpoint behavior, supported SQL subset, row limits, structured error codes, and export output
 - Overview UI workflows for exploring data, editing data, editing schema, live updates, and request URL generation

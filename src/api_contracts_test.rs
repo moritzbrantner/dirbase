@@ -144,6 +144,119 @@ fn events_contract_reports_resource_schema_and_overview_changes() {
 }
 
 #[test]
+fn openapi_contract_describes_resources_readonly_auth_and_reserved_name() {
+    let data = TestDatasetBuilder::new()
+        .json_file(
+            "users.json",
+            serde_json::json!([{"user_id": "u1", "name": "Ada", "role": "admin"}]),
+        )
+        .json_file("profile.json", serde_json::json!({"name": "Ada", "theme": "dark"}))
+        .json_file("openapi.json", serde_json::json!([{"id": 1}]))
+        .json_file(
+            "schema.json",
+            serde_json::json!({
+                "tables": {
+                    "users": {
+                        "primary_key": "user_id",
+                        "columns": {
+                            "user_id": { "column_type": "uuid", "nullable": false },
+                            "name": { "column_type": "string", "nullable": false },
+                            "role": {
+                                "column_type": "string",
+                                "nullable": false,
+                                "enum_values": ["admin", "reader"]
+                            }
+                        }
+                    }
+                }
+            }),
+        );
+    let (_child, addr) = TestServerBuilder::folder(data.path()).spawn();
+
+    let raw = request_text(&addr, "GET", "/openapi.json", None);
+    assert_status(&raw, "200 OK");
+    assert!(raw.contains("content-type: application/json"), "{raw}");
+    let payload = parse_json_body(&raw);
+    assert_eq!(payload["openapi"], "3.1.0");
+    assert_eq!(payload["info"]["title"], "dirbase");
+    assert_eq!(
+        payload["paths"]["/resources/{resource}"]["delete"]["operationId"],
+        "deleteResource"
+    );
+
+    let paths = payload["paths"].as_object().expect("paths object");
+    assert!(paths.contains_key("/openapi.json"));
+    assert!(paths.contains_key("/users"));
+    assert!(paths.contains_key("/users/{id}"));
+    assert!(paths.contains_key("/profile"));
+    assert!(!paths.contains_key("/profile/{id}"));
+    assert_eq!(payload["paths"]["/users"]["get"]["operationId"], "getUsersCollection");
+    assert_eq!(payload["paths"]["/users"]["post"]["operationId"], "createUsersItem");
+    assert_eq!(payload["paths"]["/profile"]["put"]["operationId"], "replaceProfileObject");
+
+    let id_description = payload["paths"]["/users/{id}"]["get"]["parameters"][0]["description"]
+        .as_str()
+        .expect("id description");
+    assert!(id_description.contains("user_id"), "{id_description}");
+    assert_eq!(
+        payload["components"]["schemas"]["UsersResource"]["properties"]["user_id"]["format"],
+        "uuid"
+    );
+    assert_eq!(
+        payload["components"]["schemas"]["UsersResource"]["properties"]["role"]["enum_values"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        payload["components"]["schemas"]["UsersResource"]["properties"]["role"]["enum"],
+        serde_json::json!(["admin", "reader"])
+    );
+
+    let resources = request_json(&addr, "GET", "/resources", None);
+    assert_eq!(resources, serde_json::json!({"resources": ["profile", "users"]}));
+    let reserved_create =
+        request_text(&addr, "POST", "/resources", Some(r#"{"name":"openapi","initial":[]}"#));
+    assert_status(&reserved_create, "400 Bad Request");
+
+    let (_readonly_child, readonly_addr) =
+        TestServerBuilder::folder(data.path()).arg("--readonly").spawn();
+    let readonly_payload = request_json(&readonly_addr, "GET", "/openapi.json", None);
+    let readonly_paths = readonly_payload["paths"].as_object().expect("readonly paths");
+    assert!(!readonly_paths.contains_key("/schema/infer"));
+    assert!(
+        readonly_payload["paths"]["/users"].as_object().expect("users path").get("post").is_none()
+    );
+    assert!(
+        readonly_payload["paths"]["/users/{id}"]
+            .as_object()
+            .expect("item path")
+            .get("delete")
+            .is_none()
+    );
+    assert!(
+        readonly_payload["paths"]["/profile"]
+            .as_object()
+            .expect("profile path")
+            .get("put")
+            .is_none()
+    );
+    assert!(readonly_payload["paths"]["/sql"].as_object().expect("sql path").get("post").is_none());
+
+    let (_auth_child, auth_addr) =
+        TestServerBuilder::folder(data.path()).args(&["--auth-token", "secret"]).spawn();
+    let unauthorized = request_text(&auth_addr, "GET", "/openapi.json", None);
+    assert_status(&unauthorized, "401 Unauthorized");
+    let authorized = request_with_headers(
+        &auth_addr,
+        "GET",
+        "/openapi.json",
+        "Authorization: Bearer secret\r\n",
+        None,
+    );
+    assert_status(&authorized, "200 OK");
+    assert_eq!(parse_json_body(&authorized)["openapi"], "3.1.0");
+}
+
+#[test]
 fn representative_error_bodies_remain_unchanged() {
     let data = TestDatasetBuilder::new()
         .json_file("users.json", serde_json::json!([{"id": 1, "name": "Ada"}]));

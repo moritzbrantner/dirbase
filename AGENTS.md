@@ -48,7 +48,6 @@ Do not add a root `release` or `publish` command unless the release process chan
 - Prefer `rg --files` for file discovery and `rg '<term>'` for text search.
 - Use `cargo test -- --list` to inspect Rust test targets.
 - Use `bun run --cwd ui test -- <pattern>` for focused Vitest runs.
-- Use semantic search when available, for example: `semble search "schema inference foreign keys" --repo .`.
 
 ## Verification Notes
 

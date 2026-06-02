@@ -26,6 +26,7 @@ use crate::{
             get_schema, get_schema_editor, infer_and_save_schema, save_declared_schema, save_schema,
         },
     },
+    openapi::get_openapi,
     sql::{export_sql, sql_query, sql_query_post},
 };
 
@@ -53,6 +54,7 @@ fn build_application_routes(readonly: bool) -> Router<AppState> {
         .route("/metrics", get(metrics))
         .route("/resources", resources_route(readonly))
         .route("/overview.json", get(get_overview))
+        .route("/openapi.json", get(get_openapi))
         .route("/assets/overview.css", get(get_overview_css))
         .route("/assets/overview.js", get(get_overview_js))
         .route("/graphql", get(graphql_get).post(graphql_post))

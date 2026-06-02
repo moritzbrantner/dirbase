@@ -305,6 +305,9 @@ export function OverviewApp({ overviewEndpoint }: { overviewEndpoint: string }) 
           </span>
           {uiState.readonly && <span className="status-pill is-warn">Read-only mode</span>}
           {overviewQuery.data?.schema_enabled && <span className="status-pill">Schema loaded</span>}
+          <a className="overview-secondary-button" href="/openapi.json" target="_blank" rel="noreferrer">
+            OpenAPI
+          </a>
           {liveUpdates === 'paused' && (
             <button type="button" className="overview-secondary-button" onClick={retryLiveUpdates}>
               Retry live updates

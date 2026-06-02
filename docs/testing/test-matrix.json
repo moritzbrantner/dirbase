@@ -38,6 +38,7 @@
       "owner_paths": [
         "src/http/router.rs",
         "src/http/resource_routes.rs",
+        "src/openapi/*.rs",
         "src/http/retrieval_and_query_params_test.rs",
         "src/http/root_html_overview_test.rs",
         "src/http/overview_endpoints_test.rs",
@@ -543,11 +544,13 @@
       "kind": "interface",
       "symbol": "REST read routes",
       "module": "src/http/router.rs",
-      "interface": "GET /, /overview.json, /{resource}, /{resource}/{id}",
+      "interface": "GET /, /overview.json, /openapi.json, /{resource}, /{resource}/{id}",
       "risk": "critical",
       "covered_symbols": [
         "list_resources",
         "get_overview",
+        "get_openapi",
+        "build_openapi_document",
         "get_collection",
         "get_item",
         "render_root_overview",
@@ -621,6 +624,17 @@
           "asserts": [
             "representative REST 404 error bodies remain stable"
           ]
+        },
+        {
+          "test": "openapi_contract_describes_resources_readonly_auth_and_reserved_name",
+          "path": "src/api_contracts_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "GET /openapi.json returns OpenAPI 3.1 JSON and resource paths",
+            "readonly mode omits write operations",
+            "auth applies to the OpenAPI route",
+            "openapi.json is hidden as a data resource and openapi is reserved"
+          ]
         }
       ],
       "parameters": [
@@ -653,6 +667,7 @@
           "cases": [
             "root resource list",
             "overview JSON",
+            "OpenAPI JSON",
             "collection read",
             "item read",
             "declared primary key read"
@@ -663,7 +678,9 @@
           "cases": [
             "missing item",
             "invalid resource name",
-            "missing resource"
+            "missing resource",
+            "OpenAPI auth rejection",
+            "reserved openapi resource name"
           ]
         },
         "concurrency": {

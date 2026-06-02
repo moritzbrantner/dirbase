@@ -174,7 +174,15 @@ pub fn is_valid_resource_name(name: &str) -> bool {
 pub fn is_reserved_resource_name(name: &str) -> bool {
     matches!(
         name,
-        "resources" | "schema" | "graphql" | "sql" | "events" | "healthz" | "readyz" | "metrics"
+        "resources"
+            | "schema"
+            | "graphql"
+            | "sql"
+            | "events"
+            | "healthz"
+            | "readyz"
+            | "metrics"
+            | "openapi"
     )
 }
 

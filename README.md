@@ -82,6 +82,7 @@ you get:
 - `GET /resources` lists all available resources as JSON.
 - `POST /resources` creates a new resource with `{"name":"projects","initial":[]}`. In folder mode this creates `projects.json`; in file mode this adds a top-level `projects` key.
 - `DELETE /resources/{resource}?confirm=true` deletes a resource file in folder mode or removes the top-level key in file mode.
+- `GET /openapi.json` returns a schema-derived OpenAPI 3.1 document for the current REST API, resources, and readonly capabilities.
 - While the server is running, file additions, edits, and deletions in the selected folder are watched and the available endpoints update automatically.
 - `GET /{resource}` returns the whole JSON document from `{resource}.json` (array or object).
 - `GET /{resource}?field=value&other=...` filters array resources (default operator is `eq`).
@@ -125,7 +126,7 @@ you get:
 
 | Interface | Read | Write | Filtering / sorting / pagination | Relations | Notes |
 | --- | --- | --- | --- | --- | --- |
-| REST | Yes | Yes unless `--readonly` | Yes | `embed` plus item routes | Primary API surface |
+| REST | Yes | Yes unless `--readonly` | Yes | `embed` plus item routes | Primary API surface, OpenAPI at `/openapi.json` |
 | GraphQL | Yes | No | `*Query` fields support filter / sort / pagination | Foreign-key traversal | GraphiQL at `GET /graphql` |
 | SQL | Yes | No | `SELECT`, projection aliases, plain identifiers only, `WHERE` with comparisons / `BETWEEN` / `IN` / simple `LIKE`, `ORDER BY`, `LIMIT/OFFSET` | Schema-backed `INNER JOIN` | Query endpoint at `/sql` |
 | Overview UI | Yes | Yes unless `--readonly` | Explorer drives REST params | Live-updating relation map | Root HTML at `GET /` |
@@ -321,7 +322,7 @@ bunx --bun dirbase ./data --bind 127.0.0.1:4444
 ## Notes
 
 - Resource names are restricted to letters, numbers, `_`, and `-`.
-- `resources`, `schema`, `graphql`, `sql`, `events`, `healthz`, `readyz`, and `metrics` are reserved route names.
+- `resources`, `schema`, `graphql`, `sql`, `events`, `healthz`, `readyz`, `metrics`, and `openapi` are reserved route names. A file named `openapi.json` is hidden because it maps to the reserved `openapi` resource name.
 - Item-level endpoints (`/{resource}/{id}`) expect array-based resources (`[{"id": ...}, ...]`).
 - Object resources support `GET /{resource}`, `PUT /{resource}`, and `PATCH /{resource}`.
 - Invalid JSON in a file returns a 500 with an error payload.

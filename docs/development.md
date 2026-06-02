@@ -47,7 +47,7 @@ bun run hygiene
 
 ## Public Contracts
 
-Compatibility surfaces and maintenance rules are documented in [`contracts.md`](./contracts.md). When a change affects CLI behavior, routes, error responses, GraphQL, SQL, storage, schema, overview UI workflows, or the JS wrapper, add or update contract coverage before changing internals.
+Compatibility surfaces and maintenance rules are documented in [`contracts.md`](./contracts.md). When a change affects CLI behavior, routes, error responses, OpenAPI, GraphQL, SQL, storage, schema, overview UI workflows, or the JS wrapper, add or update contract coverage before changing internals.
 
 ## Security
 

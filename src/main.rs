@@ -15,6 +15,7 @@ mod error;
 mod graphql;
 mod http;
 mod mutation_service;
+mod openapi;
 mod query;
 mod relations;
 mod resource_service;
