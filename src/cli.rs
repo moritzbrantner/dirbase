@@ -1,6 +1,6 @@
 use std::{ffi::OsString, net::SocketAddr, path::PathBuf};
 
-use axum::http::{HeaderValue, Uri};
+use axum::http::{HeaderName, HeaderValue, Uri};
 use clap::{CommandFactory, Parser, parser::ValueSource};
 
 use crate::app::ResponseFormat;
@@ -20,6 +20,7 @@ Examples:
   dirbase --folder ./data --port 5555
   dirbase --folder ./data --readonly
   dirbase --folder ./data --schema ./schema.xsd
+  dirbase ./data --clone-from https://api.example.com/v1
 
 Config file:
   If ./dirbase.conf exists, dirbase loads it automatically using the same CLI-style arguments.
@@ -81,6 +82,14 @@ struct CliArgs {
     logname: Option<PathBuf>,
     #[arg(long, help = "Require this bearer token for application routes.")]
     auth_token: Option<String>,
+    #[arg(long, help = "Clone REST GET results from this foreign API base URL.")]
+    clone_from: Option<String>,
+    #[arg(
+        long,
+        value_name = "NAME=VALUE",
+        help = "Send this header to the clone source. Can be repeated."
+    )]
+    clone_header: Vec<String>,
     #[arg(long, help = "Allow CORS requests from this single origin.")]
     cors_origin: Option<String>,
     #[arg(long, help = "Require bearer auth for /readyz and /metrics when --auth-token is set.")]
@@ -109,6 +118,8 @@ pub(crate) struct Cli {
     pub(crate) response_format: ResponseFormat,
     pub(crate) logname: PathBuf,
     pub(crate) auth_token: Option<String>,
+    pub(crate) clone_from: Option<String>,
+    pub(crate) clone_headers: Vec<(String, String)>,
     pub(crate) cors_origin: Option<String>,
     pub(crate) protect_ops: bool,
     pub(crate) max_body_bytes: usize,
@@ -254,6 +265,8 @@ fn resolve_cli(
         logname: resolve_value("logname", cli_matches, config_matches)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_LOGNAME)),
         auth_token: resolve_value("auth_token", cli_matches, config_matches),
+        clone_from: resolve_value("clone_from", cli_matches, config_matches),
+        clone_headers: resolve_clone_headers(cli_matches, config_matches)?,
         cors_origin: resolve_value("cors_origin", cli_matches, config_matches),
         protect_ops: resolve_flag("protect_ops", cli_matches, config_matches),
         max_body_bytes: resolve_value("max_body_bytes", cli_matches, config_matches)
@@ -275,6 +288,13 @@ fn validate_cli(cli: &Cli) -> Result<(), String> {
     if cli.auth_token.as_deref().is_some_and(str::is_empty) {
         return Err("--auth-token cannot be empty".to_string());
     }
+    if cli.clone_from.is_some() && cli.readonly {
+        return Err("--clone-from cannot be combined with --readonly".to_string());
+    }
+    if let Some(base_url) = &cli.clone_from {
+        validate_clone_base_url(base_url)?;
+    }
+    validate_clone_headers(&cli.clone_headers)?;
     if let Some(origin) = &cli.cors_origin {
         validate_cors_origin(origin)?;
     }
@@ -283,6 +303,28 @@ fn validate_cli(cli: &Cli) -> Result<(), String> {
     validate_positive_limit("--max-per-page", cli.max_per_page)?;
     validate_positive_limit("--max-sql-scan-rows", cli.max_sql_scan_rows)?;
     validate_positive_limit("--max-sql-selected-rows", cli.max_sql_selected_rows)?;
+    Ok(())
+}
+
+fn validate_clone_base_url(base_url: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(base_url)
+        .map_err(|err| format!("--clone-from must be a URL: {err}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("--clone-from scheme must be http or https".to_string());
+    }
+    if url.host_str().is_none() {
+        return Err("--clone-from must include a host".to_string());
+    }
+    Ok(())
+}
+
+fn validate_clone_headers(headers: &[(String, String)]) -> Result<(), String> {
+    for (name, value) in headers {
+        HeaderName::from_bytes(name.as_bytes())
+            .map_err(|err| format!("--clone-header name '{name}' is invalid: {err}"))?;
+        HeaderValue::from_str(value)
+            .map_err(|err| format!("--clone-header value for '{name}' is invalid: {err}"))?;
+    }
     Ok(())
 }
 
@@ -377,6 +419,41 @@ fn resolve_data_source_args(
     }
 
     (None, None, None)
+}
+
+fn resolve_clone_headers(
+    cli_matches: &clap::ArgMatches,
+    config_matches: Option<&clap::ArgMatches>,
+) -> Result<Vec<(String, String)>, CliLoadError> {
+    let raw_values = if cli_matches.value_source("clone_header") == Some(ValueSource::CommandLine) {
+        values_for_id::<String>("clone_header", cli_matches)
+    } else {
+        config_matches
+            .filter(|matches| {
+                matches.value_source("clone_header") == Some(ValueSource::CommandLine)
+            })
+            .map(|matches| values_for_id::<String>("clone_header", matches))
+            .unwrap_or_default()
+    };
+
+    raw_values
+        .into_iter()
+        .map(|header| {
+            let (name, value) = header.split_once('=').ok_or_else(|| {
+                CliLoadError::Config("--clone-header must use NAME=VALUE format".to_string())
+            })?;
+            if name.is_empty() {
+                return Err(CliLoadError::Config(
+                    "--clone-header name cannot be empty".to_string(),
+                ));
+            }
+            Ok((name.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn values_for_id<T: Clone + Send + Sync + 'static>(id: &str, matches: &clap::ArgMatches) -> Vec<T> {
+    matches.get_many::<T>(id).map(|values| values.cloned().collect()).unwrap_or_default()
 }
 
 fn resolve_value<T: Clone + Send + Sync + 'static>(
@@ -528,6 +605,30 @@ mod tests {
     }
 
     #[test]
+    fn resolve_cli_loads_clone_from_and_headers_from_config() {
+        let resolved = resolve_test_cli(
+            &[],
+            &[
+                "--clone-from",
+                "https://api.example.com/v1",
+                "--clone-header",
+                "Authorization=Bearer token",
+                "--clone-header",
+                "X-Api-Version=2026-06-02",
+            ],
+        );
+
+        assert_eq!(resolved.clone_from.as_deref(), Some("https://api.example.com/v1"));
+        assert_eq!(
+            resolved.clone_headers,
+            vec![
+                ("Authorization".to_string(), "Bearer token".to_string()),
+                ("X-Api-Version".to_string(), "2026-06-02".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn resolve_cli_loads_cors_origin_from_config() {
         let resolved = resolve_test_cli(&[], &["--cors-origin", "http://localhost:3000"]);
         assert_eq!(resolved.cors_origin.as_deref(), Some("http://localhost:3000"));
@@ -634,6 +735,16 @@ mod tests {
     }
 
     #[test]
+    fn resolve_cli_command_line_clone_headers_override_config_clone_headers() {
+        let resolved = resolve_test_cli(
+            &["--clone-header", "X-Source=cli"],
+            &["--clone-from", "https://api.example.com", "--clone-header", "X-Source=config"],
+        );
+
+        assert_eq!(resolved.clone_headers, vec![("X-Source".to_string(), "cli".to_string())]);
+    }
+
+    #[test]
     fn resolve_cli_command_line_cors_origin_overrides_config_cors_origin() {
         let resolved = resolve_test_cli(
             &["--cors-origin", "http://localhost:4000"],
@@ -687,6 +798,30 @@ mod tests {
         let err = resolve_test_cli_result(&["--auth-token", ""], &[]).expect_err("invalid token");
         assert!(
             matches!(err, super::CliLoadError::Config(message) if message.contains("--auth-token cannot be empty"))
+        );
+    }
+
+    #[test]
+    fn resolve_cli_rejects_clone_from_with_readonly() {
+        let err = resolve_test_cli_result(
+            &["--clone-from", "https://api.example.com", "--readonly"],
+            &[],
+        )
+        .expect_err("invalid clone readonly");
+        assert!(
+            matches!(err, super::CliLoadError::Config(message) if message.contains("--clone-from cannot be combined with --readonly"))
+        );
+    }
+
+    #[test]
+    fn resolve_cli_rejects_invalid_clone_headers() {
+        let err = resolve_test_cli_result(
+            &["--clone-from", "https://api.example.com", "--clone-header", "bad"],
+            &[],
+        )
+        .expect_err("invalid clone header");
+        assert!(
+            matches!(err, super::CliLoadError::Config(message) if message.contains("--clone-header must use NAME=VALUE format"))
         );
     }
 

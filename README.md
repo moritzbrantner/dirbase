@@ -110,6 +110,8 @@ you get:
 - `--xml` returns JSON response bodies as XML with `application/xml` content type.
 - `--readonly` disables mutation routes and only serves `GET` endpoints.
 - `--auth-token <token>` enables bearer-token auth for application routes.
+- `--clone-from <url>` enables transparent REST clone proxy mode. Cacheable `GET /resource` and `GET /resource/:id` misses are fetched from the foreign API and persisted as normal dirbase JSON resources. `?_refresh=true` refreshes a cached collection or item. Other query-string requests and non-GET resource requests proxy to the foreign API without local writes.
+- `--clone-header <NAME=VALUE>` can be repeated to send configured headers to the clone source. Inbound `Authorization` headers are not forwarded automatically.
 - `--cors-origin <origin>` enables explicit CORS for a single allowed origin.
 - `--protect-ops` requires bearer auth for `/readyz` and `/metrics` when `--auth-token` is set.
 - `--max-body-bytes`, `--max-query-bytes`, `--max-per-page`, `--max-sql-scan-rows`, and `--max-sql-selected-rows` configure request and query limits.
@@ -163,6 +165,10 @@ dirbase ./data --auth-token secret --cors-origin http://localhost:3000
 
 # Explicit schema file (if not using ./data/schema.xsd)
 dirbase ./data --schema ./schema.xsd
+
+# Clone a REST-shaped foreign JSON API into local resource files on cache misses
+dirbase ./data --clone-from https://api.example.com/v1 \
+  --clone-header 'Authorization=Bearer remote-token'
 
 # Serve a single json-server-style database file
 dirbase ./db.json --bind 127.0.0.1:4444

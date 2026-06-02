@@ -291,10 +291,10 @@ async fn build_overview_page_data(
     Ok(OverviewPageData {
         schema_enabled: !schema.tables.is_empty(),
         server_capabilities: ServerCapabilities {
-            readonly: state.config.readonly,
-            resource_write: !state.config.readonly,
-            schema_write: !state.config.readonly,
-            schema_infer: !state.config.readonly,
+            readonly: state.config.readonly || state.config.clone_proxy.is_some(),
+            resource_write: !state.config.readonly && state.config.clone_proxy.is_none(),
+            schema_write: !state.config.readonly && state.config.clone_proxy.is_none(),
+            schema_infer: !state.config.readonly && state.config.clone_proxy.is_none(),
         },
         data_source_kind,
         source_label,

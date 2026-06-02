@@ -7,6 +7,7 @@ use axum::{
 
 use crate::{
     app::AppState,
+    clone_proxy,
     graphql::{graphql_get, graphql_post},
     http::{
         assets::{get_overview_css, get_overview_js},
@@ -31,7 +32,8 @@ use crate::{
 };
 
 pub fn build_router(state: AppState) -> Router {
-    let app = build_application_routes(state.config.readonly).with_state(state.clone());
+    let app = build_application_routes(state.config.readonly, state.config.clone_proxy.is_some())
+        .with_state(state.clone());
 
     let mut app = app.layer(DefaultBodyLimit::max(state.config.max_body_bytes));
     app = app.layer(middleware::from_fn_with_state(state.clone(), metrics_middleware));
@@ -45,20 +47,20 @@ pub fn build_router(state: AppState) -> Router {
     app
 }
 
-fn build_application_routes(readonly: bool) -> Router<AppState> {
+fn build_application_routes(readonly: bool, clone_mode: bool) -> Router<AppState> {
     let app = Router::new()
         .route("/", get(list_resources))
         .route("/events", get(get_events))
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/metrics", get(metrics))
-        .route("/resources", resources_route(readonly))
+        .route("/resources", resources_route(readonly || clone_mode))
         .route("/overview.json", get(get_overview))
         .route("/openapi.json", get(get_openapi))
         .route("/assets/overview.css", get(get_overview_css))
         .route("/assets/overview.js", get(get_overview_js))
         .route("/graphql", get(graphql_get).post(graphql_post))
-        .route("/schema", schema_route(readonly))
+        .route("/schema", schema_route(readonly || clone_mode))
         .route("/schema/editor", get(get_schema_editor))
         .route("/sql", sql_route(readonly))
         .route("/export.sql", get(export_sql))
@@ -66,15 +68,17 @@ fn build_application_routes(readonly: bool) -> Router<AppState> {
         .route("/{resource}/edit", get(get_resource_editor))
         .route("/{resource}/create", get(get_create_item_form))
         .route("/{resource}/{id}/edit", get(get_item_editor))
-        .route("/{resource}", collection_route(readonly))
-        .route("/{resource}/{id}", item_route(readonly));
+        .route("/{resource}", collection_route(readonly, clone_mode))
+        .route("/{resource}/{id}", item_route(readonly, clone_mode));
 
-    if readonly {
+    let app = if readonly || clone_mode {
         app
     } else {
         app.route("/schema/infer", post(infer_and_save_schema))
             .route("/resources/{resource}", delete(delete_resource))
-    }
+    };
+
+    if clone_mode { app.fallback(clone_proxy::proxy_resource_request) } else { app }
 }
 
 fn resources_route(readonly: bool) -> MethodRouter<AppState> {
@@ -92,16 +96,30 @@ fn sql_route(readonly: bool) -> MethodRouter<AppState> {
     if readonly { route } else { route.post(sql_query_post) }
 }
 
-fn collection_route(readonly: bool) -> MethodRouter<AppState> {
+fn collection_route(readonly: bool, clone_mode: bool) -> MethodRouter<AppState> {
     let route = get(get_collection);
-    if readonly {
+    if clone_mode {
+        route
+            .post(clone_proxy::proxy_resource_request)
+            .put(clone_proxy::proxy_resource_request)
+            .patch(clone_proxy::proxy_resource_request)
+    } else if readonly {
         route
     } else {
         route.post(create_item).put(replace_resource_object).patch(patch_resource_object)
     }
 }
 
-fn item_route(readonly: bool) -> MethodRouter<AppState> {
+fn item_route(readonly: bool, clone_mode: bool) -> MethodRouter<AppState> {
     let route = get(get_item);
-    if readonly { route } else { route.put(replace_item).patch(patch_item).delete(delete_item) }
+    if clone_mode {
+        route
+            .put(clone_proxy::proxy_resource_request)
+            .patch(clone_proxy::proxy_resource_request)
+            .delete(clone_proxy::proxy_resource_request)
+    } else if readonly {
+        route
+    } else {
+        route.put(replace_item).patch(patch_item).delete(delete_item)
+    }
 }

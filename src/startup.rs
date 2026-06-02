@@ -15,6 +15,7 @@ pub(crate) struct StartupSummary {
     pub(crate) resource_count: usize,
     pub(crate) schema_status: &'static str,
     pub(crate) mode: &'static str,
+    pub(crate) clone_source: Option<String>,
 }
 pub(crate) fn browser_url_for(addr: SocketAddr) -> String {
     let browser_addr = match addr.ip() {
@@ -62,6 +63,9 @@ pub(crate) fn print_startup_summary(browser_url: &str, cli: &Cli, summary: &Star
     eprintln!("Resources: {}", summary.resource_count);
     eprintln!("Schema: {}", summary.schema_status);
     eprintln!("Mode: {}", summary.mode);
+    if let Some(clone_source) = &summary.clone_source {
+        eprintln!("Clone source: {clone_source}");
+    }
     if cli.auth_token.is_some() {
         eprintln!("Auth: bearer token enabled");
     }

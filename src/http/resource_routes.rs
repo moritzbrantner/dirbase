@@ -1,7 +1,7 @@
 use axum::{
     Json,
     extract::{Path as AxumPath, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::{
     app::AppState,
+    clone_proxy,
     error::AppError,
     http::{
         embed::{embed_collection_data, embed_lock_resources},
@@ -83,8 +84,20 @@ pub async fn delete_resource(
 pub async fn get_collection(
     State(state): State<AppState>,
     AxumPath(resource): AxumPath<String>,
+    uri: Uri,
+    headers: HeaderMap,
     Query(query_params): Query<Vec<(String, String)>>,
-) -> Result<Json<Value>, AppError> {
+) -> Result<Response, AppError> {
+    if clone_proxy::is_enabled(&state) {
+        if clone_proxy::has_non_refresh_query(&uri) {
+            return clone_proxy::proxy_get(&state, &uri, &headers).await;
+        }
+        if clone_proxy::collection_should_fetch(&state, &resource, &uri).await? {
+            return clone_proxy::fetch_collection_and_cache(&state, &resource, &uri, &headers)
+                .await;
+        }
+    }
+
     let parsed = parse_collection_query_params(query_params)?;
     enforce_per_page_limit(&state, parsed.pagination)?;
     let lock_resources = embed_lock_resources(&state, &resource, &parsed.embeds)?;
@@ -94,7 +107,7 @@ pub async fn get_collection(
     validate_resource_data(&state, &resource, data.as_ref())?;
     if !data.is_array() {
         if !collection_query_operators_present(&parsed) {
-            return Ok(Json(data.as_ref().clone()));
+            return Ok(Json(data.as_ref().clone()).into_response());
         }
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
@@ -142,7 +155,7 @@ pub async fn get_collection(
         }
     };
 
-    Ok(Json(materialized))
+    Ok(Json(materialized).into_response())
 }
 
 fn enforce_per_page_limit(
@@ -173,36 +186,71 @@ pub async fn create_item(
 pub async fn get_item(
     State(state): State<AppState>,
     AxumPath((resource, id)): AxumPath<(String, String)>,
-) -> Result<Json<Value>, AppError> {
-    let _guard = state.read_lock_for_resource(&resource).await;
-    let data = load_resource(&state, &resource).await?;
-    validate_resource_data(&state, &resource, data.as_ref())?;
+    uri: Uri,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    get_item_with_request_context(&state, &resource, &id, &uri, &headers).await
+}
+
+async fn get_item_with_request_context(
+    state: &AppState,
+    resource: &str,
+    id: &str,
+    uri: &Uri,
+    headers: &HeaderMap,
+) -> Result<Response, AppError> {
+    if clone_proxy::is_enabled(state) {
+        if clone_proxy::has_non_refresh_query(uri) {
+            return clone_proxy::proxy_get(state, uri, headers).await;
+        }
+        if clone_proxy::is_refresh(uri) {
+            return clone_proxy::fetch_item_and_cache(state, resource, id, uri, headers).await;
+        }
+    }
+
+    match get_local_item_value(state, resource, id).await {
+        Ok(value) => Ok(Json(value).into_response()),
+        Err(err)
+            if clone_proxy::is_enabled(state)
+                && err.status == StatusCode::NOT_FOUND
+                && !clone_proxy::has_non_refresh_query(uri) =>
+        {
+            clone_proxy::fetch_item_and_cache(state, resource, id, uri, headers).await
+        }
+        Err(err) => Err(err),
+    }
+}
+
+async fn get_local_item_value(
+    state: &AppState,
+    resource: &str,
+    id: &str,
+) -> Result<Value, AppError> {
+    let _guard = state.read_lock_for_resource(resource).await;
+    let data = load_resource(state, resource).await?;
+    validate_resource_data(state, resource, data.as_ref())?;
     let array = data
         .as_array()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
-    let table = state.schema_table(&resource);
+    let table = state.schema_table(resource);
     let item_key = primary_key_name(table.as_ref());
     if let Some(position) = state
         .resource_cache
         .read()
         .await
-        .get(&resource)
+        .get(resource)
         .filter(|cached| cached.primary_key == item_key)
         .and_then(|cached| cached.id_index.as_ref())
-        .and_then(|index| index.get(&id).copied())
+        .and_then(|index| index.get(id).copied())
     {
-        return Ok(Json(
-            array
-                .get(position)
-                .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?
-                .clone(),
-        ));
-    }
-    Ok(Json(
-        find_item_by_key(array, item_key, &id)
+        return Ok(array
+            .get(position)
             .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?
-            .clone(),
-    ))
+            .clone());
+    }
+    Ok(find_item_by_key(array, item_key, id)
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Item not found"))?
+        .clone())
 }
 
 pub async fn replace_item(

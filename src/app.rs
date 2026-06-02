@@ -8,6 +8,7 @@ use std::{
 };
 
 use async_graphql::dynamic::Schema as DynamicSchema;
+use axum::http::{HeaderName, HeaderValue};
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock, broadcast};
 
 use crate::schema::{DeclaredSchema, DeclaredTableSchema, Schema, TableSchema, merge_schemas};
@@ -66,6 +67,7 @@ pub struct AppConfig {
     pub readonly: bool,
     pub enable_log: bool,
     pub response_format: ResponseFormat,
+    pub clone_proxy: Option<CloneProxyConfig>,
     pub auth_token: Option<String>,
     pub cors_origin: Option<String>,
     pub protect_ops: bool,
@@ -74,6 +76,13 @@ pub struct AppConfig {
     pub max_per_page: usize,
     pub max_sql_scan_rows: usize,
     pub max_sql_selected_rows: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct CloneProxyConfig {
+    pub base_url: reqwest::Url,
+    pub headers: Vec<(HeaderName, HeaderValue)>,
+    pub client: reqwest::Client,
 }
 
 #[derive(Debug, Default)]
@@ -379,6 +388,7 @@ mod tests {
                 readonly: false,
                 enable_log: false,
                 response_format: ResponseFormat::Json,
+                clone_proxy: None,
                 auth_token: None,
                 cors_origin: None,
                 protect_ops: false,

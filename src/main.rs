@@ -1,6 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use app::{AppConfig, AppState, HealthState, MetricsStore};
+use app::{AppConfig, AppState, CloneProxyConfig, HealthState, MetricsStore};
+use axum::http::{HeaderName, HeaderValue};
 use cli::{CliLoadError, load_cli};
 use http::router::build_router;
 use startup::{
@@ -11,6 +12,7 @@ use tokio::sync::RwLock;
 
 mod app;
 mod cli;
+mod clone_proxy;
 mod error;
 mod graphql;
 mod http;
@@ -85,12 +87,21 @@ async fn main() {
         source_path: data_source_path_label(&data_source),
         resource_count: initial_resources.len(),
         schema_status: schema_status_label(&declared_schema, &inferred_schema),
-        mode: if cli.readonly { "readonly" } else { "read-write" },
+        mode: if cli.clone_from.is_some() {
+            "clone proxy"
+        } else if cli.readonly {
+            "readonly"
+        } else {
+            "read-write"
+        },
+        clone_source: cli.clone_from.clone(),
     };
+    let clone_proxy = build_clone_proxy_config(&cli);
     let config = Arc::new(AppConfig {
         readonly: cli.readonly,
         enable_log: cli.log,
         response_format: cli.response_format,
+        clone_proxy,
         auth_token: cli.auth_token.clone(),
         cors_origin: cli.cors_origin.clone(),
         protect_ops: cli.protect_ops,
@@ -138,4 +149,22 @@ async fn main() {
     tracing::info!(listen_addr = %listen_addr, browser_url = %browser_url, "Server started");
     print_startup_summary(&browser_url, &cli, &startup_summary);
     axum::serve(listener, app).await.expect("running server");
+}
+
+fn build_clone_proxy_config(cli: &cli::Cli) -> Option<CloneProxyConfig> {
+    let base_url = cli
+        .clone_from
+        .as_deref()
+        .map(|url| reqwest::Url::parse(url).expect("validated clone base URL"))?;
+    let headers = cli
+        .clone_headers
+        .iter()
+        .map(|(name, value)| {
+            (
+                HeaderName::from_bytes(name.as_bytes()).expect("validated clone header name"),
+                HeaderValue::from_str(value).expect("validated clone header value"),
+            )
+        })
+        .collect();
+    Some(CloneProxyConfig { base_url, headers, client: reqwest::Client::new() })
 }

@@ -615,6 +615,7 @@ mod tests {
                 readonly: false,
                 enable_log: false,
                 response_format: crate::app::ResponseFormat::Json,
+                clone_proxy: None,
                 auth_token: None,
                 cors_origin: None,
                 protect_ops: false,

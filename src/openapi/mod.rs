@@ -37,8 +37,9 @@ pub(crate) async fn build_openapi_document(state: &AppState) -> Result<Value, Ap
     let mut paths = Map::new();
     let mut component_schemas = common_component_schemas();
     let mut used_resource_stems = BTreeMap::new();
+    let local_readonly = state.config.readonly || state.config.clone_proxy.is_some();
 
-    add_static_paths(&mut paths, state.config.readonly);
+    add_static_paths(&mut paths, local_readonly);
 
     for resource in resources {
         let operation_stem =
@@ -52,7 +53,7 @@ pub(crate) async fn build_openapi_document(state: &AppState) -> Result<Value, Ap
                 "items": schema_ref(&spec.row_schema_name),
             }),
         );
-        add_resource_paths(&mut paths, &spec, state.config.readonly);
+        add_resource_paths(&mut paths, &spec, local_readonly);
     }
 
     Ok(json!({

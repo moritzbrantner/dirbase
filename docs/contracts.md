@@ -7,6 +7,7 @@ This project treats the CLI, HTTP API, OpenAPI document, GraphQL API, SQL endpoi
 Keep these stable unless a change is explicitly designed as a behavior change:
 
 - CLI flags, config-file loading, command-line precedence, startup output, and process exit behavior
+- Clone proxy mode flags, transparent resource/item proxy routing, cache write rules, and remote header forwarding policy
 - REST route paths, HTTP methods, status codes, response bodies, content types, auth, CORS, XML mode, metrics, and SSE events
 - OpenAPI route availability, readonly operation omission, generated resource paths, operation IDs, and schema component mapping
 - GraphQL schema naming, GraphiQL serving, query execution, relation traversal, and error response shape

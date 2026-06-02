@@ -22,7 +22,7 @@ pub async fn get_resource_editor(
 ) -> Html<String> {
     Html(render_patch_editor_html(
         &format!("/{}", encode_path_segment(&resource)),
-        state.config.readonly,
+        state.config.readonly || state.config.clone_proxy.is_some(),
     ))
 }
 
@@ -32,7 +32,7 @@ pub async fn get_item_editor(
 ) -> Html<String> {
     Html(render_patch_editor_html(
         &format!("/{}/{}", encode_path_segment(&resource), encode_path_segment(&id)),
-        state.config.readonly,
+        state.config.readonly || state.config.clone_proxy.is_some(),
     ))
 }
 
@@ -52,7 +52,7 @@ pub async fn get_create_item_form(
         &resource,
         &format!("/{}", encode_path_segment(&resource)),
         &fields,
-        state.config.readonly,
+        state.config.readonly || state.config.clone_proxy.is_some(),
     )))
 }
 

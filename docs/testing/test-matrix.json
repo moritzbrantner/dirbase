@@ -78,6 +78,21 @@
       ]
     },
     {
+      "id": "rust-clone-proxy",
+      "name": "Rust Clone Proxy",
+      "owner_paths": [
+        "src/clone_proxy.rs",
+        "src/http/router.rs",
+        "src/http/resource_routes.rs",
+        "src/http/clone_proxy_test.rs",
+        "src/cli.rs"
+      ],
+      "risk": "critical",
+      "entries": [
+        "rust-clone-proxy"
+      ]
+    },
+    {
       "id": "rust-storage",
       "name": "Rust Storage",
       "owner_paths": [
@@ -1054,6 +1069,155 @@
         }
       },
       "notes": "Resource-management routes are covered through HTTP integration tests because their state refresh and persistence behavior are route-visible."
+    },
+    {
+      "id": "rust-clone-proxy",
+      "area": "rust-clone-proxy",
+      "language": "rust",
+      "kind": "interface",
+      "symbol": "REST clone proxy mode",
+      "module": "src/clone_proxy.rs",
+      "interface": "--clone-from, --clone-header, transparent REST resource proxying, and JSON resource cache writes",
+      "risk": "critical",
+      "covered_symbols": [
+        "CloneProxyConfig",
+        "collection_should_fetch",
+        "fetch_collection_and_cache",
+        "fetch_item_and_cache",
+        "proxy_resource_request",
+        "proxy_get",
+        "remote_url",
+        "resolve_cli"
+      ],
+      "covered_by": [
+        {
+          "test": "item_cache_miss_fetches_remote_persists_and_next_hit_is_local",
+          "path": "src/http/clone_proxy_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "item cache misses fetch the foreign API",
+            "remote objects are persisted as array items with URL id",
+            "subsequent item reads are served locally"
+          ]
+        },
+        {
+          "test": "collection_cache_miss_persists_remote_array",
+          "path": "src/http/clone_proxy_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "collection cache misses persist JSON array responses"
+          ]
+        },
+        {
+          "test": "query_requests_proxy_without_overwriting_local_cache",
+          "path": "src/http/clone_proxy_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "query-string requests proxy to the foreign API",
+            "filtered remote responses do not overwrite local resource files"
+          ]
+        },
+        {
+          "test": "refresh_query_bypasses_local_cache_and_updates_file",
+          "path": "src/http/clone_proxy_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "?_refresh=true bypasses local cache",
+            "refresh control query is not forwarded upstream",
+            "refreshed item updates the local file"
+          ]
+        },
+        {
+          "test": "non_get_resource_requests_proxy_without_local_writes",
+          "path": "src/http/clone_proxy_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "non-GET resource requests are proxied",
+            "proxied writes do not create local resource files"
+          ]
+        },
+        {
+          "test": "configured_clone_headers_are_forwarded_but_inbound_authorization_is_not",
+          "path": "src/http/clone_proxy_test.rs",
+          "test_type": "integration",
+          "asserts": [
+            "configured clone headers are forwarded",
+            "safe request headers are forwarded",
+            "inbound Authorization is not forwarded unless configured"
+          ]
+        },
+        {
+          "test": "resolve_cli_loads_clone_from_and_headers_from_config",
+          "path": "src/cli.rs",
+          "test_type": "unit",
+          "asserts": [
+            "clone source and repeated clone headers load from config-style arguments"
+          ]
+        },
+        {
+          "test": "resolve_cli_rejects_clone_from_with_readonly",
+          "path": "src/cli.rs",
+          "test_type": "unit",
+          "asserts": [
+            "clone mode cannot be combined with readonly mode"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "request shape",
+          "covered_values": [
+            "GET /resource",
+            "GET /resource/:id",
+            "GET /resource/:id?_refresh=true",
+            "GET /resource?query=value",
+            "POST /resource"
+          ],
+          "missing_values": [
+            "deep fallback paths",
+            "PUT/PATCH/DELETE proxy methods"
+          ]
+        },
+        {
+          "name": "cache write shape",
+          "covered_values": [
+            "new collection file",
+            "new item file",
+            "existing item replacement",
+            "query bypass without write"
+          ],
+          "missing_values": [
+            "declared schema validation skip",
+            "remote non-2xx passthrough",
+            "non-array local resource skip"
+          ]
+        }
+      ],
+      "paths": {
+        "happy": {
+          "status": "covered",
+          "cases": [
+            "item cache miss then local hit",
+            "collection cache miss",
+            "manual item refresh",
+            "configured remote auth header"
+          ]
+        },
+        "exceptional": {
+          "status": "partial",
+          "cases": [
+            "query bypass avoids unsafe cache overwrite",
+            "readonly conflict rejected"
+          ]
+        },
+        "concurrency": {
+          "status": "partial",
+          "cases": [
+            "cache writes use resource write locks; no explicit concurrent clone fill test yet"
+          ]
+        }
+      },
+      "notes": "Clone proxy coverage focuses on transparent REST resource and item caching. Remaining gaps are remote failure passthrough and declared-schema cache-skip branches."
     },
     {
       "id": "rust-storage",
