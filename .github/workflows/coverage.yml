@@ -16,6 +16,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup project
@@ -24,10 +25,162 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@9e57365e36de1e26dea5145e57d471261468d9f7
 
+      - name: Generate baseline Rust coverage
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          baseline_dir="$RUNNER_TEMP/dirbase-coverage-baseline"
+          mkdir -p "$baseline_dir"
+
+          restore_head() {
+            git checkout --detach "$HEAD_SHA"
+          }
+          trap restore_head EXIT
+
+          git checkout --detach "$BASE_SHA"
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --all-features --no-report -- --test-threads=1
+          cargo llvm-cov report --lcov --output-path "$baseline_dir/lcov.info"
+          cargo llvm-cov report --json --output-path "$baseline_dir/coverage.json"
+
+          restore_head
+          trap - EXIT
+
       - name: Generate Rust coverage
         run: |
+          set -euo pipefail
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --all-features --no-report -- --test-threads=1
           mkdir -p target/llvm-cov
-          cargo llvm-cov --all-features --lcov --output-path target/llvm-cov/lcov.info -- --test-threads=1
+          cargo llvm-cov report --lcov --output-path target/llvm-cov/lcov.info
+          cargo llvm-cov report --json --output-path target/llvm-cov/coverage.json
+
+          baseline_dir="$RUNNER_TEMP/dirbase-coverage-baseline"
+          if [[ -f "$baseline_dir/lcov.info" ]]; then
+            cp "$baseline_dir/lcov.info" target/llvm-cov/baseline.info
+            cp "$baseline_dir/coverage.json" target/llvm-cov/baseline.json
+          fi
+
+      - name: Summarize Rust coverage
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+
+          root = Path.cwd().resolve()
+          coverage_dir = Path("target/llvm-cov")
+
+          def load_report(path):
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              return payload["data"][0]
+
+          def relative_name(filename):
+              path = Path(filename)
+              try:
+                  return path.resolve().relative_to(root).as_posix()
+              except ValueError:
+                  marker = "/src/"
+                  normalized = path.as_posix()
+                  if marker in normalized:
+                      return "src/" + normalized.split(marker, 1)[1]
+                  return normalized
+
+          def metric(summary, name):
+              values = summary[name]
+              return int(values["covered"]), int(values["count"]), float(values["percent"])
+
+          def format_metric(values):
+              covered, total, percent = values
+              return f"{covered}/{total} ({percent:.2f}%)"
+
+          def covered_delta(before, after):
+              return after[0] - before[0]
+
+          current = load_report(coverage_dir / "coverage.json")
+          baseline_path = coverage_dir / "baseline.json"
+          baseline = load_report(baseline_path) if baseline_path.exists() else None
+
+          metric_names = (("Lines", "lines"), ("Regions", "regions"), ("Functions", "functions"))
+          current_totals = {label: metric(current["totals"], key) for label, key in metric_names}
+
+          print("Rust coverage:")
+          for label, values in current_totals.items():
+              print(f"  {label.lower()}: {format_metric(values)}")
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if not summary_path:
+              raise SystemExit(0)
+
+          with open(summary_path, "a", encoding="utf-8") as summary:
+              summary.write("### Rust coverage\n\n")
+
+              if baseline is None:
+                  summary.write("| Metric | Covered | Total | Coverage |\n")
+                  summary.write("| --- | ---: | ---: | ---: |\n")
+                  for label, values in current_totals.items():
+                      covered, total, percent = values
+                      summary.write(f"| {label} | {covered} | {total} | {percent:.2f}% |\n")
+                  summary.write("\n")
+              else:
+                  baseline_totals = {
+                      label: metric(baseline["totals"], key) for label, key in metric_names
+                  }
+                  summary.write("Coverage is measured once at the pull-request base and once at the head. "
+                                "Region coverage is included so endpoint tests can expose control-flow gains "
+                                "that LCOV line totals alone may hide.\n\n")
+                  summary.write("| Metric | Base | Head | Δ covered |\n")
+                  summary.write("| --- | ---: | ---: | ---: |\n")
+                  for label, _ in metric_names:
+                      before = baseline_totals[label]
+                      after = current_totals[label]
+                      delta = covered_delta(before, after)
+                      summary.write(
+                          f"| {label} | {format_metric(before)} | {format_metric(after)} | {delta:+d} |\n"
+                      )
+                  summary.write("\n")
+
+                  def source_metrics(report):
+                      result = {}
+                      for file_report in report["files"]:
+                          name = relative_name(file_report["filename"])
+                          if not name.startswith("src/"):
+                              continue
+                          if name.endswith("_test.rs") or name.startswith("src/test_support/"):
+                              continue
+                          file_summary = file_report["summary"]
+                          result[name] = {
+                              label: metric(file_summary, key) for label, key in metric_names
+                          }
+                      return result
+
+                  before_files = source_metrics(baseline)
+                  after_files = source_metrics(current)
+                  changed = []
+                  for name in sorted(set(before_files) & set(after_files)):
+                      deltas = {
+                          label: covered_delta(before_files[name][label], after_files[name][label])
+                          for label, _ in metric_names
+                      }
+                      if any(deltas.values()):
+                          changed.append((name, deltas, after_files[name]))
+
+                  summary.write("#### Production-source coverage deltas\n\n")
+                  if changed:
+                      summary.write("| Source | Lines Δ | Regions Δ | Functions Δ | Head regions |\n")
+                      summary.write("| --- | ---: | ---: | ---: | ---: |\n")
+                      for name, deltas, after in changed:
+                          summary.write(
+                              f"| `{name}` | {deltas['Lines']:+d} | {deltas['Regions']:+d} | "
+                              f"{deltas['Functions']:+d} | {format_metric(after['Regions'])} |\n"
+                          )
+                  else:
+                      summary.write("No production-source coverage changes detected.\n")
+                  summary.write("\n")
+          PY
 
       - name: Generate UI coverage
         run: bun run test:coverage
@@ -42,6 +195,7 @@ jobs:
         with:
           name: coverage-${{ github.run_id }}
           path: |
-            target/llvm-cov/lcov.info
+            target/llvm-cov/*.info
+            target/llvm-cov/*.json
             ui/coverage/**
           if-no-files-found: ignore
