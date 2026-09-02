@@ -1,6 +1,6 @@
 # Benchmark: dirbase vs typicode/json-server
 
-This benchmark compares request throughput, latency, and behavioral parity between:
+This benchmark compares request throughput, latency, behavioral parity, and Linux process-tree memory evidence between:
 
 - `dirbase` (this repository)
 - `json-server` (`typicode/json-server` package)
@@ -28,6 +28,7 @@ The default profile contains 92,252 rows across those resources and exercises a 
 6. Query correctness checks that compare equivalent `dirbase` and `json-server` read responses
 7. Concurrent `POST /members`, `PUT /members/{id}`, `PATCH /members/{id}`, and `DELETE /write_delete_items/{id}` workloads
 8. Persisted JSON correctness checks after the write workloads
+9. Peak process-tree RSS for the live dirbase and JSON Server descendants on Linux benchmark hosts
 
 The script uses equivalent server-specific query syntax where `dirbase` and `json-server` differ.
 For paginated reads, `dirbase` responses are normalized to their `data` array before comparison with the `json-server` array response. Other item, object, and array responses are compared exactly.
@@ -40,10 +41,18 @@ From repo root:
 bash scripts/benchmark_vs_json_server.sh
 ```
 
-For a faster parity/evidence loop that keeps all read scenarios and the response oracle but skips writes:
+For a faster parity/evidence loop that keeps all read scenarios and the response oracle, skips writes, and records server process metrics:
 
 ```bash
 bash scripts/benchmark-parity-smoke.sh
+```
+
+To collect server process evidence around a custom full benchmark invocation:
+
+```bash
+python3 scripts/profile_benchmark_servers.py \
+  --output benchmarks/results/server-process-metrics-local.json \
+  -- bash scripts/benchmark_vs_json_server.sh
 ```
 
 To force a fresh data rebuild:
@@ -76,7 +85,7 @@ The generated data cache lives under `benchmarks/.work/benchmark-data/`. You can
 python3 scripts/build_benchmark_data.py --force
 ```
 
-## Runtime evidence
+## Runtime and process evidence
 
 The repository declares `profiles/runtime-profiler/json-server-parity.json`. Capture it into a fresh immutable output directory:
 
@@ -86,7 +95,12 @@ bash scripts/runtime-profile.sh .artifacts/runtime-profiler/parity-001
 
 The scenario runs the parity smoke workload and therefore records the reproducibility, wall-time, success, source revision, environment fingerprint, and process evidence provided by runtime-profiler.
 
-Important boundary: the profiler's process RSS measurement belongs to the benchmark harness process. It must not be presented as the resident-memory peak of either server. Throughput, latency, and behavioral equality between the two servers remain measurements produced by the benchmark suite itself. A future server-process collector can add direct per-server CPU/RSS evidence without changing this contract.
+There are two deliberately separate memory measurements:
+
+- runtime-profiler's RSS belongs to the benchmark harness process and is part of the immutable run evidence;
+- `profile_benchmark_servers.py` samples descendants through Linux `/proc` and records peak process-tree RSS separately for the actual dirbase and JSON Server process trees.
+
+Do not substitute one for the other. The benchmark report owns response parity and throughput/latency, the process sampler owns direct server RSS evidence, and runtime-profiler owns the reproducible harness bundle.
 
 ## Moonlight baseline/candidate comparison
 
@@ -98,7 +112,7 @@ bash scripts/moonlight-compare.sh /path/to/baseline-checkout /path/to/candidate-
 
 The baseline and candidate each execute `benchmark-parity-smoke.sh`. That means Moonlight evaluates revisions of dirbase while each revision still compares itself against the same pinned JSON Server reference implementation.
 
-The GitHub benchmark workflow exposes the same model. Pull requests get a short read-only parity run; the weekly/manual run uses the full benchmark; manual dispatch can additionally provide `baseline_ref` to run Moonlight. Weekly/manual runs also capture runtime-profiler evidence.
+The GitHub benchmark workflow exposes the same model. Pull requests get a short read-only parity run; the weekly/manual run uses the full benchmark; manual dispatch can additionally provide `baseline_ref` to run Moonlight. Weekly/manual runs also capture runtime-profiler evidence. Every Linux workflow benchmark records direct server process-tree RSS and publishes it in the job summary.
 
 ## Output
 
@@ -111,6 +125,7 @@ Raw `autocannon` JSON and aggregated reports are written to:
 - `benchmarks/results/query-correctness-<timestamp>.json`
 - `benchmarks/results/benchmark-summary-<timestamp>.json`
 - `benchmarks/results/benchmark-report-<timestamp>.md`
+- `benchmarks/results/server-process-metrics-*.json`
 
 Runtime-profiler evidence is written below the fresh directory supplied to `runtime-profile.sh`. Moonlight output is captured by the workflow as an artifact and job summary.
 
@@ -130,3 +145,4 @@ Runtime-profiler evidence is written below the fresh directory supplied to `runt
 - The write phase uses an isolated copy under `benchmarks/.work/write-benchmark-data/` so read data is not mutated.
 - Aggregated metrics include mean/median/min/max; prefer median values for stable comparisons.
 - Correctness failures are benchmark failures, not merely performance annotations. A faster response with different normalized JSON is not parity.
+- Direct server RSS sampling is Linux-specific. On other platforms the wrapper still runs the benchmark and records `supported: false` rather than inventing process metrics.
