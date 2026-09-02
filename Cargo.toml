@@ -95,6 +95,10 @@ name = "sql_and_export_endpoints"
 path = "src/sql/sql_and_export_endpoints_test.rs"
 
 [[test]]
+name = "sql_offset_parity"
+path = "src/sql/sql_offset_parity_test.rs"
+
+[[test]]
 name = "sql_query"
 path = "src/sql/sql_query_test.rs"
 

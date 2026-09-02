@@ -2,13 +2,14 @@ use std::collections::HashMap;
 
 use axum::{Json, http::StatusCode};
 use serde_json::{Map, Value};
+use sqlparser::{ast::Statement, dialect::GenericDialect, parser::Parser as SqlParser};
 
 use crate::{
     app::AppState,
     error::AppError,
     query::filters::{
         FilterCondition, SortColumn, filter_collection_data, get_value_at_path,
-        paginate_collection_data, sort_collection_data,
+        sort_collection_data,
     },
     storage::{load_resource, validate_resource_data},
 };
@@ -43,13 +44,15 @@ pub(crate) async fn run_sql_query(state: AppState, query: String) -> Result<Json
         sort_collection_data(filtered, &parsed.sort_columns)?
     };
     let paginated_rows = if let Some(pagination) = parsed.pagination {
-        paginate_collection_data(sorted, pagination)?
-            .get("data")
-            .and_then(Value::as_array)
+        let offset = parse_exact_sql_offset(&query)?;
+        sorted
+            .as_array()
+            .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?
+            .iter()
+            .skip(offset)
+            .take(pagination.per_page)
             .cloned()
-            .ok_or_else(|| {
-                AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "Invalid pagination payload")
-            })?
+            .collect()
     } else {
         sorted
             .as_array()
@@ -72,6 +75,26 @@ pub(crate) async fn run_sql_query(state: AppState, query: String) -> Result<Json
     Ok(Json(
         serde_json::json!({ "dialect": "generic", "query": query, "row_count": row_count, "rows": rows }),
     ))
+}
+
+fn parse_exact_sql_offset(query: &str) -> Result<usize, AppError> {
+    // `parse_sql_query` has already validated the statement and its LIMIT/OFFSET
+    // literals. Re-reading the AST here preserves the exact SQL row offset
+    // instead of rounding it down into page-number pagination.
+    let statements = SqlParser::parse_sql(&GenericDialect {}, query).map_err(|err| {
+        AppError::new(StatusCode::BAD_REQUEST, format!("Invalid SQL query: {err}"))
+            .with_code(crate::error::ERROR_CODE_INVALID_SQL)
+    })?;
+    let Some(Statement::Query(query)) = statements.into_iter().next() else {
+        return Ok(0);
+    };
+    let Some(offset) = query.offset else {
+        return Ok(0);
+    };
+    offset.value.to_string().parse::<usize>().map_err(|_| {
+        AppError::new(StatusCode::BAD_REQUEST, "OFFSET must be a non-negative integer")
+            .with_code(crate::error::ERROR_CODE_INVALID_SQL)
+    })
 }
 
 fn sql_lock_resources(parsed: &ParsedSqlQuery) -> Vec<String> {
