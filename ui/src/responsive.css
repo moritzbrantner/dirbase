@@ -1,0 +1,89 @@
+:where(
+  .overview-page button,
+  .overview-page a,
+  .overview-page input,
+  .overview-page select,
+  .overview-page textarea
+):focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
+}
+
+@media (max-width: 900px) {
+  .mobile-sticky-actions,
+  .schema-mobile-surface-bar {
+    z-index: 50;
+    bottom: max(1rem, env(safe-area-inset-bottom));
+    width: max-content;
+    max-width: calc(100vw - 2rem);
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  .workspace-sidebar,
+  .workspace-details,
+  .relation-map-panel,
+  .schema-sidebar,
+  .schema-canvas-panel,
+  .schema-details,
+  .schema-json-drawer {
+    bottom: calc(5.75rem + env(safe-area-inset-bottom));
+    max-height: none;
+    overscroll-behavior: contain;
+    box-shadow: 0 22px 60px rgba(40, 48, 44, 0.2);
+  }
+
+  .toast-viewport {
+    right: 1rem;
+    bottom: calc(5.75rem + env(safe-area-inset-bottom));
+    left: 1rem;
+    max-width: none;
+  }
+
+  .mutation-dialog {
+    max-height: calc(100dvh - 2rem - env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 480px) {
+  .overview-page {
+    padding-right: 0.75rem;
+    padding-left: 0.75rem;
+  }
+
+  .filter-row .overview-input,
+  .filter-row .overview-select {
+    min-width: min(100%, 10rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+
+  .resource-list-item,
+  .result-card,
+  .result-header-button,
+  .relation-link-button,
+  .overview-secondary-button,
+  .overview-icon-button,
+  .view-toggle button,
+  .inspector-tab-row button,
+  .schema-sidebar-item,
+  .schema-node-card {
+    transition: none;
+  }
+
+  .resource-list-item:hover,
+  .result-card:hover,
+  .result-header-button:hover,
+  .relation-link-button:hover,
+  .overview-secondary-button:hover,
+  .overview-icon-button:hover,
+  .schema-sidebar-item:hover {
+    transform: none;
+  }
+}
