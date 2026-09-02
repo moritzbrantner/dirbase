@@ -3,7 +3,9 @@ use std::fs;
 #[path = "../test_support/mod.rs"]
 mod support;
 
-use support::{http_get, parse_http_body, spawn_folder_server_with_args};
+use support::{
+    http_get, http_request_with_headers, parse_http_body, spawn_folder_server_with_args,
+};
 
 #[test]
 fn xml_mode_returns_collection_responses_as_xml() {
@@ -33,6 +35,30 @@ fn xml_mode_returns_collection_responses_as_xml() {
         body,
         r#"<tags type="array"><item type="string">admin</item><item type="integer">2</item></tags>"#,
     );
+}
+
+#[test]
+fn xml_mode_keeps_browser_overview_responses_as_html() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    fs::write(
+        temp.path().join("users.json"),
+        r#"[{"id":1,"name":"Ada"}]"#,
+    )
+    .expect("write users");
+
+    let (_child, bind_addr) = spawn_folder_server_with_args(temp.path(), &["--xml"]);
+    let response = http_request_with_headers(
+        &bind_addr,
+        "GET",
+        "/",
+        Some("Accept: text/html,application/xhtml+xml\r\n"),
+        None,
+    );
+
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert!(response.contains("content-type: text/html; charset=utf-8"), "{response}");
+    assert!(response.contains("<h1>Data workspace</h1>"), "{response}");
+    assert!(!response.contains("content-type: application/xml"), "{response}");
 }
 
 #[test]
