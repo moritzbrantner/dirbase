@@ -10,7 +10,7 @@
   "run": {
     "warmup_iterations": 0,
     "measurement_iterations": 1,
-    "timeout_seconds": 240
+    "timeout_seconds": 600
   },
   "collectors": ["process"]
 }
