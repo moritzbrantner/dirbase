@@ -38,7 +38,7 @@ fn xml_mode_returns_collection_responses_as_xml() {
 }
 
 #[test]
-fn xml_mode_keeps_browser_overview_responses_as_html() {
+fn xml_mode_keeps_browser_resource_editor_responses_as_html() {
     let temp = tempfile::tempdir().expect("create temp directory");
     fs::write(
         temp.path().join("users.json"),
@@ -50,14 +50,15 @@ fn xml_mode_keeps_browser_overview_responses_as_html() {
     let response = http_request_with_headers(
         &bind_addr,
         "GET",
-        "/",
+        "/users/edit",
         Some("Accept: text/html,application/xhtml+xml\r\n"),
         None,
     );
 
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(response.contains("content-type: text/html; charset=utf-8"), "{response}");
-    assert!(response.contains("<h1>Data workspace</h1>"), "{response}");
+    assert!(response.contains("<h1>Edit JSON resource</h1>"), "{response}");
+    assert!(response.contains("id=\"target-path\">/users</code>"), "{response}");
     assert!(!response.contains("content-type: application/xml"), "{response}");
 }
 
