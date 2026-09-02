@@ -9,6 +9,7 @@ on:
       - "scripts/benchmark*"
       - "scripts/moonlight*.sh"
       - "scripts/runtime-profile.sh"
+      - "scripts/profile_benchmark_servers.py"
       - "scripts/run_query_correctness.py"
       - "scripts/run_write_benchmark.py"
       - "benchmarks/**"
@@ -68,7 +69,11 @@ jobs:
           WARMUP_DURATION: ${{ github.event_name == 'pull_request' && '1' || inputs.warmup_duration || '3' }}
           WARMUP_CONNECTIONS: ${{ inputs.warmup_connections || '1' }}
           SKIP_WRITE_BENCHMARKS: ${{ github.event_name == 'pull_request' && '1' || '0' }}
-        run: bash scripts/benchmark_vs_json_server.sh
+        run: |
+          python3 -m py_compile scripts/profile_benchmark_servers.py
+          python3 scripts/profile_benchmark_servers.py \
+            --output "benchmarks/results/server-process-metrics-${GITHUB_RUN_ID}.json" \
+            -- bash scripts/benchmark_vs_json_server.sh
 
       - name: Find latest summary file
         id: latest-summary
@@ -85,6 +90,24 @@ jobs:
 
       - name: Summarize benchmark result
         run: python3 scripts/summarize_benchmark_result.py --summary "${{ steps.latest-summary.outputs.summary }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish server process evidence
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("benchmarks/results") / f"server-process-metrics-{os.environ['GITHUB_RUN_ID']}.json"
+          data = json.loads(path.read_text(encoding="utf-8"))
+          print("\n### Server process evidence")
+          print("\n| target | peak process-tree RSS | peak processes |")
+          print("| --- | ---: | ---: |")
+          for key, label in (("dirbase", "dirbase"), ("json_server", "JSON Server")):
+              target = data["targets"][key]
+              mib = target["peak_process_tree_rss_kib"] / 1024
+              print(f"| {label} | {mib:.1f} MiB | {target['peak_process_count']} |")
+          PY
 
       - name: Upload benchmark artifacts
         if: always()
