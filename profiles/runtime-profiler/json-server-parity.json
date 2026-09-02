@@ -1,0 +1,16 @@
+{
+  "schema_version": "runtime-profiler/scenario/v1",
+  "id": "dirbase-json-server-parity-smoke",
+  "target": {
+    "type": "command",
+    "program": "bash",
+    "args": ["scripts/benchmark-parity-smoke.sh"],
+    "working_directory": "../.."
+  },
+  "run": {
+    "warmup_iterations": 0,
+    "measurement_iterations": 1,
+    "timeout_seconds": 600
+  },
+  "collectors": ["process"]
+}

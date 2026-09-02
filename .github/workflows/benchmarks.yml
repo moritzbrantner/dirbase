@@ -1,6 +1,22 @@
 name: Benchmarks
 
 on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/benchmark*"
+      - "scripts/moonlight*.sh"
+      - "scripts/runtime-profile.sh"
+      - "scripts/profile_benchmark_servers.py"
+      - "scripts/run_query_correctness.py"
+      - "scripts/run_write_benchmark.py"
+      - "benchmarks/**"
+      - "profiles/runtime-profiler/**"
+      - ".github/workflows/benchmarks.yml"
+  schedule:
+    - cron: "17 4 * * 1"
   workflow_dispatch:
     inputs:
       duration:
@@ -23,6 +39,10 @@ on:
         description: "warm-up concurrent connections"
         required: false
         default: "1"
+      baseline_ref:
+        description: "Optional git ref to compare against the current checkout with Moonlight"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -41,14 +61,19 @@ jobs:
       - name: Setup project
         uses: ./.github/actions/setup-project
 
-      - name: Run benchmark script
+      - name: Run JSON Server parity benchmark
         env:
-          DURATION: ${{ inputs.duration || '10' }}
-          CONNECTIONS: ${{ inputs.connections || '50' }}
-          RUNS: ${{ inputs.runs || '3' }}
-          WARMUP_DURATION: ${{ inputs.warmup_duration || '3' }}
+          DURATION: ${{ github.event_name == 'pull_request' && '1' || inputs.duration || '10' }}
+          CONNECTIONS: ${{ github.event_name == 'pull_request' && '4' || inputs.connections || '50' }}
+          RUNS: ${{ github.event_name == 'pull_request' && '1' || inputs.runs || '3' }}
+          WARMUP_DURATION: ${{ github.event_name == 'pull_request' && '1' || inputs.warmup_duration || '3' }}
           WARMUP_CONNECTIONS: ${{ inputs.warmup_connections || '1' }}
-        run: bash scripts/benchmark_vs_json_server.sh
+          SKIP_WRITE_BENCHMARKS: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+        run: |
+          python3 -m py_compile scripts/profile_benchmark_servers.py
+          python3 scripts/profile_benchmark_servers.py \
+            --output "benchmarks/results/server-process-metrics-${GITHUB_RUN_ID}.json" \
+            -- bash scripts/benchmark_vs_json_server.sh
 
       - name: Find latest summary file
         id: latest-summary
@@ -66,6 +91,24 @@ jobs:
       - name: Summarize benchmark result
         run: python3 scripts/summarize_benchmark_result.py --summary "${{ steps.latest-summary.outputs.summary }}" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Publish server process evidence
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("benchmarks/results") / f"server-process-metrics-{os.environ['GITHUB_RUN_ID']}.json"
+          data = json.loads(path.read_text(encoding="utf-8"))
+          print("\n### Server process evidence")
+          print("\n| target | peak process-tree RSS | peak processes |")
+          print("| --- | ---: | ---: |")
+          for key, label in (("dirbase", "dirbase"), ("json_server", "JSON Server")):
+              target = data["targets"][key]
+              mib = target["peak_process_tree_rss_kib"] / 1024
+              print(f"| {label} | {mib:.1f} MiB | {target['peak_process_count']} |")
+          PY
+
       - name: Upload benchmark artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -76,4 +119,101 @@ jobs:
             benchmarks/results/*.md
             benchmarks/.work/*.log
             benchmarks/.work/*.tsv
+          if-no-files-found: ignore
+
+  runtime-evidence:
+    if: github.event_name != 'pull_request'
+    needs: run-benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout dirbase
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Setup project
+        uses: ./.github/actions/setup-project
+
+      - name: Checkout runtime-profiler
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: moritzbrantner/runtime-profiler
+          path: .tools/runtime-profiler
+          persist-credentials: false
+
+      - name: Capture parity smoke evidence
+        env:
+          RUNTIME_PROFILER_ROOT: ${{ github.workspace }}/.tools/runtime-profiler
+        run: bash scripts/runtime-profile.sh ".artifacts/runtime-profiler/parity-${GITHUB_RUN_ID}"
+
+      - name: Render runtime evidence summary
+        env:
+          RUNTIME_PROFILER_ROOT: ${{ github.workspace }}/.tools/runtime-profiler
+        run: |
+          cargo run --quiet --manifest-path "$RUNTIME_PROFILER_ROOT/Cargo.toml" -- \
+            summarize --bundle ".artifacts/runtime-profiler/parity-${GITHUB_RUN_ID}" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: runtime-evidence-${{ github.run_id }}
+          path: .artifacts/runtime-profiler/
+          if-no-files-found: ignore
+
+  moonlight-baseline:
+    if: github.event_name == 'workflow_dispatch' && inputs.baseline_ref != ''
+    needs: run-benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Setup project
+        uses: ./.github/actions/setup-project
+
+      - name: Checkout baseline
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: .benchmark-baseline
+          persist-credentials: false
+
+      - name: Checkout Moonlight
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: moritzbrantner/moonlight
+          path: .tools/moonlight
+          persist-credentials: false
+
+      - name: Compare baseline and candidate
+        env:
+          MOONLIGHT_ROOT: ${{ github.workspace }}/.tools/moonlight
+        run: |
+          mkdir -p .artifacts
+          bash scripts/moonlight-compare.sh \
+            "$GITHUB_WORKSPACE/.benchmark-baseline" \
+            "$GITHUB_WORKSPACE" \
+            | tee .artifacts/moonlight-parity.txt
+
+      - name: Publish Moonlight result
+        if: always()
+        run: |
+          if [[ -f .artifacts/moonlight-parity.txt ]]; then
+            cat .artifacts/moonlight-parity.txt >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload Moonlight result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: moonlight-parity-${{ github.run_id }}
+          path: .artifacts/moonlight-parity.txt
           if-no-files-found: ignore
