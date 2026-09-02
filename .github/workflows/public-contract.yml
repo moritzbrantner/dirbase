@@ -1,0 +1,16 @@
+name: Public Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-contract:
+    uses: moritzbrantner/reusable-workflows/.github/workflows/public-contract-validation.yml@0bb5172f1942b2f58f3022275fba7693b7d32a63
+    with:
+      install_mode: none
