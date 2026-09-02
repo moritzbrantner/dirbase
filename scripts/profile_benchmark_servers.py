@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -169,9 +168,10 @@ def main() -> int:
         ]
         if missing:
             print(
-                f"warning: no process samples observed for {', '.join(missing)}",
+                f"server-process evidence incomplete: no samples observed for {', '.join(missing)}",
                 file=sys.stderr,
             )
+            return 3
 
     return exit_code
 
