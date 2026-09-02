@@ -67,6 +67,7 @@ jobs:
       - name: Summarize Rust coverage
         run: |
           python3 - <<'PY'
+          from collections import defaultdict
           from pathlib import Path
           import json
           import os
@@ -89,6 +90,13 @@ jobs:
                       return "src/" + normalized.split(marker, 1)[1]
                   return normalized
 
+          def is_production_source(name):
+              return (
+                  name.startswith("src/")
+                  and not name.endswith("_test.rs")
+                  and not name.startswith("src/test_support/")
+              )
+
           def metric(summary, name):
               values = summary[name]
               return int(values["covered"]), int(values["count"]), float(values["percent"])
@@ -99,6 +107,19 @@ jobs:
 
           def covered_delta(before, after):
               return after[0] - before[0]
+
+          def load_function_hits(path):
+              hits = defaultdict(int)
+              current_file = None
+              for line in path.read_text(encoding="utf-8").splitlines():
+                  if line.startswith("SF:"):
+                      current_file = relative_name(line[3:])
+                  elif line == "end_of_record":
+                      current_file = None
+                  elif current_file and is_production_source(current_file) and line.startswith("FNDA:"):
+                      count, name = line[5:].split(",", 1)
+                      hits[(current_file, name)] += int(count)
+              return hits
 
           current = load_report(coverage_dir / "coverage.json")
           baseline_path = coverage_dir / "baseline.json"
@@ -129,9 +150,12 @@ jobs:
                   baseline_totals = {
                       label: metric(baseline["totals"], key) for label, key in metric_names
                   }
-                  summary.write("Coverage is measured once at the pull-request base and once at the head. "
-                                "Region coverage is included so endpoint tests can expose control-flow gains "
-                                "that LCOV line totals alone may hide.\n\n")
+                  summary.write(
+                      "Coverage is measured once at the pull-request base and once at the head. "
+                      "Covered-code deltas are kept separate from LCOV execution-count deltas so an "
+                      "endpoint test cannot be mistaken for new source coverage when it only exercises "
+                      "an already-covered path under a new response mode.\n\n"
+                  )
                   summary.write("| Metric | Base | Head | Δ covered |\n")
                   summary.write("| --- | ---: | ---: | ---: |\n")
                   for label, _ in metric_names:
@@ -147,9 +171,7 @@ jobs:
                       result = {}
                       for file_report in report["files"]:
                           name = relative_name(file_report["filename"])
-                          if not name.startswith("src/"):
-                              continue
-                          if name.endswith("_test.rs") or name.startswith("src/test_support/"):
+                          if not is_production_source(name):
                               continue
                           file_summary = file_report["summary"]
                           result[name] = {
@@ -178,8 +200,49 @@ jobs:
                               f"{deltas['Functions']:+d} | {format_metric(after['Regions'])} |\n"
                           )
                   else:
-                      summary.write("No production-source coverage changes detected.\n")
+                      summary.write("No newly covered production source was detected.\n")
                   summary.write("\n")
+
+                  baseline_lcov = coverage_dir / "baseline.info"
+                  current_lcov = coverage_dir / "lcov.info"
+                  if baseline_lcov.exists():
+                      before_hits = load_function_hits(baseline_lcov)
+                      after_hits = load_function_hits(current_lcov)
+                      function_deltas = []
+                      file_deltas = defaultdict(lambda: [0, 0])
+                      for key in set(before_hits) | set(after_hits):
+                          delta = after_hits.get(key, 0) - before_hits.get(key, 0)
+                          if delta <= 0:
+                              continue
+                          source, function = key
+                          function_deltas.append((delta, source, function))
+                          file_deltas[source][0] += 1
+                          file_deltas[source][1] += delta
+
+                      summary.write("#### Production-source execution deltas\n\n")
+                      summary.write(
+                          "These LCOV hit-count deltas show which already-instrumented production paths "
+                          "the added test executes more often; they are evidence of test-path impact, not "
+                          "a claim that the code became newly covered.\n\n"
+                      )
+                      if file_deltas:
+                          summary.write("| Source | Functions with more hits | Additional function hits |\n")
+                          summary.write("| --- | ---: | ---: |\n")
+                          for source, (functions, hits) in sorted(file_deltas.items()):
+                              summary.write(f"| `{source}` | {functions} | +{hits} |\n")
+
+                          summary.write("\n<details><summary>Changed function hit counts</summary>\n\n")
+                          summary.write("| Source | Function | Δ executions |\n")
+                          summary.write("| --- | --- | ---: |\n")
+                          for delta, source, function in sorted(
+                              function_deltas, key=lambda row: (-row[0], row[1], row[2])
+                          )[:30]:
+                              safe_function = function.replace("|", "\\|")
+                              summary.write(f"| `{source}` | `{safe_function}` | +{delta} |\n")
+                          summary.write("\n</details>\n")
+                      else:
+                          summary.write("No positive production function hit-count deltas detected.\n")
+                      summary.write("\n")
           PY
 
       - name: Generate UI coverage
