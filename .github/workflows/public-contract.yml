@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
 
+# Observe-only canary: discovery and evidence policy remain in coding-tooling.
 jobs:
   public-contract:
     uses: moritzbrantner/reusable-workflows/.github/workflows/public-contract-validation.yml@0bb5172f1942b2f58f3022275fba7693b7d32a63
