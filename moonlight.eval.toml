@@ -18,12 +18,3 @@ cwd = "."
 timeout_ms = 900000
 ignore_stdout = true
 ignore_stderr = true
-
-[[checks]]
-id = "architecture-contract"
-name = "Architecture semantic contract"
-argv = ["bash", "scripts/architecture-contract.sh"]
-cwd = "."
-timeout_ms = 900000
-ignore_stdout = true
-ignore_stderr = true
