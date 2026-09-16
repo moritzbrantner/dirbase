@@ -1,0 +1,20 @@
+[project]
+name = "dirbase"
+repo = "."
+baseline_ref = "main"
+
+[eval]
+work_dir = ".moonlight/evals"
+keep_worktrees = "failed"
+jobs = 1
+target_timeout_ms = 900000
+max_body_capture_bytes = 20000
+
+[[checks]]
+id = "rust-tests"
+name = "Rust tests"
+argv = ["cargo", "test", "--", "--test-threads=1"]
+cwd = "."
+timeout_ms = 900000
+ignore_stdout = true
+ignore_stderr = true

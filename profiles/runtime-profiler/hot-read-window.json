@@ -1,0 +1,27 @@
+{
+  "schema_version": "runtime-profiler/scenario/v1",
+  "id": "dirbase-hot-read-window",
+  "target": {
+    "type": "command",
+    "program": "python3",
+    "args": [
+      "scripts/architecture_benchmark.py",
+      "run",
+      "--scenario",
+      "hot-read",
+      "--fixture",
+      "read-large",
+      "--iterations",
+      "160",
+      "--output",
+      ".artifacts/architecture/hot-read-window.json"
+    ],
+    "working_directory": "../.."
+  },
+  "run": {
+    "warmup_iterations": 1,
+    "measurement_iterations": 5,
+    "timeout_seconds": 180
+  },
+  "collectors": ["process"]
+}
