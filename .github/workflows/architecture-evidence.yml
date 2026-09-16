@@ -140,7 +140,7 @@ jobs:
           RUNTIME_PROFILER_ROOT: ${{ github.workspace }}/.tools/runtime-profiler
         run: |
           mkdir -p .artifacts/runtime-profiler .artifacts/architecture
-          for scenario in hot-read-window localized-write-small localized-write-ballast; do
+          for scenario in hot-read-small hot-read-window localized-write-small localized-write-ballast; do
             bundle=".artifacts/runtime-profiler/${scenario}-${GITHUB_RUN_ID}"
             bash scripts/runtime-profile.sh \
               "$bundle" \
@@ -149,6 +149,50 @@ jobs:
             cargo run --quiet --manifest-path "$RUNTIME_PROFILER_ROOT/Cargo.toml" -- \
               summarize --bundle "$bundle" >> "$GITHUB_STEP_SUMMARY"
           done
+
+      - name: Publish architectural amplification
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          evidence = Path(".artifacts/architecture")
+
+          def load(name):
+              return json.loads((evidence / name).read_text(encoding="utf-8"))
+
+          def ratio(candidate, reference):
+              if reference in (None, 0):
+                  return "n/a"
+              return f"{candidate / reference:.2f}x"
+
+          def emit_pair(title, reference_name, candidate_name):
+              reference = load(reference_name)
+              candidate = load(candidate_name)
+              rows = [
+                  ("startup ms", reference["startup_ms"], candidate["startup_ms"]),
+                  ("request median ms", reference["request_ms"]["median"], candidate["request_ms"]["median"]),
+                  ("request p95 ms", reference["request_ms"]["p95"], candidate["request_ms"]["p95"]),
+                  ("server peak RSS KiB", reference["server_peak_rss_kib"], candidate["server_peak_rss_kib"]),
+              ]
+              print(f"\n### {title}\n")
+              print("The ratio is descriptive evidence from the last harness invocation; Runtime Profiler bundles remain the repeated evidence source and no threshold is applied.\n")
+              print("| metric | reference | expanded state | amplification |")
+              print("| --- | ---: | ---: | ---: |")
+              for metric, baseline_value, expanded_value in rows:
+                  print(f"| {metric} | {baseline_value} | {expanded_value} | {ratio(expanded_value, baseline_value)} |")
+
+          emit_pair(
+              "Read source-size amplification (8k → 48k rows, same 8-row window)",
+              "hot-read-small.json",
+              "hot-read-window.json",
+          )
+          emit_pair(
+              "Localized-write unrelated-state amplification (8k target → +80k unrelated rows)",
+              "localized-write-small.json",
+              "localized-write-ballast.json",
+          )
+          PY
 
       - name: Publish Dirbase-specific architecture evidence
         run: |
