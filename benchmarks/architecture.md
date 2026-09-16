@@ -16,25 +16,21 @@ Performance numbers are descriptive evidence. This slice intentionally does not 
 
 ## Scenarios
 
-### Hot read window
+### Hot read: source-size amplification
 
-`hot-read-window.json` serves a 48,000-row resource and repeatedly requests a filtered, sorted eight-row page.
+`hot-read-small.json` serves an 8,000-row resource and `hot-read-window.json` serves a 48,000-row resource. Both repeatedly request the same filtered, sorted eight-row page.
 
-This scenario is intended to expose unnecessary whole-resource cloning, repeated parsing, repeated schema work, and materialization that grows with the source resource rather than the requested result window.
+The sixfold source-size change leaves the requested result window unchanged. Comparing the two captures makes whole-resource cloning, repeated parsing, repeated schema work, and pre-window materialization visible as source-size amplification rather than hiding those costs inside aggregate request throughput.
 
-### Localized write: small
+### Localized write: unrelated-state amplification
 
-`localized-write-small.json` patches one row in an 8,000-row resource.
-
-This is the reference workload for the cost of a local mutation.
-
-### Localized write: unrelated ballast
-
-`localized-write-ballast.json` performs the same patch workload against the same 8,000-row target resource while four unrelated 20,000-row resources are present.
+`localized-write-small.json` patches one row in an 8,000-row resource. `localized-write-ballast.json` performs the same patch workload against the same 8,000-row target while four unrelated 20,000-row resources are present.
 
 The semantic operation is unchanged. A large increase relative to the small fixture is evidence that mutation cost depends on unrelated state. That is the architectural signal to reduce full-resource copies, global schema reinference, or other whole-world recomputation.
 
 The benchmark also hashes unrelated resource files before and after the mutation workload. A local mutation fails the contract if it changes unrelated bytes.
+
+The scheduled/manual workflow prints descriptive amplification ratios for startup time, request median/p95, and sampled Dirbase RSS. These ratios come from the last supporting harness invocation; the repeated Runtime Profiler bundles remain the evidence source. No ratio is a release gate yet.
 
 ## Deterministic contract
 
@@ -52,7 +48,7 @@ For a baseline/candidate comparison:
 bash scripts/moonlight-architecture-compare.sh /path/to/baseline /path/to/candidate
 ```
 
-The repository also contains `moonlight.eval.toml` for project-level baseline/candidate evaluation.
+The comparison deliberately uses the candidate-owned driver for both binaries. This lets the first adoption compare against a baseline that predates the harness while ensuring the same workload definition drives both targets. The repository also contains `moonlight.eval.toml` for the baseline-compatible project test surface.
 
 ## Runtime Profiler
 
@@ -71,8 +67,9 @@ bash scripts/runtime-profile.sh \
   profiles/runtime-profiler/hot-read-window.json
 ```
 
-The three architecture scenarios are:
+The four architecture scenarios are:
 
+- `profiles/runtime-profiler/hot-read-small.json`
 - `profiles/runtime-profiler/hot-read-window.json`
 - `profiles/runtime-profiler/localized-write-small.json`
 - `profiles/runtime-profiler/localized-write-ballast.json`
