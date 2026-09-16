@@ -15,11 +15,9 @@ import json
 import os
 from pathlib import Path
 import shutil
-import signal
 import socket
 import statistics
 import subprocess
-import tempfile
 import threading
 import time
 from typing import Any
@@ -72,14 +70,6 @@ def prepare_fixture(name: str, target_rows: int, ballast_resources: int, ballast
             fixture / f"ballast_{index:02d}.json",
             resource_rows(ballast_rows, f"ballast-{index:02d}"),
         )
-    write_json(
-        fixture / "fixture-manifest.json",
-        {
-            "target_rows": target_rows,
-            "ballast_resources": ballast_resources,
-            "ballast_rows": ballast_rows,
-        },
-    )
     return fixture
 
 
@@ -264,8 +254,9 @@ def run_workload(binary: Path, fixture_name: str, scenario: str, iterations: int
     if not (fixture / "target.json").exists():
         raise RuntimeError(f"fixture is not prepared: {fixture_name}; run prepare-all first")
     process, base_url, startup_ms = start_server(binary, fixture)
-    started = time.perf_counter()
+    workload_ms = 0.0
     try:
+        started = time.perf_counter()
         with RssSampler(process.pid) as rss:
             if scenario == "hot-read":
                 samples, semantic = hot_read(base_url, iterations)
@@ -273,6 +264,7 @@ def run_workload(binary: Path, fixture_name: str, scenario: str, iterations: int
                 samples, semantic = localized_write(base_url, fixture, iterations)
             else:
                 raise RuntimeError(f"unsupported scenario: {scenario}")
+        workload_ms = (time.perf_counter() - started) * 1000.0
         peak_rss_kib = rss.peak_kib
     finally:
         stop_server(process)
@@ -282,7 +274,7 @@ def run_workload(binary: Path, fixture_name: str, scenario: str, iterations: int
         "fixture": fixture_name,
         "iterations": iterations,
         "startup_ms": round(startup_ms, 3),
-        "workload_ms": round((time.perf_counter() - started) * 1000.0, 3),
+        "workload_ms": round(workload_ms, 3),
         "request_ms": {
             "median": round(statistics.median(samples), 3),
             "p95": round(percentile(samples, 0.95), 3),
