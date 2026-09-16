@@ -12,7 +12,7 @@ candidate="$(cd "${2:-.}" && pwd)"
 cargo build --quiet --release --manifest-path "$baseline/Cargo.toml"
 cargo build --quiet --release --manifest-path "$candidate/Cargo.toml"
 
-primary_argv="$({ python3 - "$baseline" <<'PY'
+primary_argv="$(python3 - "$baseline" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -25,9 +25,9 @@ print(json.dumps([
     str(repo / "target" / "release" / "dirbase"),
 ]))
 PY
-} )"
+)"
 
-candidate_argv="$({ python3 - "$candidate" <<'PY'
+candidate_argv="$(python3 - "$candidate" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -40,7 +40,7 @@ print(json.dumps([
     str(repo / "target" / "release" / "dirbase"),
 ]))
 PY
-} )"
+)"
 
 exec bash "$(dirname "$0")/moonlight.sh" run \
   --primary-argv "$primary_argv" \
