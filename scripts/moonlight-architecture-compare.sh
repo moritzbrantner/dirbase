@@ -8,36 +8,33 @@ fi
 
 baseline="$(cd "$1" && pwd)"
 candidate="$(cd "${2:-.}" && pwd)"
+driver="$candidate/scripts/architecture_benchmark.py"
 
 cargo build --quiet --release --manifest-path "$baseline/Cargo.toml"
 cargo build --quiet --release --manifest-path "$candidate/Cargo.toml"
 
-primary_argv="$(python3 - "$baseline" <<'PY'
+primary_argv="$(python3 - "$driver" "$baseline/target/release/dirbase" <<'PY'
 import json
 import sys
-from pathlib import Path
-repo = Path(sys.argv[1])
 print(json.dumps([
     "python3",
-    str(repo / "scripts" / "architecture_benchmark.py"),
+    sys.argv[1],
     "contract",
     "--binary",
-    str(repo / "target" / "release" / "dirbase"),
+    sys.argv[2],
 ]))
 PY
 )"
 
-candidate_argv="$(python3 - "$candidate" <<'PY'
+candidate_argv="$(python3 - "$driver" "$candidate/target/release/dirbase" <<'PY'
 import json
 import sys
-from pathlib import Path
-repo = Path(sys.argv[1])
 print(json.dumps([
     "python3",
-    str(repo / "scripts" / "architecture_benchmark.py"),
+    sys.argv[1],
     "contract",
     "--binary",
-    str(repo / "target" / "release" / "dirbase"),
+    sys.argv[2],
 ]))
 PY
 )"
