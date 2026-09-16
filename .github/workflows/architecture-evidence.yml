@@ -11,6 +11,25 @@ on:
       - "scripts/moonlight-architecture-compare.sh"
       - "scripts/moonlight.sh"
       - "scripts/runtime-profile.sh"
+      - "scripts/summarize_architecture_baseline.py"
+      - "scripts/summarize_architecture_baseline_test.py"
+      - "profiles/runtime-profiler/**"
+      - "moonlight.eval.toml"
+      - "benchmarks/architecture.md"
+      - ".github/workflows/architecture-evidence.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/architecture_benchmark.py"
+      - "scripts/architecture-contract.sh"
+      - "scripts/moonlight-architecture-compare.sh"
+      - "scripts/moonlight.sh"
+      - "scripts/runtime-profile.sh"
+      - "scripts/summarize_architecture_baseline.py"
+      - "scripts/summarize_architecture_baseline_test.py"
       - "profiles/runtime-profiler/**"
       - "moonlight.eval.toml"
       - "benchmarks/architecture.md"
@@ -23,6 +42,10 @@ on:
         description: "Git ref used as the Moonlight semantic baseline"
         required: false
         default: "main"
+      rounds:
+        description: "Repeated architecture calibration rounds per scenario"
+        required: false
+        default: "3"
 
 permissions:
   contents: read
@@ -43,6 +66,16 @@ jobs:
         with:
           bun: "false"
           ui-deps: "false"
+
+      - name: Validate architecture harness
+        run: |
+          python3 -m py_compile \
+            scripts/architecture_benchmark.py \
+            scripts/summarize_architecture_baseline.py \
+            scripts/summarize_architecture_baseline_test.py
+          python3 scripts/summarize_architecture_baseline_test.py
+          bash -n scripts/architecture-contract.sh
+          bash -n scripts/moonlight-architecture-compare.sh
 
       - name: Run architecture semantic contract
         run: bash scripts/architecture-contract.sh
@@ -109,7 +142,7 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: architecture-contract
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout dirbase
@@ -135,82 +168,53 @@ jobs:
           path: .tools/runtime-profiler
           persist-credentials: false
 
-      - name: Capture architecture scenarios
+      - name: Capture repeated architecture scenarios
         env:
           RUNTIME_PROFILER_ROOT: ${{ github.workspace }}/.tools/runtime-profiler
+          REQUESTED_ROUNDS: ${{ inputs.rounds }}
         run: |
-          mkdir -p .artifacts/runtime-profiler .artifacts/architecture
-          for scenario in hot-read-small hot-read-window localized-write-small localized-write-ballast; do
-            bundle=".artifacts/runtime-profiler/${scenario}-${GITHUB_RUN_ID}"
-            bash scripts/runtime-profile.sh \
-              "$bundle" \
-              "profiles/runtime-profiler/${scenario}.json"
-            printf '\n### %s\n\n' "$scenario" >> "$GITHUB_STEP_SUMMARY"
-            cargo run --quiet --manifest-path "$RUNTIME_PROFILER_ROOT/Cargo.toml" -- \
-              summarize --bundle "$bundle" >> "$GITHUB_STEP_SUMMARY"
-          done
-
-      - name: Publish architectural amplification
-        run: |
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          from pathlib import Path
-
-          evidence = Path(".artifacts/architecture")
-
-          def load(name):
-              return json.loads((evidence / name).read_text(encoding="utf-8"))
-
-          def ratio(candidate, reference):
-              if reference in (None, 0):
-                  return "n/a"
-              return f"{candidate / reference:.2f}x"
-
-          def emit_pair(title, reference_name, candidate_name):
-              reference = load(reference_name)
-              candidate = load(candidate_name)
-              rows = [
-                  ("startup ms", reference["startup_ms"], candidate["startup_ms"]),
-                  ("request median ms", reference["request_ms"]["median"], candidate["request_ms"]["median"]),
-                  ("request p95 ms", reference["request_ms"]["p95"], candidate["request_ms"]["p95"]),
-                  ("server peak RSS KiB", reference["server_peak_rss_kib"], candidate["server_peak_rss_kib"]),
-              ]
-              print(f"\n### {title}\n")
-              print("The ratio is descriptive evidence from the last harness invocation; Runtime Profiler bundles remain the repeated evidence source and no threshold is applied.\n")
-              print("| metric | reference | expanded state | amplification |")
-              print("| --- | ---: | ---: | ---: |")
-              for metric, baseline_value, expanded_value in rows:
-                  print(f"| {metric} | {baseline_value} | {expanded_value} | {ratio(expanded_value, baseline_value)} |")
-
-          emit_pair(
-              "Read source-size amplification (8k → 48k rows, same 8-row window)",
-              "hot-read-small.json",
-              "hot-read-window.json",
-          )
-          emit_pair(
-              "Localized-write unrelated-state amplification (8k target → +80k unrelated rows)",
-              "localized-write-small.json",
-              "localized-write-ballast.json",
-          )
-          PY
-
-      - name: Publish Dirbase-specific architecture evidence
-        run: |
-          if compgen -G '.artifacts/architecture/*.json' > /dev/null; then
-            printf '\n### Dirbase server evidence\n\n' >> "$GITHUB_STEP_SUMMARY"
-            for evidence in .artifacts/architecture/*.json; do
-              printf '#### `%s`\n\n```json\n' "$(basename "$evidence")" >> "$GITHUB_STEP_SUMMARY"
-              cat "$evidence" >> "$GITHUB_STEP_SUMMARY"
-              printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
-            done
+          rounds="${REQUESTED_ROUNDS:-3}"
+          if ! [[ "$rounds" =~ ^[0-9]+$ ]] || (( rounds < 2 || rounds > 10 )); then
+            printf 'rounds must be an integer from 2 through 10; got %s\n' "$rounds" >&2
+            exit 2
           fi
 
-      - name: Upload architecture evidence
+          mkdir -p .artifacts/runtime-profiler .artifacts/architecture/runs
+          for scenario in hot-read-small hot-read-window localized-write-small localized-write-ballast; do
+            mkdir -p ".artifacts/runtime-profiler/$scenario" ".artifacts/architecture/runs/$scenario"
+            for round in $(seq 1 "$rounds"); do
+              bundle=".artifacts/runtime-profiler/$scenario/round-$round"
+              bash scripts/runtime-profile.sh \
+                "$bundle" \
+                "profiles/runtime-profiler/${scenario}.json"
+              cargo run --quiet --manifest-path "$RUNTIME_PROFILER_ROOT/Cargo.toml" -- \
+                validate --bundle "$bundle"
+              mv ".artifacts/architecture/${scenario}.json" \
+                ".artifacts/architecture/runs/${scenario}/round-${round}.json"
+            done
+          done
+          printf '%s' "$rounds" > .artifacts/architecture/round-count.txt
+
+      - name: Build descriptive architecture baseline
+        run: |
+          rounds="$(cat .artifacts/architecture/round-count.txt)"
+          python3 scripts/summarize_architecture_baseline.py \
+            --profiler-root .artifacts/runtime-profiler \
+            --server-root .artifacts/architecture/runs \
+            --source-revision "$GITHUB_SHA" \
+            --min-rounds "$rounds" \
+            --output .artifacts/architecture-baseline.json \
+            --markdown-output .artifacts/architecture-baseline.md
+          cat .artifacts/architecture-baseline.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload architecture baseline evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: architecture-evidence-${{ github.run_id }}
+          name: architecture-baseline-${{ github.sha }}
           path: |
             .artifacts/runtime-profiler/
             .artifacts/architecture/
+            .artifacts/architecture-baseline.json
+            .artifacts/architecture-baseline.md
           if-no-files-found: ignore

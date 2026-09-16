@@ -11,8 +11,11 @@ The tools have separate responsibilities:
 - **Moonlight** checks deterministic behavior across a baseline and candidate. It compares the architecture contract, not timings.
 - **runtime-profiler** captures repeatable wall-time/process evidence for declared workloads.
 - `scripts/architecture_benchmark.py` records Dirbase-specific server evidence such as startup time, request distributions, and sampled server RSS. This avoids treating a wrapper process's RSS as Dirbase memory.
+- `scripts/summarize_architecture_baseline.py` pairs repeated Runtime Profiler bundles with the corresponding Dirbase-server evidence and produces a descriptive baseline artifact.
 
 Performance numbers are descriptive evidence. This slice intentionally does not introduce a release threshold. Budgets should be calibrated from repeated comparable captures after the scenarios are stable.
+
+The benchmark server starts with the generated fixture as its working directory. That keeps an optional repository-level `dirbase.conf` from changing benchmark semantics or contaminating a baseline/candidate comparison.
 
 ## Scenarios
 
@@ -29,8 +32,6 @@ The sixfold source-size change leaves the requested result window unchanged. Com
 The semantic operation is unchanged. A large increase relative to the small fixture is evidence that mutation cost depends on unrelated state. That is the architectural signal to reduce full-resource copies, global schema reinference, or other whole-world recomputation.
 
 The benchmark also hashes unrelated resource files before and after the mutation workload. A local mutation fails the contract if it changes unrelated bytes.
-
-The scheduled/manual workflow prints descriptive amplification ratios for startup time, request median/p95, and sampled Dirbase RSS. These ratios come from the last supporting harness invocation; the repeated Runtime Profiler bundles remain the evidence source. No ratio is a release gate yet.
 
 ## Deterministic contract
 
@@ -75,6 +76,27 @@ The four architecture scenarios are:
 - `profiles/runtime-profiler/localized-write-ballast.json`
 
 Each measured run writes a final Dirbase-specific JSON record under `.artifacts/architecture/`. Runtime Profiler remains the authoritative cross-revision runtime bundle; the JSON record is supporting evidence for interpreting what the server itself did during that scenario.
+
+## Baseline calibration
+
+The `Architecture Evidence` workflow calibrates the current revision on every relevant push to `main`, on the weekly schedule, and on manual dispatch. It runs at least three complete rounds per scenario by default. Each round keeps an immutable Runtime Profiler bundle and moves the corresponding Dirbase-server record into a matching round directory.
+
+The baseline aggregator refuses to combine evidence when any of these identities drift:
+
+- source revision;
+- Runtime Profiler scenario digest;
+- Runtime Profiler environment fingerprint;
+- paired profiler/server round identity.
+
+For each scenario, the baseline records wall-time samples plus distributions for server startup time, workload time, request median/p95, and sampled server RSS. It also calculates paired distributions for the two architectural amplification signals instead of publishing a single best or last-run ratio.
+
+The workflow emits:
+
+- `.artifacts/architecture-baseline.json` as the machine-readable `dirbase/architecture-baseline/v1` artifact;
+- `.artifacts/architecture-baseline.md` as the review summary;
+- all source Runtime Profiler bundles and paired Dirbase-server evidence used to build the baseline.
+
+The initial baseline is deliberately marked `descriptive` with `thresholds_enabled: false`. Promote concrete budgets only after repeated main-branch calibration shows sufficiently stable variance for a metric. Until then, compare optimization branches against the exact baseline scenario digests and environment fingerprint rather than treating an arbitrary percentage as a release rule.
 
 ## Architectural interpretation
 

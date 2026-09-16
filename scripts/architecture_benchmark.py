@@ -179,7 +179,7 @@ def start_server(binary: Path, fixture: Path) -> tuple[subprocess.Popen[bytes], 
     started = time.perf_counter()
     process = subprocess.Popen(
         [str(binary), "--folder", str(fixture), "--bind", f"127.0.0.1:{port}"],
-        cwd=ROOT,
+        cwd=fixture,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
