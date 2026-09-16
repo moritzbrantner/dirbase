@@ -1,0 +1,172 @@
+name: Architecture Evidence
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/architecture_benchmark.py"
+      - "scripts/architecture-contract.sh"
+      - "scripts/moonlight-architecture-compare.sh"
+      - "scripts/moonlight.sh"
+      - "scripts/runtime-profile.sh"
+      - "profiles/runtime-profiler/**"
+      - "moonlight.eval.toml"
+      - "benchmarks/architecture.md"
+      - ".github/workflows/architecture-evidence.yml"
+  schedule:
+    - cron: "37 4 * * 2"
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: "Git ref used as the Moonlight semantic baseline"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  architecture-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-project
+        with:
+          bun: "false"
+          ui-deps: "false"
+
+      - name: Run architecture semantic contract
+        run: bash scripts/architecture-contract.sh
+
+  moonlight-architecture:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Checkout pull request baseline
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .architecture-baseline
+          persist-credentials: false
+
+      - name: Checkout configured baseline
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: .architecture-baseline
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-project
+        with:
+          bun: "false"
+          ui-deps: "false"
+
+      - name: Checkout Moonlight
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: moritzbrantner/moonlight
+          path: .tools/moonlight
+          persist-credentials: false
+
+      - name: Compare architecture semantics
+        env:
+          MOONLIGHT_ROOT: ${{ github.workspace }}/.tools/moonlight
+        run: |
+          mkdir -p .artifacts
+          bash scripts/moonlight-architecture-compare.sh \
+            "$GITHUB_WORKSPACE/.architecture-baseline" \
+            "$GITHUB_WORKSPACE" \
+            | tee .artifacts/moonlight-architecture.json
+
+      - name: Upload Moonlight comparison
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: moonlight-architecture-${{ github.run_id }}
+          path: .artifacts/moonlight-architecture.json
+          if-no-files-found: ignore
+
+  runtime-architecture-evidence:
+    if: github.event_name != 'pull_request'
+    needs: architecture-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout dirbase
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-project
+        with:
+          bun: "false"
+          ui-deps: "false"
+
+      - name: Build release binary and prepare deterministic fixtures
+        run: |
+          cargo build --release
+          python3 scripts/architecture_benchmark.py prepare-all
+
+      - name: Checkout runtime-profiler
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: moritzbrantner/runtime-profiler
+          path: .tools/runtime-profiler
+          persist-credentials: false
+
+      - name: Capture architecture scenarios
+        env:
+          RUNTIME_PROFILER_ROOT: ${{ github.workspace }}/.tools/runtime-profiler
+        run: |
+          mkdir -p .artifacts/runtime-profiler .artifacts/architecture
+          for scenario in hot-read-window localized-write-small localized-write-ballast; do
+            bundle=".artifacts/runtime-profiler/${scenario}-${GITHUB_RUN_ID}"
+            bash scripts/runtime-profile.sh \
+              "$bundle" \
+              "profiles/runtime-profiler/${scenario}.json"
+            printf '\n### %s\n\n' "$scenario" >> "$GITHUB_STEP_SUMMARY"
+            cargo run --quiet --manifest-path "$RUNTIME_PROFILER_ROOT/Cargo.toml" -- \
+              summarize --bundle "$bundle" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Publish Dirbase-specific architecture evidence
+        run: |
+          if compgen -G '.artifacts/architecture/*.json' > /dev/null; then
+            printf '\n### Dirbase server evidence\n\n' >> "$GITHUB_STEP_SUMMARY"
+            for evidence in .artifacts/architecture/*.json; do
+              printf '#### `%s`\n\n```json\n' "$(basename "$evidence")" >> "$GITHUB_STEP_SUMMARY"
+              cat "$evidence" >> "$GITHUB_STEP_SUMMARY"
+              printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+            done
+          fi
+
+      - name: Upload architecture evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: architecture-evidence-${{ github.run_id }}
+          path: |
+            .artifacts/runtime-profiler/
+            .artifacts/architecture/
+          if-no-files-found: ignore
