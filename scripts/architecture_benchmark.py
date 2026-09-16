@@ -225,6 +225,7 @@ def hot_read(base_url: str, iterations: int) -> tuple[list[float], dict[str, Any
 
 
 def localized_write(base_url: str, fixture: Path, iterations: int) -> tuple[list[float], dict[str, Any]]:
+    request_json(base_url, "GET", "/target/1")
     ballast_paths = sorted(fixture.glob("ballast_*.json"))
     before = {path.name: file_digest(path) for path in ballast_paths}
     samples: list[float] = []
