@@ -3,7 +3,7 @@ mod index;
 mod io;
 mod validation;
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use axum::http::StatusCode;
 use serde_json::Value;
@@ -11,7 +11,9 @@ use serde_json::Value;
 use crate::{
     app::{AppState, DataSource},
     error::AppError,
-    schema::{infer_schema_from_data_source, replace_inferred_table},
+    schema::{
+        infer_schema_from_data_source, infer_table_from_value, replace_inferred_tables,
+    },
 };
 
 pub(crate) use cache::cached_resource_from_value;
@@ -74,8 +76,24 @@ pub async fn write_resource(
     cache::update_cached_resource(state, resource, value.clone()).await;
 
     if can_refresh_locally {
+        let resource_name = resource.to_string();
+        let value_for_inference = value.clone();
+        let table = tokio::task::spawn_blocking(move || {
+            infer_table_from_value(&resource_name, value_for_inference.as_ref())
+        })
+        .await
+        .map_err(|err| {
+            AppError::internal(format!("Resource schema inference task failed: {err}"))
+        })?;
+
+        // Install the already-inferred table into the latest schema snapshot. Only metadata
+        // relation rebuilding happens while holding this lock, so concurrent writes to different
+        // resources cannot lose each other's inferred-table updates.
         let mut store = state.schema_store.write().expect("schema store");
-        let inferred = replace_inferred_table(store.inferred.clone(), resource, value.as_ref());
+        let inferred = replace_inferred_tables(
+            store.inferred.clone(),
+            BTreeMap::from([(resource.to_string(), table)]),
+        );
         store.replace_inferred(inferred).map_err(AppError::internal)?;
     } else {
         // When readiness is already false, retain the previous fail-closed recovery semantics:
@@ -231,6 +249,30 @@ mod tests {
         assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!state.health.is_ready());
         assert!(state.health.last_error().is_some());
+    }
+
+    #[tokio::test]
+    async fn concurrent_local_schema_refreshes_preserve_both_tables() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.extend(["posts".to_string(), "users".to_string()]);
+        std::fs::write(temp.path().join("users.json"), "[{\"id\":1}]\n")
+            .expect("write users resource");
+        std::fs::write(temp.path().join("posts.json"), "[{\"id\":10}]\n")
+            .expect("write posts resource");
+
+        let users = serde_json::json!([{"id": 1, "name": "Ada"}]);
+        let posts = serde_json::json!([{"id": 10, "title": "Hello"}]);
+        let (users_result, posts_result) = tokio::join!(
+            write_resource(&state, "users", &users),
+            write_resource(&state, "posts", &posts),
+        );
+        users_result.expect("users write succeeds");
+        posts_result.expect("posts write succeeds");
+
+        let inferred = state.inferred_schema_snapshot();
+        assert!(inferred.tables.contains_key("users"));
+        assert!(inferred.tables.contains_key("posts"));
     }
 
     #[tokio::test]
