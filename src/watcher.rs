@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     path::{Path, PathBuf},
     sync::{Arc, RwLock as StdRwLock},
@@ -14,7 +14,9 @@ use tokio::sync::RwLock;
 
 use crate::{
     app::{AppState, CachedResource, DataSource, GraphqlStore, HealthState, SchemaStore},
-    schema::{infer_schema_from_data_source, load_schema},
+    schema::{
+        infer_schema_from_data_source, infer_table_from_value, load_schema, replace_inferred_tables,
+    },
     storage::{
         cached_resource_from_value, is_reserved_resource_name, is_valid_resource_name,
         scan_resources,
@@ -69,84 +71,157 @@ pub fn start_resource_watcher(
                         continue;
                     }
 
+                    let changed_resources = changed_resource_names(&event.paths);
+                    let schema_definition_changed =
+                        event_touches_schema_definition(&data_source, &event.paths);
+
                     match scan_resources(&data_source) {
                         Ok(new_resources) => {
-                            match load_schema(&schema_root, None) {
-                                Ok(declared) => {
-                                    if let Err(err) = schema_store
-                                        .write()
-                                        .expect("schema store")
-                                        .replace_declared(declared)
-                                    {
+                            let previous_resources = resources.blocking_read().clone();
+
+                            if schema_definition_changed {
+                                match load_schema(&schema_root, None) {
+                                    Ok(declared) => {
+                                        if let Err(err) = schema_store
+                                            .write()
+                                            .expect("schema store")
+                                            .replace_declared(declared)
+                                        {
+                                            health.mark_not_ready(err.clone());
+                                            tracing::error!(
+                                                "Failed to apply declared schema for {}: {err}",
+                                                schema_root.display()
+                                            );
+                                            continue;
+                                        }
+                                    }
+                                    Err(err) => {
                                         health.mark_not_ready(err.clone());
                                         tracing::error!(
-                                            "Failed to apply declared schema for {}: {err}",
+                                            "Failed to load schema for {}: {err}",
                                             schema_root.display()
                                         );
                                         continue;
                                     }
                                 }
-                                Err(err) => {
-                                    health.mark_not_ready(err.clone());
+                            }
+
+                            {
+                                let mut current = resources.blocking_write();
+                                *current = new_resources.clone();
+                            }
+
+                            let changed_values = match &*data_source {
+                                DataSource::Folder(_) => {
+                                    match read_changed_folder_resources(&event.paths) {
+                                        Ok(values) => values,
+                                        Err(err) => {
+                                            let mut cache = resource_cache.blocking_write();
+                                            for resource in &changed_resources {
+                                                cache.remove(resource);
+                                            }
+                                            drop(cache);
+                                            health.mark_not_ready(err.clone());
+                                            tracing::error!(
+                                                "Failed to refresh changed resource for {}: {err}",
+                                                watch_path.display()
+                                            );
+                                            app_state.emit_event("overview_changed", None);
+                                            for resource in changed_resources {
+                                                app_state.emit_event(
+                                                    "resource_changed",
+                                                    Some(resource),
+                                                );
+                                            }
+                                            continue;
+                                        }
+                                    }
+                                }
+                                DataSource::File(_) => BTreeMap::new(),
+                            };
+
+                            let full_inference_required = watcher_requires_full_inference(
+                                &data_source,
+                                &previous_resources,
+                                &new_resources,
+                                health.is_ready(),
+                            );
+
+                            if full_inference_required {
+                                let schema = match infer_schema_from_data_source(
+                                    &data_source,
+                                    &new_resources,
+                                ) {
+                                    Ok(schema) => schema,
+                                    Err(err) => {
+                                        health.mark_not_ready(err.clone());
+                                        tracing::error!(
+                                            "Failed to infer schema for {}: {err}",
+                                            watch_path.display()
+                                        );
+                                        continue;
+                                    }
+                                };
+                                if let Err(err) = schema_store
+                                    .write()
+                                    .expect("schema store")
+                                    .replace_inferred(schema)
+                                {
                                     tracing::error!(
-                                        "Failed to load schema for {}: {err}",
-                                        schema_root.display()
+                                        "Failed to merge schema for {}: {err}",
+                                        watch_path.display()
                                     );
+                                    health.mark_not_ready(err);
+                                    continue;
+                                }
+                            } else if !changed_values.is_empty() {
+                                // Row scanning happens on this dedicated watcher thread before the
+                                // schema write lock is taken. Installation then starts from the
+                                // latest inferred schema so concurrent API writes cannot be lost.
+                                let replacements = changed_values
+                                    .iter()
+                                    .map(|(resource, value)| {
+                                        (
+                                            resource.clone(),
+                                            infer_table_from_value(resource, value),
+                                        )
+                                    })
+                                    .collect::<BTreeMap<_, _>>();
+                                let mut store = schema_store.write().expect("schema store");
+                                let inferred =
+                                    replace_inferred_tables(store.inferred.clone(), replacements);
+                                if let Err(err) = store.replace_inferred(inferred) {
+                                    tracing::error!(
+                                        "Failed to merge schema for {}: {err}",
+                                        watch_path.display()
+                                    );
+                                    health.mark_not_ready(err);
                                     continue;
                                 }
                             }
-                            {
-                                let mut cache = resources.blocking_write();
-                                *cache = new_resources.clone();
-                            }
+
                             {
                                 let mut cache = resource_cache.blocking_write();
                                 match &*data_source {
                                     DataSource::Folder(_) => {
-                                        for path in &event.paths {
-                                            let is_json =
-                                                path.extension().and_then(|ext| ext.to_str())
-                                                    == Some("json");
-                                            if !is_json {
-                                                continue;
-                                            }
-                                            let Some(stem) =
-                                                path.file_stem().and_then(|s| s.to_str())
-                                            else {
-                                                continue;
-                                            };
-                                            if !is_valid_resource_name(stem)
-                                                || is_reserved_resource_name(stem)
-                                            {
-                                                continue;
-                                            }
-
-                                            if path.exists() {
-                                                match fs::read_to_string(path).ok().and_then(
-                                                    |raw| serde_json::from_str::<Value>(&raw).ok(),
-                                                ) {
-                                                    Some(value) => {
-                                                        let table = schema_store
-                                                            .read()
-                                                            .expect("schema store")
-                                                            .merged
-                                                            .tables
-                                                            .get(stem)
-                                                            .cloned();
-                                                        cache.insert(
-                                                            stem.to_string(),
-                                                            cached_resource_from_value(
-                                                                Arc::new(value),
-                                                                table.as_ref(),
-                                                            ),
-                                                        );
-                                                    }
-                                                    None => {
-                                                        cache.remove(stem);
-                                                    }
-                                                }
+                                        for resource in &changed_resources {
+                                            if let Some(value) = changed_values.get(resource) {
+                                                let table = schema_store
+                                                    .read()
+                                                    .expect("schema store")
+                                                    .merged
+                                                    .tables
+                                                    .get(resource)
+                                                    .cloned();
+                                                cache.insert(
+                                                    resource.clone(),
+                                                    cached_resource_from_value(
+                                                        Arc::new(value.clone()),
+                                                        table.as_ref(),
+                                                    ),
+                                                );
                                             } else {
-                                                cache.remove(stem);
+                                                cache.remove(resource);
                                             }
                                         }
                                     }
@@ -155,34 +230,14 @@ pub fn start_resource_watcher(
                                     }
                                 }
                             }
-                            match infer_schema_from_data_source(&data_source, &new_resources) {
-                                Ok(schema) => {
-                                    if let Err(err) = schema_store
-                                        .write()
-                                        .expect("schema store")
-                                        .replace_inferred(schema)
-                                    {
-                                        tracing::error!(
-                                            "Failed to merge schema for {}: {err}",
-                                            watch_path.display()
-                                        );
-                                        health.mark_not_ready(err);
-                                    } else {
-                                        *graphql_store.blocking_write() = GraphqlStore::default();
-                                        health.mark_ready();
-                                        app_state.emit_event("schema_changed", None);
-                                    }
-                                }
-                                Err(err) => {
-                                    health.mark_not_ready(err.clone());
-                                    tracing::error!(
-                                        "Failed to infer schema for {}: {err}",
-                                        watch_path.display()
-                                    );
-                                }
+
+                            *graphql_store.blocking_write() = GraphqlStore::default();
+                            if full_inference_required {
+                                health.mark_ready();
                             }
+                            app_state.emit_event("schema_changed", None);
                             app_state.emit_event("overview_changed", None);
-                            for resource in changed_resource_names(&event.paths) {
+                            for resource in changed_resources {
                                 app_state.emit_event("resource_changed", Some(resource));
                             }
                         }
@@ -243,6 +298,46 @@ fn is_relevant_folder_watch_path(root: &Path, path: &Path) -> bool {
         return false;
     };
     is_valid_resource_name(stem) && !is_reserved_resource_name(stem)
+}
+
+fn event_touches_schema_definition(data_source: &DataSource, paths: &[PathBuf]) -> bool {
+    matches!(data_source, DataSource::Folder(_))
+        && paths.iter().any(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| matches!(name, "schema.json" | "schema.xsd" | "schema.dbml"))
+        })
+}
+
+fn watcher_requires_full_inference(
+    data_source: &DataSource,
+    previous_resources: &BTreeSet<String>,
+    new_resources: &BTreeSet<String>,
+    currently_ready: bool,
+) -> bool {
+    !currently_ready
+        || matches!(data_source, DataSource::File(_))
+        || previous_resources != new_resources
+}
+
+fn read_changed_folder_resources(paths: &[PathBuf]) -> Result<BTreeMap<String, Value>, String> {
+    let mut values = BTreeMap::new();
+    for path in paths {
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") || !path.exists() {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !is_valid_resource_name(stem) || is_reserved_resource_name(stem) {
+            continue;
+        }
+        let raw = fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))?;
+        let value: Value = serde_json::from_str(&raw)
+            .map_err(|err| format!("{}: invalid json: {err}", path.display()))?;
+        values.insert(stem.to_string(), value);
+    }
+    Ok(values)
 }
 
 fn changed_resource_names(paths: &[PathBuf]) -> BTreeSet<String> {
@@ -321,6 +416,7 @@ mod tests {
         };
 
         assert!(should_process_watch_event(&data_source, &event));
+        assert!(event_touches_schema_definition(&data_source, &event.paths));
     }
 
     #[test]
@@ -334,5 +430,58 @@ mod tests {
         ]);
 
         assert_eq!(changed, BTreeSet::from(["posts".to_string(), "users".to_string()]));
+    }
+
+    #[test]
+    fn watcher_localizes_existing_folder_resource_content_changes_when_ready() {
+        let data_source = DataSource::Folder(PathBuf::from("/tmp/data"));
+        let resources = BTreeSet::from(["posts".to_string(), "users".to_string()]);
+
+        assert!(!watcher_requires_full_inference(
+            &data_source,
+            &resources,
+            &resources,
+            true,
+        ));
+    }
+
+    #[test]
+    fn watcher_full_refreshes_when_folder_resource_set_changes() {
+        let data_source = DataSource::Folder(PathBuf::from("/tmp/data"));
+        let previous = BTreeSet::from(["users".to_string()]);
+        let next = BTreeSet::from(["posts".to_string(), "users".to_string()]);
+
+        assert!(watcher_requires_full_inference(
+            &data_source,
+            &previous,
+            &next,
+            true,
+        ));
+    }
+
+    #[test]
+    fn watcher_full_refreshes_single_database_file_changes() {
+        let data_source = DataSource::File(PathBuf::from("/tmp/db.json"));
+        let resources = BTreeSet::from(["users".to_string()]);
+
+        assert!(watcher_requires_full_inference(
+            &data_source,
+            &resources,
+            &resources,
+            true,
+        ));
+    }
+
+    #[test]
+    fn watcher_full_refreshes_before_recovering_not_ready_state() {
+        let data_source = DataSource::Folder(PathBuf::from("/tmp/data"));
+        let resources = BTreeSet::from(["posts".to_string(), "users".to_string()]);
+
+        assert!(watcher_requires_full_inference(
+            &data_source,
+            &resources,
+            &resources,
+            false,
+        ));
     }
 }

@@ -3,7 +3,7 @@ mod index;
 mod io;
 mod validation;
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use axum::http::StatusCode;
 use serde_json::Value;
@@ -11,7 +11,9 @@ use serde_json::Value;
 use crate::{
     app::{AppState, DataSource},
     error::AppError,
-    schema::infer_schema_from_data_source,
+    schema::{
+        infer_schema_from_data_source, infer_table_from_value, replace_inferred_tables,
+    },
 };
 
 pub(crate) use cache::cached_resource_from_value;
@@ -54,6 +56,8 @@ pub async fn write_resource(
     value: &Value,
 ) -> Result<(), AppError> {
     let file = resource_file_path(&state.data_source, resource)?;
+    let can_refresh_locally =
+        matches!(state.data_source.as_ref(), DataSource::Folder(_)) && state.health.is_ready();
 
     if matches!(state.data_source.as_ref(), DataSource::File(_)) {
         let _guard = state.write_lock_for_resource("__db_file__").await;
@@ -62,13 +66,46 @@ pub async fn write_resource(
         io::persist_resource_value(&state.data_source, &file, resource, value).await?;
     }
 
-    cache::update_cached_resource(state, resource, Arc::new(value.clone())).await;
-    refresh_inferred_schema(state).await?;
+    // Keep the pre-existing copy and cache-index behavior in this slice so the benchmark isolates
+    // the cost of whole-dataset schema reinference. The next performance slice can remove this
+    // clone and measure that ownership change independently.
+    let value = Arc::new(value.clone());
+
+    // Preserve existing failure behavior: once persistence succeeds, the cache reflects the
+    // written value even if rebuilding the effective schema reports an error.
+    cache::update_cached_resource(state, resource, value.clone()).await;
+
+    if can_refresh_locally {
+        let resource_name = resource.to_string();
+        let value_for_inference = value.clone();
+        let table = tokio::task::spawn_blocking(move || {
+            infer_table_from_value(&resource_name, value_for_inference.as_ref())
+        })
+        .await
+        .map_err(|err| {
+            AppError::internal(format!("Resource schema inference task failed: {err}"))
+        })?;
+
+        // Install the already-inferred table into the latest schema snapshot. Only metadata
+        // relation rebuilding happens while holding this lock, so concurrent writes to different
+        // resources cannot lose each other's inferred-table updates.
+        let mut store = state.schema_store.write().expect("schema store");
+        let inferred = replace_inferred_tables(
+            store.inferred.clone(),
+            BTreeMap::from([(resource.to_string(), table)]),
+        );
+        store.replace_inferred(inferred).map_err(AppError::internal)?;
+    } else {
+        // When readiness is already false, retain the previous fail-closed recovery semantics:
+        // only a full refresh may prove that every resource is valid and mark the server ready.
+        // Single-file databases also stay on the conservative full-refresh path in this slice.
+        refresh_inferred_schema(state).await?;
+    }
+
     state.invalidate_graphql_schema().await;
     state.emit_event("resource_changed", Some(resource.to_string()));
     state.emit_event("schema_changed", None);
     state.emit_event("overview_changed", None);
-    state.health.mark_ready();
     Ok(())
 }
 
@@ -165,6 +202,77 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(tmp_entries, vec![stale_temp]);
+    }
+
+    #[tokio::test]
+    async fn write_resource_does_not_reread_unrelated_resource_files_while_ready() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.extend(["users".to_string(), "broken".to_string()]);
+
+        std::fs::write(temp.path().join("users.json"), "[{\"id\":1}]\n")
+            .expect("write initial resource");
+        let broken_path = temp.path().join("broken.json");
+        std::fs::write(&broken_path, "{ definitely not json")
+            .expect("write unrelated invalid resource");
+
+        let updated = serde_json::json!([{"id": 1, "name": "Ada"}]);
+        write_resource(&state, "users", &updated)
+            .await
+            .expect("healthy localized write must not parse unrelated resources");
+
+        assert_eq!(
+            std::fs::read_to_string(&broken_path).expect("read unrelated resource"),
+            "{ definitely not json"
+        );
+        assert!(state.schema_table("users").is_some());
+        assert!(state.health.is_ready());
+    }
+
+    #[tokio::test]
+    async fn write_resource_preserves_unrelated_not_ready_failure() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.extend(["users".to_string(), "broken".to_string()]);
+        state.health.mark_not_ready("broken resource");
+
+        std::fs::write(temp.path().join("users.json"), "[{\"id\":1}]\n")
+            .expect("write initial resource");
+        std::fs::write(temp.path().join("broken.json"), "{ definitely not json")
+            .expect("write unrelated invalid resource");
+
+        let updated = serde_json::json!([{"id": 1, "name": "Ada"}]);
+        let err = write_resource(&state, "users", &updated)
+            .await
+            .expect_err("not-ready state requires full validation");
+
+        assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!state.health.is_ready());
+        assert!(state.health.last_error().is_some());
+    }
+
+    #[tokio::test]
+    async fn concurrent_local_schema_refreshes_preserve_both_tables() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.extend(["posts".to_string(), "users".to_string()]);
+        std::fs::write(temp.path().join("users.json"), "[{\"id\":1}]\n")
+            .expect("write users resource");
+        std::fs::write(temp.path().join("posts.json"), "[{\"id\":10}]\n")
+            .expect("write posts resource");
+
+        let users = serde_json::json!([{"id": 1, "name": "Ada"}]);
+        let posts = serde_json::json!([{"id": 10, "title": "Hello"}]);
+        let (users_result, posts_result) = tokio::join!(
+            write_resource(&state, "users", &users),
+            write_resource(&state, "posts", &posts),
+        );
+        users_result.expect("users write succeeds");
+        posts_result.expect("posts write succeeds");
+
+        let inferred = state.inferred_schema_snapshot();
+        assert!(inferred.tables.contains_key("users"));
+        assert!(inferred.tables.contains_key("posts"));
     }
 
     #[tokio::test]
