@@ -14,6 +14,7 @@ SCENARIOS = (
     "hot-read-small",
     "hot-read-window",
     "localized-write-small",
+    "localized-write-large",
     "localized-write-ballast",
 )
 
@@ -78,6 +79,7 @@ class BaselineSummaryTests(unittest.TestCase):
                 "hot-read-small": 1.0,
                 "hot-read-window": 2.0,
                 "localized-write-small": 1.0,
+                "localized-write-large": 2.0,
                 "localized-write-ballast": 3.0,
             }
             for scenario in SCENARIOS:
@@ -97,6 +99,8 @@ class BaselineSummaryTests(unittest.TestCase):
             self.assertEqual(baseline["scenarios"]["hot-read-small"]["round_count"], 2)
             read_ratio = baseline["amplification"]["read_source_size"]["ratios"]
             self.assertAlmostEqual(read_ratio["server_request_median_ms"]["median"], 2.0)
+            target_ratio = baseline["amplification"]["write_target_size"]["ratios"]
+            self.assertAlmostEqual(target_ratio["server_request_median_ms"]["median"], 2.0)
             write_ratio = baseline["amplification"]["write_unrelated_state"]["ratios"]
             self.assertAlmostEqual(write_ratio["profiler_wall_time_ms"]["median"], 3.0)
 
