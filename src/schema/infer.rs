@@ -51,42 +51,69 @@ pub fn infer_schema_from_data_source(
 }
 
 pub fn infer_schema_from_values(values: &BTreeMap<String, Value>) -> Schema {
-    let mut tables = BTreeMap::new();
+    let tables = values
+        .iter()
+        .filter_map(|(table_name, value)| {
+            infer_table_from_value(table_name, value).map(|table| (table_name.clone(), table))
+        })
+        .collect();
 
-    for (table_name, value) in values {
-        let Some(rows) = value.as_array() else {
-            continue;
-        };
-        if !rows.iter().all(Value::is_object) {
-            continue;
-        }
+    rebuild_inferred_relations(Schema { tables })
+}
 
-        let mut table = infer_table_schema(rows);
-        table.primary_key = infer_primary_key(table_name, rows);
-        table.kind =
-            if table.primary_key.is_some() { TableKind::Object } else { TableKind::Unknown };
-        tables.insert(table_name.clone(), table);
+pub(crate) fn replace_inferred_table(
+    mut schema: Schema,
+    table_name: &str,
+    value: &Value,
+) -> Schema {
+    if let Some(table) = infer_table_from_value(table_name, value) {
+        schema.tables.insert(table_name.to_string(), table);
+    } else {
+        schema.tables.remove(table_name);
+    }
+    rebuild_inferred_relations(schema)
+}
+
+fn infer_table_from_value(table_name: &str, value: &Value) -> Option<TableSchema> {
+    let rows = value.as_array()?;
+    if !rows.iter().all(Value::is_object) {
+        return None;
     }
 
-    let aliases = build_table_aliases(&tables);
-    let table_names = tables.keys().cloned().collect::<Vec<_>>();
+    let mut table = infer_table_schema(rows);
+    table.primary_key = infer_primary_key(table_name, rows);
+    table.kind = if table.primary_key.is_some() { TableKind::Object } else { TableKind::Unknown };
+    Some(table)
+}
+
+fn rebuild_inferred_relations(mut schema: Schema) -> Schema {
+    for table in schema.tables.values_mut() {
+        table.foreign_keys.clear();
+        table.many_to_many.clear();
+        table.kind = if table.primary_key.is_some() { TableKind::Object } else { TableKind::Unknown };
+    }
+
+    let aliases = build_table_aliases(&schema.tables);
+    let table_names = schema.tables.keys().cloned().collect::<Vec<_>>();
     for table_name in table_names {
-        let foreign_keys = detect_foreign_keys(&table_name, &tables, &aliases, &BTreeSet::new());
-        let inferred_kind = tables
+        let foreign_keys =
+            detect_foreign_keys(&table_name, &schema.tables, &aliases, &BTreeSet::new());
+        let inferred_kind = schema
+            .tables
             .get(&table_name)
             .map(|table| {
                 let mut next = table.clone();
                 next.foreign_keys = foreign_keys.clone();
-                infer_table_kind(&table_name, &next, &tables)
+                infer_table_kind(&table_name, &next, &schema.tables)
             })
             .unwrap_or(TableKind::Unknown);
-        if let Some(table) = tables.get_mut(&table_name) {
+        if let Some(table) = schema.tables.get_mut(&table_name) {
             table.foreign_keys = foreign_keys;
             table.kind = inferred_kind;
         }
     }
 
-    derive_many_to_many_schema(Schema { tables })
+    derive_many_to_many_schema(schema)
 }
 
 fn infer_table_schema(rows: &[Value]) -> TableSchema {
