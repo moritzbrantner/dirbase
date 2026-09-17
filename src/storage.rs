@@ -54,6 +54,8 @@ pub async fn write_resource(
     value: &Value,
 ) -> Result<(), AppError> {
     let file = resource_file_path(&state.data_source, resource)?;
+    let can_refresh_locally =
+        matches!(state.data_source.as_ref(), DataSource::Folder(_)) && state.health.is_ready();
 
     if matches!(state.data_source.as_ref(), DataSource::File(_)) {
         let _guard = state.write_lock_for_resource("__db_file__").await;
@@ -71,17 +73,21 @@ pub async fn write_resource(
     // written value even if rebuilding the effective schema reports an error.
     cache::update_cached_resource(state, resource, value.clone()).await;
 
-    {
+    if can_refresh_locally {
         let mut store = state.schema_store.write().expect("schema store");
         let inferred = replace_inferred_table(store.inferred.clone(), resource, value.as_ref());
         store.replace_inferred(inferred).map_err(AppError::internal)?;
+    } else {
+        // When readiness is already false, retain the previous fail-closed recovery semantics:
+        // only a full refresh may prove that every resource is valid and mark the server ready.
+        // Single-file databases also stay on the conservative full-refresh path in this slice.
+        refresh_inferred_schema(state).await?;
     }
 
     state.invalidate_graphql_schema().await;
     state.emit_event("resource_changed", Some(resource.to_string()));
     state.emit_event("schema_changed", None);
     state.emit_event("overview_changed", None);
-    state.health.mark_ready();
     Ok(())
 }
 
@@ -181,7 +187,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_resource_does_not_reread_unrelated_resource_files() {
+    async fn write_resource_does_not_reread_unrelated_resource_files_while_ready() {
         let temp = tempfile::tempdir().expect("create tempdir");
         let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
         state.resources.write().await.extend(["users".to_string(), "broken".to_string()]);
@@ -195,13 +201,36 @@ mod tests {
         let updated = serde_json::json!([{"id": 1, "name": "Ada"}]);
         write_resource(&state, "users", &updated)
             .await
-            .expect("localized write must not parse unrelated resources");
+            .expect("healthy localized write must not parse unrelated resources");
 
         assert_eq!(
             std::fs::read_to_string(&broken_path).expect("read unrelated resource"),
             "{ definitely not json"
         );
         assert!(state.schema_table("users").is_some());
+        assert!(state.health.is_ready());
+    }
+
+    #[tokio::test]
+    async fn write_resource_preserves_unrelated_not_ready_failure() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.extend(["users".to_string(), "broken".to_string()]);
+        state.health.mark_not_ready("broken resource");
+
+        std::fs::write(temp.path().join("users.json"), "[{\"id\":1}]\n")
+            .expect("write initial resource");
+        std::fs::write(temp.path().join("broken.json"), "{ definitely not json")
+            .expect("write unrelated invalid resource");
+
+        let updated = serde_json::json!([{"id": 1, "name": "Ada"}]);
+        let err = write_resource(&state, "users", &updated)
+            .await
+            .expect_err("not-ready state requires full validation");
+
+        assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!state.health.is_ready());
+        assert!(state.health.last_error().is_some());
     }
 
     #[tokio::test]
