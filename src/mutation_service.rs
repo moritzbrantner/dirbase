@@ -29,7 +29,7 @@ async fn update_locked_resource<T>(
     }
     let result = update(&mut data)?;
     validate_resource_data(state, resource, &data)?;
-    write_resource(state, resource, &data).await?;
+    write_resource(state, resource, data).await?;
     Ok(result)
 }
 
