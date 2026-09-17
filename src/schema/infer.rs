@@ -209,3 +209,68 @@ fn scalar_key(value: &Value) -> Option<String> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn replacing_one_table_recomputes_foreign_keys_on_other_tables() {
+        let initial = infer_schema_from_values(&BTreeMap::from([
+            ("users".to_string(), json!([{"id": 1}, {"id": 2}])),
+            (
+                "posts".to_string(),
+                json!([
+                    {"id": 10, "user_id": 1},
+                    {"id": 11, "user_id": 2}
+                ]),
+            ),
+        ]));
+        assert_eq!(
+            initial.tables["posts"].foreign_keys["user_id"].target_table,
+            "users"
+        );
+
+        let updated = replace_inferred_table(
+            initial,
+            "users",
+            &json!([{"id": "ada"}, {"id": "grace"}]),
+        );
+
+        assert!(
+            !updated.tables["posts"].foreign_keys.contains_key("user_id"),
+            "changing the target key type must invalidate another table's inferred foreign key"
+        );
+    }
+
+    #[test]
+    fn replacing_one_table_rebuilds_many_to_many_metadata() {
+        let initial = infer_schema_from_values(&BTreeMap::from([
+            ("users".to_string(), json!([{"id": 1}, {"id": 2}])),
+            ("teams".to_string(), json!([{"id": 10}, {"id": 11}])),
+            (
+                "memberships".to_string(),
+                json!([
+                    {"user_id": 1, "team_id": 10},
+                    {"user_id": 2, "team_id": 11}
+                ]),
+            ),
+        ]));
+        assert!(initial.tables["users"].many_to_many.contains_key("teams"));
+
+        let updated = replace_inferred_table(
+            initial,
+            "memberships",
+            &json!([
+                {"user_id": 1, "label": "owner"},
+                {"user_id": 2, "label": "member"}
+            ]),
+        );
+
+        assert!(
+            !updated.tables["users"].many_to_many.contains_key("teams"),
+            "changing the junction shape must clear stale many-to-many metadata"
+        );
+    }
+}
