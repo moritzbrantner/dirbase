@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::{
     app::{AppState, DataSource},
     error::AppError,
-    schema::infer_schema_from_data_source,
+    schema::{infer_schema_from_data_source, replace_inferred_table},
 };
 
 pub(crate) use cache::cached_resource_from_value;
@@ -51,19 +51,32 @@ pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value
 pub async fn write_resource(
     state: &AppState,
     resource: &str,
-    value: &Value,
+    value: Value,
 ) -> Result<(), AppError> {
     let file = resource_file_path(&state.data_source, resource)?;
 
     if matches!(state.data_source.as_ref(), DataSource::File(_)) {
         let _guard = state.write_lock_for_resource("__db_file__").await;
-        io::persist_resource_value(&state.data_source, &file, resource, value).await?;
+        io::persist_resource_value(&state.data_source, &file, resource, &value).await?;
     } else {
-        io::persist_resource_value(&state.data_source, &file, resource, value).await?;
+        io::persist_resource_value(&state.data_source, &file, resource, &value).await?;
     }
 
-    cache::update_cached_resource(state, resource, Arc::new(value.clone())).await;
-    refresh_inferred_schema(state).await?;
+    let value = Arc::new(value);
+
+    // Preserve the existing failure behavior: once persistence succeeds, the cache reflects the
+    // written value even if rebuilding the effective schema reports an error. This first update
+    // uses the currently effective table metadata; the second refreshes the index if inference
+    // changes the effective primary key.
+    cache::update_cached_resource(state, resource, value.clone()).await;
+
+    {
+        let mut store = state.schema_store.write().expect("schema store");
+        let inferred = replace_inferred_table(store.inferred.clone(), resource, value.as_ref());
+        store.replace_inferred(inferred).map_err(AppError::internal)?;
+    }
+
+    cache::update_cached_resource(state, resource, value).await;
     state.invalidate_graphql_schema().await;
     state.emit_event("resource_changed", Some(resource.to_string()));
     state.emit_event("schema_changed", None);
@@ -147,7 +160,9 @@ mod tests {
             {"id": 2, "name": "Ada"},
             {"id": 3, "name": "Lin"}
         ]);
-        write_resource(&state, resource, &updated_value).await.expect("atomic write succeeds");
+        write_resource(&state, resource, updated_value.clone())
+            .await
+            .expect("atomic write succeeds");
 
         let final_text = std::fs::read_to_string(&target_file).expect("read final resource file");
         let parsed: Value =
@@ -168,6 +183,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn write_resource_does_not_reread_unrelated_resource_files() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.extend(["users".to_string(), "broken".to_string()]);
+
+        std::fs::write(temp.path().join("users.json"), "[{\"id\":1}]\n")
+            .expect("write initial resource");
+        let broken_path = temp.path().join("broken.json");
+        std::fs::write(&broken_path, "{ definitely not json")
+            .expect("write unrelated invalid resource");
+
+        write_resource(
+            &state,
+            "users",
+            serde_json::json!([{"id": 1, "name": "Ada"}]),
+        )
+        .await
+        .expect("localized write must not parse unrelated resources");
+
+        assert_eq!(
+            std::fs::read_to_string(&broken_path).expect("read unrelated resource"),
+            "{ definitely not json"
+        );
+        assert!(state.schema_table("users").is_some());
+    }
+
+    #[tokio::test]
     async fn write_resource_rejects_non_object_database_file_roots() {
         let temp = tempfile::tempdir().expect("create tempdir");
         let db_path = temp.path().join("db.json");
@@ -176,7 +218,7 @@ mod tests {
         let state = test_state(DataSource::File(PathBuf::from(&db_path)));
         state.resources.write().await.insert("users".to_string());
 
-        let err = write_resource(&state, "users", &serde_json::json!([{"id": 1}]))
+        let err = write_resource(&state, "users", serde_json::json!([{"id": 1}]))
             .await
             .expect_err("write should fail");
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
@@ -190,7 +232,7 @@ mod tests {
         let state = test_state(DataSource::Folder(missing_folder));
         state.resources.write().await.insert("users".to_string());
 
-        let err = write_resource(&state, "users", &serde_json::json!([{"id": 1}]))
+        let err = write_resource(&state, "users", serde_json::json!([{"id": 1}]))
             .await
             .expect_err("write should fail");
         assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
