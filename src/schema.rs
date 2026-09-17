@@ -19,6 +19,7 @@ mod validation;
 pub use infer::infer_schema_from_data_source;
 #[cfg(test)]
 pub use infer::infer_schema_from_values;
+pub(crate) use infer::replace_inferred_table;
 pub use merge::merge_schemas;
 pub use parse_dbml::parse_dbml_schema;
 pub use parse_json::parse_json_schema;
