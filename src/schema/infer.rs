@@ -61,20 +61,7 @@ pub fn infer_schema_from_values(values: &BTreeMap<String, Value>) -> Schema {
     rebuild_inferred_relations(Schema { tables })
 }
 
-pub(crate) fn replace_inferred_table(
-    mut schema: Schema,
-    table_name: &str,
-    value: &Value,
-) -> Schema {
-    if let Some(table) = infer_table_from_value(table_name, value) {
-        schema.tables.insert(table_name.to_string(), table);
-    } else {
-        schema.tables.remove(table_name);
-    }
-    rebuild_inferred_relations(schema)
-}
-
-fn infer_table_from_value(table_name: &str, value: &Value) -> Option<TableSchema> {
+pub(crate) fn infer_table_from_value(table_name: &str, value: &Value) -> Option<TableSchema> {
     let rows = value.as_array()?;
     if !rows.iter().all(Value::is_object) {
         return None;
@@ -84,6 +71,20 @@ fn infer_table_from_value(table_name: &str, value: &Value) -> Option<TableSchema
     table.primary_key = infer_primary_key(table_name, rows);
     table.kind = if table.primary_key.is_some() { TableKind::Object } else { TableKind::Unknown };
     Some(table)
+}
+
+pub(crate) fn replace_inferred_tables(
+    mut schema: Schema,
+    replacements: BTreeMap<String, Option<TableSchema>>,
+) -> Schema {
+    for (table_name, table) in replacements {
+        if let Some(table) = table {
+            schema.tables.insert(table_name, table);
+        } else {
+            schema.tables.remove(&table_name);
+        }
+    }
+    rebuild_inferred_relations(schema)
 }
 
 fn rebuild_inferred_relations(mut schema: Schema) -> Schema {
@@ -232,10 +233,11 @@ mod tests {
             "users"
         );
 
-        let updated = replace_inferred_table(
+        let replacement =
+            infer_table_from_value("users", &json!([{"id": "ada"}, {"id": "grace"}]));
+        let updated = replace_inferred_tables(
             initial,
-            "users",
-            &json!([{"id": "ada"}, {"id": "grace"}]),
+            BTreeMap::from([("users".to_string(), replacement)]),
         );
 
         assert!(
@@ -259,13 +261,16 @@ mod tests {
         ]));
         assert!(initial.tables["users"].many_to_many.contains_key("teams"));
 
-        let updated = replace_inferred_table(
-            initial,
+        let replacement = infer_table_from_value(
             "memberships",
             &json!([
                 {"user_id": 1, "label": "owner"},
                 {"user_id": 2, "label": "member"}
             ]),
+        );
+        let updated = replace_inferred_tables(
+            initial,
+            BTreeMap::from([("memberships".to_string(), replacement)]),
         );
 
         assert!(
