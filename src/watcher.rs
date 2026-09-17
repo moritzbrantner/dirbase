@@ -140,12 +140,14 @@ pub fn start_resource_watcher(
                                 DataSource::File(_) => BTreeMap::new(),
                             };
 
-                            if watcher_requires_full_inference(
+                            let full_inference_required = watcher_requires_full_inference(
                                 &data_source,
                                 &previous_resources,
                                 &new_resources,
                                 health.is_ready(),
-                            ) {
+                            );
+
+                            if full_inference_required {
                                 let schema = match infer_schema_from_data_source(
                                     &data_source,
                                     &new_resources,
@@ -230,7 +232,9 @@ pub fn start_resource_watcher(
                             }
 
                             *graphql_store.blocking_write() = GraphqlStore::default();
-                            health.mark_ready();
+                            if full_inference_required {
+                                health.mark_ready();
+                            }
                             app_state.emit_event("schema_changed", None);
                             app_state.emit_event("overview_changed", None);
                             for resource in changed_resources {
