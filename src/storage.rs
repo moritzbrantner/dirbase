@@ -62,15 +62,13 @@ pub async fn write_resource(
         io::persist_resource_value(&state.data_source, &file, resource, value).await?;
     }
 
-    // Keep the pre-existing copy behavior in this slice so the benchmark isolates the cost of
-    // whole-dataset schema reinference. The next performance slice can remove this clone and
-    // measure that ownership change independently.
+    // Keep the pre-existing copy and cache-index behavior in this slice so the benchmark isolates
+    // the cost of whole-dataset schema reinference. The next performance slice can remove this
+    // clone and measure that ownership change independently.
     let value = Arc::new(value.clone());
 
-    // Preserve the existing failure behavior: once persistence succeeds, the cache reflects the
-    // written value even if rebuilding the effective schema reports an error. This first update
-    // uses the currently effective table metadata; the second refreshes the index if inference
-    // changes the effective primary key.
+    // Preserve existing failure behavior: once persistence succeeds, the cache reflects the
+    // written value even if rebuilding the effective schema reports an error.
     cache::update_cached_resource(state, resource, value.clone()).await;
 
     {
@@ -79,7 +77,6 @@ pub async fn write_resource(
         store.replace_inferred(inferred).map_err(AppError::internal)?;
     }
 
-    cache::update_cached_resource(state, resource, value).await;
     state.invalidate_graphql_schema().await;
     state.emit_event("resource_changed", Some(resource.to_string()));
     state.emit_event("schema_changed", None);
