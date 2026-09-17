@@ -76,7 +76,6 @@ pub fn start_resource_watcher(
                     match scan_resources(&data_source) {
                         Ok(new_resources) => {
                             let previous_resources = resources.blocking_read().clone();
-                            let resource_set_changed = previous_resources != new_resources;
 
                             if schema_definition_changed {
                                 match load_schema(&schema_root, None) {
@@ -143,6 +142,7 @@ pub fn start_resource_watcher(
                                 &data_source,
                                 &previous_resources,
                                 &new_resources,
+                                health.is_ready(),
                             ) {
                                 infer_schema_from_data_source(&data_source, &new_resources)
                                     .map(Some)
@@ -297,8 +297,11 @@ fn watcher_requires_full_inference(
     data_source: &DataSource,
     previous_resources: &BTreeSet<String>,
     new_resources: &BTreeSet<String>,
+    currently_ready: bool,
 ) -> bool {
-    matches!(data_source, DataSource::File(_)) || previous_resources != new_resources
+    !currently_ready
+        || matches!(data_source, DataSource::File(_))
+        || previous_resources != new_resources
 }
 
 fn read_changed_folder_resources(paths: &[PathBuf]) -> Result<BTreeMap<String, Value>, String> {
@@ -414,11 +417,16 @@ mod tests {
     }
 
     #[test]
-    fn watcher_localizes_existing_folder_resource_content_changes() {
+    fn watcher_localizes_existing_folder_resource_content_changes_when_ready() {
         let data_source = DataSource::Folder(PathBuf::from("/tmp/data"));
         let resources = BTreeSet::from(["posts".to_string(), "users".to_string()]);
 
-        assert!(!watcher_requires_full_inference(&data_source, &resources, &resources));
+        assert!(!watcher_requires_full_inference(
+            &data_source,
+            &resources,
+            &resources,
+            true,
+        ));
     }
 
     #[test]
@@ -427,7 +435,12 @@ mod tests {
         let previous = BTreeSet::from(["users".to_string()]);
         let next = BTreeSet::from(["posts".to_string(), "users".to_string()]);
 
-        assert!(watcher_requires_full_inference(&data_source, &previous, &next));
+        assert!(watcher_requires_full_inference(
+            &data_source,
+            &previous,
+            &next,
+            true,
+        ));
     }
 
     #[test]
@@ -435,6 +448,24 @@ mod tests {
         let data_source = DataSource::File(PathBuf::from("/tmp/db.json"));
         let resources = BTreeSet::from(["users".to_string()]);
 
-        assert!(watcher_requires_full_inference(&data_source, &resources, &resources));
+        assert!(watcher_requires_full_inference(
+            &data_source,
+            &resources,
+            &resources,
+            true,
+        ));
+    }
+
+    #[test]
+    fn watcher_full_refreshes_before_recovering_not_ready_state() {
+        let data_source = DataSource::Folder(PathBuf::from("/tmp/data"));
+        let resources = BTreeSet::from(["posts".to_string(), "users".to_string()]);
+
+        assert!(watcher_requires_full_inference(
+            &data_source,
+            &resources,
+            &resources,
+            false,
+        ));
     }
 }
