@@ -14,7 +14,9 @@ use tokio::sync::RwLock;
 
 use crate::{
     app::{AppState, CachedResource, DataSource, GraphqlStore, HealthState, SchemaStore},
-    schema::{infer_schema_from_data_source, load_schema, replace_inferred_table},
+    schema::{
+        infer_schema_from_data_source, infer_table_from_value, load_schema, replace_inferred_tables,
+    },
     storage::{
         cached_resource_from_value, is_reserved_resource_name, is_valid_resource_name,
         scan_resources,
@@ -138,50 +140,60 @@ pub fn start_resource_watcher(
                                 DataSource::File(_) => BTreeMap::new(),
                             };
 
-                            let inferred_result = if watcher_requires_full_inference(
+                            if watcher_requires_full_inference(
                                 &data_source,
                                 &previous_resources,
                                 &new_resources,
                                 health.is_ready(),
                             ) {
-                                infer_schema_from_data_source(&data_source, &new_resources)
-                                    .map(Some)
-                            } else if changed_values.is_empty() {
-                                Ok(None)
-                            } else {
-                                let mut inferred = schema_store
-                                    .read()
-                                    .expect("schema store")
-                                    .inferred
-                                    .clone();
-                                for (resource, value) in &changed_values {
-                                    inferred = replace_inferred_table(inferred, resource, value);
-                                }
-                                Ok(Some(inferred))
-                            };
-
-                            match inferred_result {
-                                Ok(Some(schema)) => {
-                                    if let Err(err) = schema_store
-                                        .write()
-                                        .expect("schema store")
-                                        .replace_inferred(schema)
-                                    {
+                                let schema = match infer_schema_from_data_source(
+                                    &data_source,
+                                    &new_resources,
+                                ) {
+                                    Ok(schema) => schema,
+                                    Err(err) => {
+                                        health.mark_not_ready(err.clone());
                                         tracing::error!(
-                                            "Failed to merge schema for {}: {err}",
+                                            "Failed to infer schema for {}: {err}",
                                             watch_path.display()
                                         );
-                                        health.mark_not_ready(err);
                                         continue;
                                     }
-                                }
-                                Ok(None) => {}
-                                Err(err) => {
-                                    health.mark_not_ready(err.clone());
+                                };
+                                if let Err(err) = schema_store
+                                    .write()
+                                    .expect("schema store")
+                                    .replace_inferred(schema)
+                                {
                                     tracing::error!(
-                                        "Failed to infer schema for {}: {err}",
+                                        "Failed to merge schema for {}: {err}",
                                         watch_path.display()
                                     );
+                                    health.mark_not_ready(err);
+                                    continue;
+                                }
+                            } else if !changed_values.is_empty() {
+                                // Row scanning happens on this dedicated watcher thread before the
+                                // schema write lock is taken. Installation then starts from the
+                                // latest inferred schema so concurrent API writes cannot be lost.
+                                let replacements = changed_values
+                                    .iter()
+                                    .map(|(resource, value)| {
+                                        (
+                                            resource.clone(),
+                                            infer_table_from_value(resource, value),
+                                        )
+                                    })
+                                    .collect::<BTreeMap<_, _>>();
+                                let mut store = schema_store.write().expect("schema store");
+                                let inferred =
+                                    replace_inferred_tables(store.inferred.clone(), replacements);
+                                if let Err(err) = store.replace_inferred(inferred) {
+                                    tracing::error!(
+                                        "Failed to merge schema for {}: {err}",
+                                        watch_path.display()
+                                    );
+                                    health.mark_not_ready(err);
                                     continue;
                                 }
                             }
