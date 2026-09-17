@@ -51,18 +51,21 @@ pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value
 pub async fn write_resource(
     state: &AppState,
     resource: &str,
-    value: Value,
+    value: &Value,
 ) -> Result<(), AppError> {
     let file = resource_file_path(&state.data_source, resource)?;
 
     if matches!(state.data_source.as_ref(), DataSource::File(_)) {
         let _guard = state.write_lock_for_resource("__db_file__").await;
-        io::persist_resource_value(&state.data_source, &file, resource, &value).await?;
+        io::persist_resource_value(&state.data_source, &file, resource, value).await?;
     } else {
-        io::persist_resource_value(&state.data_source, &file, resource, &value).await?;
+        io::persist_resource_value(&state.data_source, &file, resource, value).await?;
     }
 
-    let value = Arc::new(value);
+    // Keep the pre-existing copy behavior in this slice so the benchmark isolates the cost of
+    // whole-dataset schema reinference. The next performance slice can remove this clone and
+    // measure that ownership change independently.
+    let value = Arc::new(value.clone());
 
     // Preserve the existing failure behavior: once persistence succeeds, the cache reflects the
     // written value even if rebuilding the effective schema reports an error. This first update
@@ -160,9 +163,7 @@ mod tests {
             {"id": 2, "name": "Ada"},
             {"id": 3, "name": "Lin"}
         ]);
-        write_resource(&state, resource, updated_value.clone())
-            .await
-            .expect("atomic write succeeds");
+        write_resource(&state, resource, &updated_value).await.expect("atomic write succeeds");
 
         let final_text = std::fs::read_to_string(&target_file).expect("read final resource file");
         let parsed: Value =
@@ -194,13 +195,10 @@ mod tests {
         std::fs::write(&broken_path, "{ definitely not json")
             .expect("write unrelated invalid resource");
 
-        write_resource(
-            &state,
-            "users",
-            serde_json::json!([{"id": 1, "name": "Ada"}]),
-        )
-        .await
-        .expect("localized write must not parse unrelated resources");
+        let updated = serde_json::json!([{"id": 1, "name": "Ada"}]);
+        write_resource(&state, "users", &updated)
+            .await
+            .expect("localized write must not parse unrelated resources");
 
         assert_eq!(
             std::fs::read_to_string(&broken_path).expect("read unrelated resource"),
@@ -218,7 +216,7 @@ mod tests {
         let state = test_state(DataSource::File(PathBuf::from(&db_path)));
         state.resources.write().await.insert("users".to_string());
 
-        let err = write_resource(&state, "users", serde_json::json!([{"id": 1}]))
+        let err = write_resource(&state, "users", &serde_json::json!([{"id": 1}]))
             .await
             .expect_err("write should fail");
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
@@ -232,7 +230,7 @@ mod tests {
         let state = test_state(DataSource::Folder(missing_folder));
         state.resources.write().await.insert("users".to_string());
 
-        let err = write_resource(&state, "users", serde_json::json!([{"id": 1}]))
+        let err = write_resource(&state, "users", &serde_json::json!([{"id": 1}]))
             .await
             .expect_err("write should fail");
         assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
