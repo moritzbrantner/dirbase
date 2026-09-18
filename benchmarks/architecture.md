@@ -28,6 +28,19 @@ Read validity is now an immutable-snapshot admission concern rather than a per-e
 
 `hot-read-declared-small.json` and `hot-read-declared-window.json` repeat the same 8-row query against 8,000 and 48,000-row resources with an explicit declared schema. This pair isolates validation-stage amplification separately from the existing schema-free hot-read source-size pair.
 
+### Collection execution admission
+
+Paginated collection reads now compile one of four deterministic execution lanes before row work begins:
+
+- **direct window**: no filter or sort; slice only the requested page from the immutable source;
+- **filtered window**: scan predicates but retain only the requested page plus a bounded trailing page for exact late-page clamping;
+- **bounded sorted window**: for shallow sorted pages, retain only the best requested prefix plus one trailing page instead of materializing and sorting every match;
+- **full materialization**: preserve the previous path for unbounded queries and deep sorted windows where bounded retention would not be a clear win.
+
+The bounded sorted lane uses original source position as the final comparison key, making it equivalent to the previous stable sort for equal sort values. The planner falls back rather than approximate.
+
+The `dirbase_collection_*` counters expose source rows visited, matched rows, retained sort candidates, output rows, and the selected lane. The existing filtered+sorted 8-row hot-read scenarios should therefore show large source scans when filtering is unavoidable but only a small retained sort working set.
+
 ### Localized write: target-size amplification
 
 `localized-write-small.json` patches one row in an 8,000-row resource. `localized-write-large.json` performs the same patch workload on a 48,000-row target with no unrelated resources.
