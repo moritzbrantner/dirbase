@@ -10,9 +10,11 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{
     app::AppState,
-    query::filters::{
-        FilterCondition, FilterOperator, Pagination, SortColumn, filter_collection_refs,
-        paginate_collection_refs, sort_collection_refs,
+    query::{
+        execution::{execute_collection_query, materialize_collection_result},
+        filters::{
+            FilterCondition, FilterOperator, Pagination, SortColumn, pagination_window,
+        },
     },
     schema::{DeclaredTableSchema, TableSchema},
     storage::{find_item_by_key, load_resource},
@@ -426,23 +428,37 @@ pub(crate) fn build_collection_query_field(
             let items = data.as_array().ok_or_else(|| {
                 GraphqlError::new(format!("Resource '{resource}' is not a JSON array"))
             })?;
-            let mut selected = if args.filters.is_empty() {
-                items.iter().collect::<Vec<_>>()
-            } else {
-                filter_collection_refs(items, &args.filters, table.as_ref())
-            };
-            if !args.sort_columns.is_empty() {
-                sort_collection_refs(selected.as_mut_slice(), &args.sort_columns);
-            }
-            let pagination =
-                args.pagination.unwrap_or(Pagination { page: 1, per_page: selected.len().max(1) });
-            if pagination.per_page > state.config.max_per_page {
+            if let Some(pagination) = args.pagination
+                && pagination.per_page > state.config.max_per_page
+            {
                 return Err(GraphqlError::new(format!(
                     "perPage exceeds configured max of {}",
                     state.config.max_per_page
                 )));
             }
-            let page = paginate_collection_refs(&selected, pagination);
+
+            let mut execution = execute_collection_query(
+                items,
+                &args.filters,
+                &args.sort_columns,
+                args.pagination,
+                table.as_ref(),
+            );
+            if execution.pagination.is_none() {
+                let pagination = Pagination {
+                    page: 1,
+                    per_page: execution.stats.matched_rows.max(1),
+                };
+                if pagination.per_page > state.config.max_per_page {
+                    return Err(GraphqlError::new(format!(
+                        "perPage exceeds configured max of {}",
+                        state.config.max_per_page
+                    )));
+                }
+                execution.pagination =
+                    Some(pagination_window(execution.stats.matched_rows, pagination));
+            }
+            let page = materialize_collection_result(execution);
             let object = page
                 .as_object()
                 .cloned()
