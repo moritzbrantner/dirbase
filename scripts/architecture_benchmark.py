@@ -29,6 +29,18 @@ WORK_ROOT = ROOT / "benchmarks" / ".work" / "architecture"
 
 FIXTURES = {
     "read-large": {"target_rows": 48_000, "ballast_resources": 0, "ballast_rows": 0},
+    "read-declared-small": {
+        "target_rows": 8_000,
+        "ballast_resources": 0,
+        "ballast_rows": 0,
+        "declared_schema": True,
+    },
+    "read-declared-large": {
+        "target_rows": 48_000,
+        "ballast_resources": 0,
+        "ballast_rows": 0,
+        "declared_schema": True,
+    },
     "write-small": {"target_rows": 8_000, "ballast_resources": 0, "ballast_rows": 0},
     "write-large": {"target_rows": 48_000, "ballast_resources": 0, "ballast_rows": 0},
     "write-ballast": {
@@ -60,12 +72,38 @@ def write_json(path: Path, value: Any) -> None:
     path.write_bytes(json_bytes(value) + b"\n")
 
 
-def prepare_fixture(name: str, target_rows: int, ballast_resources: int, ballast_rows: int) -> Path:
+def prepare_fixture(
+    name: str,
+    target_rows: int,
+    ballast_resources: int,
+    ballast_rows: int,
+    declared_schema: bool = False,
+) -> Path:
     fixture = WORK_ROOT / name
     if fixture.exists():
         shutil.rmtree(fixture)
     fixture.mkdir(parents=True)
     write_json(fixture / "target.json", resource_rows(target_rows, "target"))
+    if declared_schema:
+        write_json(
+            fixture / "schema.json",
+            {
+                "tables": {
+                    "target": {
+                        "kind": "object",
+                        "primary_key": "id",
+                        "columns": {
+                            "id": {"column_type": "integer", "nullable": False},
+                            "group": {"column_type": "integer", "nullable": False},
+                            "active": {"column_type": "boolean", "nullable": False},
+                            "value": {"column_type": "integer", "nullable": False},
+                            "label": {"column_type": "string", "nullable": False},
+                        },
+                        "foreign_keys": {},
+                    }
+                }
+            },
+        )
     for index in range(ballast_resources):
         write_json(
             fixture / f"ballast_{index:02d}.json",
