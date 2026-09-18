@@ -409,6 +409,45 @@ mod tests {
     }
 
     #[test]
+    fn filtered_window_clamps_to_short_first_page() {
+        let data = vec![json!({"id": 1, "group": 1}), json!({"id": 2, "group": 0})];
+        let filters = vec![FilterCondition::new(
+            "group".to_string(),
+            FilterOperator::Eq,
+            "1".to_string(),
+        )];
+        let pagination = Pagination { page: 2, per_page: 5 };
+
+        let result = execute_collection_query(&data, &filters, &[], Some(pagination), None);
+        assert_eq!(
+            materialize_collection_result(result),
+            baseline(&data, &filters, &[], pagination)
+        );
+    }
+
+    #[test]
+    fn bounded_sorted_window_clamps_sparse_matches() {
+        let data = (1..=40)
+            .map(|id| json!({"id": id, "selected": id <= 2, "rank": id % 5}))
+            .collect::<Vec<_>>();
+        let filters = vec![FilterCondition::new(
+            "selected".to_string(),
+            FilterOperator::Eq,
+            "true".to_string(),
+        )];
+        let sort = vec![SortColumn { field_path: "rank".to_string(), descending: true }];
+        let pagination = Pagination { page: 2, per_page: 5 };
+
+        let result =
+            execute_collection_query(&data, &filters, &sort, Some(pagination), None);
+        assert_eq!(result.plan, CollectionExecutionPlan::BoundedSortedWindow);
+        assert_eq!(
+            materialize_collection_result(result),
+            baseline(&data, &filters, &sort, pagination)
+        );
+    }
+
+    #[test]
     fn bounded_sorted_window_matches_stable_full_sort_with_ties() {
         let data = (1..=80)
             .map(|id| json!({"id": id, "group": id % 4, "rank": id % 7}))
