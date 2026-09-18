@@ -30,6 +30,7 @@ WORK_ROOT = ROOT / "benchmarks" / ".work" / "architecture"
 FIXTURES = {
     "read-large": {"target_rows": 48_000, "ballast_resources": 0, "ballast_rows": 0},
     "write-small": {"target_rows": 8_000, "ballast_resources": 0, "ballast_rows": 0},
+    "write-large": {"target_rows": 48_000, "ballast_resources": 0, "ballast_rows": 0},
     "write-ballast": {
         "target_rows": 8_000,
         "ballast_resources": 4,

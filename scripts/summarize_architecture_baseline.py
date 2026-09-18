@@ -14,6 +14,7 @@ SCENARIOS = (
     "hot-read-small",
     "hot-read-window",
     "localized-write-small",
+    "localized-write-large",
     "localized-write-ballast",
 )
 AMPLIFICATION_PAIRS = (
@@ -22,6 +23,12 @@ AMPLIFICATION_PAIRS = (
         "hot-read-small",
         "hot-read-window",
         "8k -> 48k source rows with the same 8-row result window",
+    ),
+    (
+        "write_target_size",
+        "localized-write-small",
+        "localized-write-large",
+        "8k -> 48k target rows with no unrelated resources",
     ),
     (
         "write_unrelated_state",

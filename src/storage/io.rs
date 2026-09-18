@@ -3,7 +3,10 @@ use std::{
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -52,28 +55,26 @@ pub async fn persist_resource_value(
     data_source: &DataSource,
     file: &Path,
     resource: &str,
-    value: &Value,
+    value: Arc<Value>,
 ) -> Result<(), AppError> {
     let file_for_write = file.to_path_buf();
     let resource_name = resource.to_string();
-    let value_for_write = value.clone();
 
     match data_source {
-        DataSource::Folder(_) => {
-            let content = serde_json::to_string_pretty(value)
+        DataSource::Folder(_) => tokio::task::spawn_blocking(move || {
+            let content = serde_json::to_string_pretty(value.as_ref())
                 .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            let payload = format!("{content}\n");
-            tokio::task::spawn_blocking(move || write_json_atomically(&file_for_write, payload))
-                .await
-                .map_err(|e| {
-                    AppError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Atomic write task failed: {e}"),
-                    )
-                })?
-        }
+            write_json_atomically(&file_for_write, format!("{content}\n"))
+        })
+        .await
+        .map_err(|e| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Atomic write task failed: {e}"),
+            )
+        })?,
         DataSource::File(_) => tokio::task::spawn_blocking(move || {
-            write_resource_in_db_file(&file_for_write, &resource_name, &value_for_write)
+            write_resource_in_db_file(&file_for_write, &resource_name, value.as_ref())
         })
         .await
         .map_err(|e| {
@@ -427,7 +428,7 @@ fn sync_parent_dir(_parent: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::{collections::BTreeSet, sync::Arc};
 
     use axum::http::StatusCode;
     use serde_json::json;
@@ -508,7 +509,7 @@ mod tests {
             &DataSource::Folder(temp.path().to_path_buf()),
             &path,
             "users",
-            &json!([{"id": 1, "name": "Ada"}]),
+            Arc::new(json!([{"id": 1, "name": "Ada"}])),
         )
         .await
         .expect("persist");
@@ -529,7 +530,7 @@ mod tests {
             &DataSource::File(path.clone()),
             &path,
             "users",
-            &json!([{"id": 2, "name": "Grace"}]),
+            Arc::new(json!([{"id": 2, "name": "Grace"}])),
         )
         .await
         .expect("persist");
@@ -558,13 +559,13 @@ mod tests {
         let users_source = data_source.clone();
         let posts_source = data_source.clone();
         let settings_source = data_source.clone();
-        let users_value = json!([{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]);
-        let posts_value = json!([{"id": 10, "title": "Hello"}, {"id": 11, "title": "World"}]);
-        let settings_value = json!({"theme": "light", "locale": "en"});
+        let users_value = Arc::new(json!([{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]));
+        let posts_value = Arc::new(json!([{"id": 10, "title": "Hello"}, {"id": 11, "title": "World"}]));
+        let settings_value = Arc::new(json!({"theme": "light", "locale": "en"}));
         let (users_result, posts_result, settings_result) = tokio::join!(
-            persist_resource_value(&users_source, &users_path, "users", &users_value),
-            persist_resource_value(&posts_source, &posts_path, "posts", &posts_value),
-            persist_resource_value(&settings_source, &settings_path, "settings", &settings_value)
+            persist_resource_value(&users_source, &users_path, "users", users_value),
+            persist_resource_value(&posts_source, &posts_path, "posts", posts_value),
+            persist_resource_value(&settings_source, &settings_path, "settings", settings_value)
         );
 
         users_result.expect("persist users");

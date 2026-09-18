@@ -25,11 +25,17 @@ The benchmark server starts with the generated fixture as its working directory.
 
 The sixfold source-size change leaves the requested result window unchanged. Comparing the two captures makes whole-resource cloning, repeated parsing, repeated schema work, and pre-window materialization visible as source-size amplification rather than hiding those costs inside aggregate request throughput.
 
+### Localized write: target-size amplification
+
+`localized-write-small.json` patches one row in an 8,000-row resource. `localized-write-large.json` performs the same patch workload on a 48,000-row target with no unrelated resources.
+
+This pair isolates costs that scale with the mutated resource itself: whole-resource clones, serialization, validation, cache-index construction, and changed-table inference. It is intentionally separate from unrelated-state amplification so ownership/copy improvements can be measured without conflating them with global recomputation.
+
 ### Localized write: unrelated-state amplification
 
 `localized-write-small.json` patches one row in an 8,000-row resource. `localized-write-ballast.json` performs the same patch workload against the same 8,000-row target while four unrelated 20,000-row resources are present.
 
-The semantic operation is unchanged. A large increase relative to the small fixture is evidence that mutation cost depends on unrelated state. That is the architectural signal to reduce full-resource copies, global schema reinference, or other whole-world recomputation.
+The semantic operation is unchanged. A large increase relative to the small fixture is evidence that mutation cost depends on unrelated state. That is the architectural signal to reduce global schema reinference or other whole-world recomputation.
 
 The benchmark also hashes unrelated resource files before and after the mutation workload. A local mutation fails the contract if it changes unrelated bytes.
 
@@ -68,11 +74,12 @@ bash scripts/runtime-profile.sh \
   profiles/runtime-profiler/hot-read-window.json
 ```
 
-The four architecture scenarios are:
+The five architecture scenarios are:
 
 - `profiles/runtime-profiler/hot-read-small.json`
 - `profiles/runtime-profiler/hot-read-window.json`
 - `profiles/runtime-profiler/localized-write-small.json`
+- `profiles/runtime-profiler/localized-write-large.json`
 - `profiles/runtime-profiler/localized-write-ballast.json`
 
 Each measured run writes a final Dirbase-specific JSON record under `.artifacts/architecture/`. Runtime Profiler remains the authoritative cross-revision runtime bundle; the JSON record is supporting evidence for interpreting what the server itself did during that scenario.
@@ -88,7 +95,7 @@ The baseline aggregator refuses to combine evidence when any of these identities
 - Runtime Profiler environment fingerprint;
 - paired profiler/server round identity.
 
-For each scenario, the baseline records wall-time samples plus distributions for server startup time, workload time, request median/p95, and sampled server RSS. It also calculates paired distributions for the two architectural amplification signals instead of publishing a single best or last-run ratio.
+For each scenario, the baseline records wall-time samples plus distributions for server startup time, workload time, request median/p95, and sampled server RSS. It also calculates paired distributions for three architectural amplification signals: read source size, write target size, and write unrelated state.
 
 The workflow emits:
 

@@ -53,26 +53,23 @@ pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value
 pub async fn write_resource(
     state: &AppState,
     resource: &str,
-    value: &Value,
+    value: Value,
 ) -> Result<(), AppError> {
     let file = resource_file_path(&state.data_source, resource)?;
     let can_refresh_locally =
         matches!(state.data_source.as_ref(), DataSource::Folder(_)) && state.health.is_ready();
+    let value = Arc::new(value);
 
     if matches!(state.data_source.as_ref(), DataSource::File(_)) {
         let _guard = state.write_lock_for_resource("__db_file__").await;
-        io::persist_resource_value(&state.data_source, &file, resource, value).await?;
+        io::persist_resource_value(&state.data_source, &file, resource, value.clone()).await?;
     } else {
-        io::persist_resource_value(&state.data_source, &file, resource, value).await?;
+        io::persist_resource_value(&state.data_source, &file, resource, value.clone()).await?;
     }
 
-    // Keep the pre-existing copy and cache-index behavior in this slice so the benchmark isolates
-    // the cost of whole-dataset schema reinference. The next performance slice can remove this
-    // clone and measure that ownership change independently.
-    let value = Arc::new(value.clone());
-
-    // Preserve existing failure behavior: once persistence succeeds, the cache reflects the
-    // written value even if rebuilding the effective schema reports an error.
+    // Persistence, cache installation, and schema inference now share this one immutable snapshot.
+    // Once persistence succeeds the cache reflects the written value even if effective-schema
+    // rebuilding reports an error, preserving the previous failure semantics.
     cache::update_cached_resource(state, resource, value.clone()).await;
 
     if can_refresh_locally {
@@ -184,7 +181,7 @@ mod tests {
             {"id": 2, "name": "Ada"},
             {"id": 3, "name": "Lin"}
         ]);
-        write_resource(&state, resource, &updated_value).await.expect("atomic write succeeds");
+        write_resource(&state, resource, updated_value.clone()).await.expect("atomic write succeeds");
 
         let final_text = std::fs::read_to_string(&target_file).expect("read final resource file");
         let parsed: Value =
@@ -217,7 +214,7 @@ mod tests {
             .expect("write unrelated invalid resource");
 
         let updated = serde_json::json!([{"id": 1, "name": "Ada"}]);
-        write_resource(&state, "users", &updated)
+        write_resource(&state, "users", updated)
             .await
             .expect("healthy localized write must not parse unrelated resources");
 
@@ -242,7 +239,7 @@ mod tests {
             .expect("write unrelated invalid resource");
 
         let updated = serde_json::json!([{"id": 1, "name": "Ada"}]);
-        let err = write_resource(&state, "users", &updated)
+        let err = write_resource(&state, "users", updated)
             .await
             .expect_err("not-ready state requires full validation");
 
@@ -264,8 +261,8 @@ mod tests {
         let users = serde_json::json!([{"id": 1, "name": "Ada"}]);
         let posts = serde_json::json!([{"id": 10, "title": "Hello"}]);
         let (users_result, posts_result) = tokio::join!(
-            write_resource(&state, "users", &users),
-            write_resource(&state, "posts", &posts),
+            write_resource(&state, "users", users),
+            write_resource(&state, "posts", posts),
         );
         users_result.expect("users write succeeds");
         posts_result.expect("posts write succeeds");
@@ -284,7 +281,7 @@ mod tests {
         let state = test_state(DataSource::File(PathBuf::from(&db_path)));
         state.resources.write().await.insert("users".to_string());
 
-        let err = write_resource(&state, "users", &serde_json::json!([{"id": 1}]))
+        let err = write_resource(&state, "users", serde_json::json!([{"id": 1}]))
             .await
             .expect_err("write should fail");
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
@@ -298,7 +295,7 @@ mod tests {
         let state = test_state(DataSource::Folder(missing_folder));
         state.resources.write().await.insert("users".to_string());
 
-        let err = write_resource(&state, "users", &serde_json::json!([{"id": 1}]))
+        let err = write_resource(&state, "users", serde_json::json!([{"id": 1}]))
             .await
             .expect_err("write should fail");
         assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
