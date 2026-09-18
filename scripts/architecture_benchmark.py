@@ -333,6 +333,14 @@ def run_workload(binary: Path, fixture_name: str, scenario: str, iterations: int
                 "dirbase_resource_cache_revalidations_total",
                 "dirbase_resource_validation_passes_total",
                 "dirbase_resource_validation_rows_total",
+                "dirbase_collection_direct_window_queries_total",
+                "dirbase_collection_filtered_window_queries_total",
+                "dirbase_collection_bounded_sort_queries_total",
+                "dirbase_collection_full_materialization_queries_total",
+                "dirbase_collection_source_rows_visited_total",
+                "dirbase_collection_matched_rows_total",
+                "dirbase_collection_sort_candidates_retained_total",
+                "dirbase_collection_output_rows_total",
             ),
         )
     finally:
