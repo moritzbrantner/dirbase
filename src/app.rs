@@ -737,6 +737,15 @@ mod tests {
         metrics.record_resource_cache_miss();
         metrics.record_resource_cache_revalidation();
         metrics.record_resource_validation(7);
+        metrics.record_collection_execution(
+            CollectionExecutionPlan::BoundedSortedWindow,
+            CollectionExecutionStats {
+                source_rows_visited: 100,
+                matched_rows: 25,
+                sort_candidates_retained: 16,
+                output_rows: 8,
+            },
+        );
 
         assert_eq!(metrics.auth_failures.load(std::sync::atomic::Ordering::Relaxed), 1);
         assert_eq!(metrics.events_sent.load(std::sync::atomic::Ordering::Relaxed), 2);
@@ -766,6 +775,30 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed),
             7
         );
+        assert_eq!(
+            metrics
+                .collection_bounded_sort_queries_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics
+                .collection_source_rows_visited_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            100
+        );
+        assert_eq!(
+            metrics
+                .collection_sort_candidates_retained_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            16
+        );
+        assert_eq!(
+            metrics
+                .collection_output_rows_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            8
+        );
     }
 
     #[test]
@@ -787,6 +820,14 @@ mod tests {
         assert!(rendered.contains("dirbase_resource_cache_revalidations_total 0"));
         assert!(rendered.contains("dirbase_resource_validation_passes_total 0"));
         assert!(rendered.contains("dirbase_resource_validation_rows_total 0"));
+        assert!(rendered.contains("dirbase_collection_direct_window_queries_total 0"));
+        assert!(rendered.contains("dirbase_collection_filtered_window_queries_total 0"));
+        assert!(rendered.contains("dirbase_collection_bounded_sort_queries_total 0"));
+        assert!(rendered.contains("dirbase_collection_full_materialization_queries_total 0"));
+        assert!(rendered.contains("dirbase_collection_source_rows_visited_total 0"));
+        assert!(rendered.contains("dirbase_collection_matched_rows_total 0"));
+        assert!(rendered.contains("dirbase_collection_sort_candidates_retained_total 0"));
+        assert!(rendered.contains("dirbase_collection_output_rows_total 0"));
     }
 
     #[test]
