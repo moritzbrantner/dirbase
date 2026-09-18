@@ -23,7 +23,11 @@ pub fn sort_collection_refs(items: &mut [&Value], sort_columns: &[SortColumn]) {
     items.sort_by(|a, b| compare_items_by_columns(a, b, sort_columns));
 }
 
-fn compare_items_by_columns(left: &Value, right: &Value, sort_columns: &[SortColumn]) -> Ordering {
+pub(crate) fn compare_items_by_columns(
+    left: &Value,
+    right: &Value,
+    sort_columns: &[SortColumn],
+) -> Ordering {
     for column in sort_columns {
         let mut cmp = compare_optional_values(
             get_value_at_path(left, &column.field_path),
