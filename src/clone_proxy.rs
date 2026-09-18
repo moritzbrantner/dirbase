@@ -17,7 +17,7 @@ use crate::{
     resource_service,
     storage::{
         coerce_id_value, find_item_index_by_key, is_valid_resource_name, load_resource,
-        resource_exists, validate_resource_data, write_resource,
+        resource_exists, validate_resource_snapshot, write_validated_resource,
     },
 };
 
@@ -119,18 +119,21 @@ pub(crate) async fn fetch_item_and_cache(
 }
 
 async fn cache_collection(state: &AppState, resource: &str, value: Value) {
-    if let Err(err) = validate_resource_data(state, resource, &value) {
-        tracing::warn!(
-            resource,
-            error = %err.message,
-            "Clone collection failed local schema validation; skipping cache"
-        );
-        return;
-    }
+    let validation_revision = match validate_resource_snapshot(state, resource, &value) {
+        Ok(revision) => revision,
+        Err(err) => {
+            tracing::warn!(
+                resource,
+                error = %err.message,
+                "Clone collection failed local schema validation; skipping cache"
+            );
+            return;
+        }
+    };
 
     let result = if state.resources.read().await.contains(resource) {
         let _guard = state.write_lock_for_resource(resource).await;
-        write_resource(state, resource, value).await
+        write_validated_resource(state, resource, value, validation_revision).await
     } else {
         resource_service::create_resource(state, resource, value).await.map(|_| ())
     };
@@ -142,7 +145,7 @@ async fn cache_collection(state: &AppState, resource: &str, value: Value) {
 async fn cache_item(state: &AppState, resource: &str, id: &str, item: Value) {
     if !state.resources.read().await.contains(resource) {
         let value = Value::Array(vec![item]);
-        if let Err(err) = validate_resource_data(state, resource, &value) {
+        if let Err(err) = validate_resource_snapshot(state, resource, &value) {
             tracing::warn!(
                 resource,
                 id,
@@ -178,17 +181,22 @@ async fn cache_item(state: &AppState, resource: &str, id: &str, item: Value) {
         }
     };
 
-    if let Err(err) = validate_resource_data(state, resource, &value) {
-        tracing::warn!(
-            resource,
-            id,
-            error = %err.message,
-            "Clone item failed local schema validation; skipping cache"
-        );
-        return;
-    }
+    let validation_revision = match validate_resource_snapshot(state, resource, &value) {
+        Ok(revision) => revision,
+        Err(err) => {
+            tracing::warn!(
+                resource,
+                id,
+                error = %err.message,
+                "Clone item failed local schema validation; skipping cache"
+            );
+            return;
+        }
+    };
 
-    if let Err(err) = write_resource(state, resource, value).await {
+    if let Err(err) =
+        write_validated_resource(state, resource, value, validation_revision).await
+    {
         tracing::warn!(resource, id, error = %err.message, "Failed to persist cloned item");
     }
 }
