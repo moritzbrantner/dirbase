@@ -16,9 +16,9 @@ use crate::{
         overview,
     },
     mutation_service,
-    query::filters::{
-        filter_collection_refs, paginate_collection_refs, parse_collection_query_params,
-        sort_collection_refs,
+    query::{
+        execution::{execute_collection_query, materialize_collection_result},
+        filters::parse_collection_query_params,
     },
     resource_service,
     schema::primary_key_name,
@@ -117,42 +117,32 @@ pub async fn get_collection(
         .as_array()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
 
-    let mut selected = if parsed.filters.is_empty() {
-        items.iter().collect::<Vec<_>>()
-    } else {
-        filter_collection_refs(items, &parsed.filters, None)
-    };
+    let execution = execute_collection_query(
+        items,
+        &parsed.filters,
+        &parsed.sort_columns,
+        parsed.pagination,
+        None,
+    );
+    let mut materialized = materialize_collection_result(execution);
 
-    if !parsed.sort_columns.is_empty() {
-        sort_collection_refs(selected.as_mut_slice(), &parsed.sort_columns);
-    }
-
-    let materialized = if let Some(pagination) = parsed.pagination {
-        let mut paginated = paginate_collection_refs(&selected, pagination);
-        if parsed.embeds.is_empty() {
-            paginated
-        } else {
-            let data_field = paginated.get_mut("data").ok_or_else(|| {
+    if !parsed.embeds.is_empty() {
+        if parsed.pagination.is_some() {
+            let data_field = materialized.get_mut("data").ok_or_else(|| {
                 AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "Missing page data")
             })?;
-            let embedded_page = embed_collection_data(
+            *data_field = embed_collection_data(
                 &state,
                 &resource,
                 std::mem::replace(data_field, Value::Array(Vec::new())),
                 &parsed.embeds,
             )
             .await?;
-            *data_field = embedded_page;
-            paginated
-        }
-    } else {
-        let selected = Value::Array(selected.into_iter().cloned().collect());
-        if parsed.embeds.is_empty() {
-            selected
         } else {
-            embed_collection_data(&state, &resource, selected, &parsed.embeds).await?
+            materialized =
+                embed_collection_data(&state, &resource, materialized, &parsed.embeds).await?;
         }
-    };
+    }
 
     Ok(Json(materialized).into_response())
 }
