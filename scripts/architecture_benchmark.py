@@ -124,6 +124,11 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def request_text(base_url: str, path: str) -> str:
+    with urlopen(f"{base_url}{path}", timeout=15) as response:
+        return response.read().decode("utf-8")
+
+
 def request_json(base_url: str, method: str, path: str, body: Any | None = None) -> Any:
     data = None if body is None else json_bytes(body)
     request = Request(
@@ -141,6 +146,20 @@ def request_json(base_url: str, method: str, path: str, body: Any | None = None)
     except URLError as error:
         raise RuntimeError(f"{method} {path} failed: {error}") from error
     return json.loads(payload)
+
+
+def prometheus_metrics(base_url: str, names: tuple[str, ...]) -> dict[str, int | None]:
+    values = {name: None for name in names}
+    for line in request_text(base_url, "/metrics").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        name, _, raw_value = line.partition(" ")
+        if name in values:
+            try:
+                values[name] = int(float(raw_value))
+            except ValueError:
+                values[name] = None
+    return values
 
 
 def wait_until_ready(base_url: str, process: subprocess.Popen[bytes], timeout_seconds: float = 20.0) -> None:
@@ -306,6 +325,16 @@ def run_workload(binary: Path, fixture_name: str, scenario: str, iterations: int
                 raise RuntimeError(f"unsupported scenario: {scenario}")
         workload_ms = (time.perf_counter() - started) * 1000.0
         peak_rss_kib = rss.peak_kib
+        work = prometheus_metrics(
+            base_url,
+            (
+                "dirbase_resource_cache_hits_total",
+                "dirbase_resource_cache_misses_total",
+                "dirbase_resource_cache_revalidations_total",
+                "dirbase_resource_validation_passes_total",
+                "dirbase_resource_validation_rows_total",
+            ),
+        )
     finally:
         stop_server(process)
     return {
@@ -321,6 +350,7 @@ def run_workload(binary: Path, fixture_name: str, scenario: str, iterations: int
             "max": round(max(samples), 3),
         },
         "server_peak_rss_kib": peak_rss_kib,
+        "work": work,
         "semantic": semantic,
     }
 
