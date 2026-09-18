@@ -38,7 +38,7 @@ pub fn get_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> 
     Some(current)
 }
 
-fn item_matches_filters(
+pub(crate) fn item_matches_filters(
     item: &Value,
     filters: &[FilterCondition],
     table: Option<&TableSchema>,
