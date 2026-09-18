@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::PathBuf,
     sync::{
         Arc, RwLock as StdRwLock,
@@ -58,7 +58,8 @@ pub struct SchemaStore {
     pub declared: Option<DeclaredSchema>,
     pub inferred: Schema,
     pub merged: Schema,
-    declared_revision: u64,
+    declared_revisions: BTreeMap<String, u64>,
+    next_declared_revision: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -120,7 +121,13 @@ pub struct ServerEvent {
 impl SchemaStore {
     pub fn new(declared: Option<DeclaredSchema>, inferred: Schema) -> Result<Self, String> {
         let merged = merge_schemas(declared.as_ref(), &inferred)?;
-        Ok(Self { declared, inferred, merged, declared_revision: 0 })
+        Ok(Self {
+            declared,
+            inferred,
+            merged,
+            declared_revisions: BTreeMap::new(),
+            next_declared_revision: 0,
+        })
     }
 
     pub fn replace_inferred(&mut self, inferred: Schema) -> Result<(), String> {
@@ -131,18 +138,42 @@ impl SchemaStore {
 
     pub fn replace_declared(&mut self, declared: Option<DeclaredSchema>) -> Result<(), String> {
         let merged = merge_schemas(declared.as_ref(), &self.inferred)?;
+        let previous_tables = self
+            .declared
+            .as_ref()
+            .map(|schema| &schema.tables);
+        let next_tables = declared.as_ref().map(|schema| &schema.tables);
+        let changed_resources = previous_tables
+            .into_iter()
+            .flat_map(|tables| tables.keys())
+            .chain(next_tables.into_iter().flat_map(|tables| tables.keys()))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        for resource in changed_resources {
+            let previous = self
+                .declared
+                .as_ref()
+                .and_then(|schema| schema.tables.get(&resource));
+            let next = declared
+                .as_ref()
+                .and_then(|schema| schema.tables.get(&resource));
+            if previous == next {
+                continue;
+            }
+            self.next_declared_revision = self.next_declared_revision.wrapping_add(1);
+            self.declared_revisions
+                .insert(resource, self.next_declared_revision);
+        }
+
         self.declared = declared;
         self.merged = merged;
-        self.declared_revision = self.declared_revision.wrapping_add(1);
         Ok(())
     }
 
-    pub fn validation_snapshot(
-        &self,
-        resource: &str,
-    ) -> (u64, Option<DeclaredTableSchema>) {
+    pub fn validation_snapshot(&self, resource: &str) -> (u64, Option<DeclaredTableSchema>) {
         (
-            self.declared_revision,
+            self.declared_revisions.get(resource).copied().unwrap_or(0),
             self.declared
                 .as_ref()
                 .and_then(|schema| schema.tables.get(resource).cloned()),
@@ -554,6 +585,43 @@ mod tests {
         assert_eq!(users.kind, TableKind::Relation);
         assert!(users.columns.contains_key("email"));
         assert!(users.foreign_keys.contains_key("manager_id"));
+    }
+
+    #[test]
+    fn declared_validation_revisions_only_advance_for_changed_resources() {
+        let mut store = SchemaStore::new(
+            Some(DeclaredSchema {
+                tables: BTreeMap::from([
+                    ("users".to_string(), declared_schema().tables["users"].clone()),
+                    (
+                        "posts".to_string(),
+                        DeclaredTableSchema {
+                            columns: BTreeMap::from([column(
+                                "title",
+                                ColumnType::String,
+                                false,
+                            )]),
+                            ..DeclaredTableSchema::default()
+                        },
+                    ),
+                ]),
+            }),
+            inferred_schema(),
+        )
+        .expect("schema store");
+        let users_before = store.validation_snapshot("users").0;
+        let posts_before = store.validation_snapshot("posts").0;
+
+        let mut next = store.declared.clone().expect("declared schema");
+        next.tables
+            .get_mut("users")
+            .expect("users")
+            .columns
+            .insert("active".to_string(), ColumnSchema::new(ColumnType::Boolean, true));
+        store.replace_declared(Some(next)).expect("replace declared");
+
+        assert_ne!(store.validation_snapshot("users").0, users_before);
+        assert_eq!(store.validation_snapshot("posts").0, posts_before);
     }
 
     #[test]
