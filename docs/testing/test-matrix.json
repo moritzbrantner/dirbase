@@ -730,6 +730,10 @@
         "sort_collection_refs",
         "pagination_window",
         "paginate_collection_refs",
+        "CollectionExecutionPlan",
+        "CollectionExecutionStats",
+        "execute_collection_query",
+        "materialize_collection_result",
         "get_value_at_path",
         "value_to_filter_string"
       ],
@@ -748,6 +752,39 @@
           "test_type": "unit",
           "asserts": [
             "operator matrix covers nested, missing, null, and string comparisons"
+          ]
+        },
+        {
+          "test": "direct_window_does_not_visit_unrequested_rows",
+          "path": "src/query/execution.rs",
+          "test_type": "unit",
+          "asserts": [
+            "plain pagination slices the source directly without visiting unrelated rows"
+          ]
+        },
+        {
+          "test": "filtered_window_matches_full_pipeline_and_clamps_late_page",
+          "path": "src/query/execution.rs",
+          "test_type": "unit",
+          "asserts": [
+            "streaming filtered windows preserve the existing clamped-page response contract"
+          ]
+        },
+        {
+          "test": "bounded_sorted_window_matches_stable_full_sort_with_ties",
+          "path": "src/query/execution.rs",
+          "test_type": "unit",
+          "asserts": [
+            "bounded sorted windows match stable full-sort semantics including equal sort keys",
+            "bounded pagination retains fewer sort candidates than all matches"
+          ]
+        },
+        {
+          "test": "deep_sorted_window_falls_back_to_full_materialization",
+          "path": "src/query/execution.rs",
+          "test_type": "unit",
+          "asserts": [
+            "deep sorted windows preserve semantics through the conservative full-materialization fallback"
           ]
         },
         {
