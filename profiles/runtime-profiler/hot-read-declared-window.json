@@ -14,7 +14,7 @@
       "--iterations",
       "160",
       "--output",
-      ".artifacts/architecture/hot-read-declared-large.json"
+      ".artifacts/architecture/hot-read-declared-window.json"
     ],
     "working_directory": "../.."
   },
