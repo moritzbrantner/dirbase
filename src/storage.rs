@@ -144,7 +144,7 @@ pub(crate) async fn refresh_inferred_schema(state: &AppState) -> Result<(), AppE
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeSet, HashMap},
+        collections::{BTreeMap, BTreeSet, HashMap},
         path::PathBuf,
         sync::Arc,
     };
@@ -152,7 +152,26 @@ mod tests {
     use tokio::sync::RwLock;
 
     use super::*;
-    use crate::app::{AppState, DataSource};
+    use crate::{
+        app::{AppState, DataSource},
+        schema::{ColumnSchema, ColumnType, DeclaredSchema, DeclaredTableSchema},
+    };
+
+    fn declared_users_schema(name_type: ColumnType) -> DeclaredSchema {
+        DeclaredSchema {
+            tables: BTreeMap::from([(
+                "users".to_string(),
+                DeclaredTableSchema {
+                    primary_key: Some("id".to_string()),
+                    columns: BTreeMap::from([
+                        ("id".to_string(), ColumnSchema::new(ColumnType::Integer, false)),
+                        ("name".to_string(), ColumnSchema::new(name_type, false)),
+                    ]),
+                    ..DeclaredTableSchema::default()
+                },
+            )]),
+        }
+    }
 
     fn test_state(data_source: DataSource) -> AppState {
         AppState {
@@ -180,6 +199,90 @@ mod tests {
             health: Arc::new(crate::app::HealthState::new(true, None)),
             event_bus: tokio::sync::broadcast::channel(16).0,
         }
+    }
+
+    #[tokio::test]
+    async fn load_resource_validates_immutable_snapshot_once_per_declared_revision() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.insert("users".to_string());
+        state
+            .update_declared_schema(Some(declared_users_schema(ColumnType::String)))
+            .expect("declared schema");
+        std::fs::write(
+            temp.path().join("users.json"),
+            r#"[{"id":1,"name":"Ada"},{"id":2,"name":"Grace"},{"id":3,"name":"Lin"}]"#,
+        )
+        .expect("write users");
+
+        let first = load_resource(&state, "users").await.expect("first load");
+        let second = load_resource(&state, "users").await.expect("second load");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(
+            state
+                .metrics
+                .resource_cache_misses_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state
+                .metrics
+                .resource_cache_hits_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state
+                .metrics
+                .resource_validation_passes_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state
+                .metrics
+                .resource_validation_rows_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn declared_schema_change_revalidates_cached_snapshot_before_read() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.insert("users".to_string());
+        state
+            .update_declared_schema(Some(declared_users_schema(ColumnType::String)))
+            .expect("initial declared schema");
+        std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
+            .expect("write users");
+
+        load_resource(&state, "users").await.expect("initial valid load");
+        state
+            .update_declared_schema(Some(declared_users_schema(ColumnType::Integer)))
+            .expect("updated declared schema");
+
+        let err = load_resource(&state, "users")
+            .await
+            .expect_err("cached snapshot must be revalidated");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            state
+                .metrics
+                .resource_cache_revalidations_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state
+                .metrics
+                .resource_validation_passes_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
     }
 
     #[tokio::test]
