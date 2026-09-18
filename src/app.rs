@@ -11,7 +11,10 @@ use async_graphql::dynamic::Schema as DynamicSchema;
 use axum::http::{HeaderName, HeaderValue};
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock, broadcast};
 
-use crate::schema::{DeclaredSchema, DeclaredTableSchema, Schema, TableSchema, merge_schemas};
+use crate::{
+    query::execution::{CollectionExecutionPlan, CollectionExecutionStats},
+    schema::{DeclaredSchema, DeclaredTableSchema, Schema, TableSchema, merge_schemas},
+};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -103,6 +106,14 @@ pub struct MetricsStore {
     pub resource_cache_revalidations_total: AtomicU64,
     pub resource_validation_passes_total: AtomicU64,
     pub resource_validation_rows_total: AtomicU64,
+    pub collection_direct_window_queries_total: AtomicU64,
+    pub collection_filtered_window_queries_total: AtomicU64,
+    pub collection_bounded_sort_queries_total: AtomicU64,
+    pub collection_full_materialization_queries_total: AtomicU64,
+    pub collection_source_rows_visited_total: AtomicU64,
+    pub collection_matched_rows_total: AtomicU64,
+    pub collection_sort_candidates_retained_total: AtomicU64,
+    pub collection_output_rows_total: AtomicU64,
 }
 
 #[derive(Debug, Default)]
@@ -219,6 +230,42 @@ impl MetricsStore {
             .fetch_add(u64::try_from(rows).unwrap_or(u64::MAX), Ordering::Relaxed);
     }
 
+    pub fn record_collection_execution(
+        &self,
+        plan: CollectionExecutionPlan,
+        stats: CollectionExecutionStats,
+    ) {
+        let plan_counter = match plan {
+            CollectionExecutionPlan::DirectWindow => &self.collection_direct_window_queries_total,
+            CollectionExecutionPlan::FilteredWindow => {
+                &self.collection_filtered_window_queries_total
+            }
+            CollectionExecutionPlan::BoundedSortedWindow => {
+                &self.collection_bounded_sort_queries_total
+            }
+            CollectionExecutionPlan::FullMaterialization => {
+                &self.collection_full_materialization_queries_total
+            }
+        };
+        plan_counter.fetch_add(1, Ordering::Relaxed);
+        self.collection_source_rows_visited_total.fetch_add(
+            u64::try_from(stats.source_rows_visited).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.collection_matched_rows_total.fetch_add(
+            u64::try_from(stats.matched_rows).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.collection_sort_candidates_retained_total.fetch_add(
+            u64::try_from(stats.sort_candidates_retained).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.collection_output_rows_total.fetch_add(
+            u64::try_from(stats.output_rows).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
+
     pub fn render_prometheus(&self) -> String {
         format!(
             concat!(
@@ -251,7 +298,31 @@ impl MetricsStore {
                 "dirbase_resource_validation_passes_total {}\n",
                 "# HELP dirbase_resource_validation_rows_total Rows examined by full resource validation admissions.\n",
                 "# TYPE dirbase_resource_validation_rows_total counter\n",
-                "dirbase_resource_validation_rows_total {}\n"
+                "dirbase_resource_validation_rows_total {}\n",
+                "# HELP dirbase_collection_direct_window_queries_total Collection queries served by direct source slicing.\n",
+                "# TYPE dirbase_collection_direct_window_queries_total counter\n",
+                "dirbase_collection_direct_window_queries_total {}\n",
+                "# HELP dirbase_collection_filtered_window_queries_total Collection queries served by streaming filtered windows.\n",
+                "# TYPE dirbase_collection_filtered_window_queries_total counter\n",
+                "dirbase_collection_filtered_window_queries_total {}\n",
+                "# HELP dirbase_collection_bounded_sort_queries_total Collection queries served by bounded sorted windows.\n",
+                "# TYPE dirbase_collection_bounded_sort_queries_total counter\n",
+                "dirbase_collection_bounded_sort_queries_total {}\n",
+                "# HELP dirbase_collection_full_materialization_queries_total Collection queries using full candidate materialization.\n",
+                "# TYPE dirbase_collection_full_materialization_queries_total counter\n",
+                "dirbase_collection_full_materialization_queries_total {}\n",
+                "# HELP dirbase_collection_source_rows_visited_total Source rows visited by collection execution.\n",
+                "# TYPE dirbase_collection_source_rows_visited_total counter\n",
+                "dirbase_collection_source_rows_visited_total {}\n",
+                "# HELP dirbase_collection_matched_rows_total Rows matching collection filters.\n",
+                "# TYPE dirbase_collection_matched_rows_total counter\n",
+                "dirbase_collection_matched_rows_total {}\n",
+                "# HELP dirbase_collection_sort_candidates_retained_total Sort candidates retained in memory across collection execution.\n",
+                "# TYPE dirbase_collection_sort_candidates_retained_total counter\n",
+                "dirbase_collection_sort_candidates_retained_total {}\n",
+                "# HELP dirbase_collection_output_rows_total Rows materialized into collection responses.\n",
+                "# TYPE dirbase_collection_output_rows_total counter\n",
+                "dirbase_collection_output_rows_total {}\n"
             ),
             self.requests_total.load(Ordering::Relaxed),
             self.responses_total.load(Ordering::Relaxed),
@@ -263,6 +334,14 @@ impl MetricsStore {
             self.resource_cache_revalidations_total.load(Ordering::Relaxed),
             self.resource_validation_passes_total.load(Ordering::Relaxed),
             self.resource_validation_rows_total.load(Ordering::Relaxed),
+            self.collection_direct_window_queries_total.load(Ordering::Relaxed),
+            self.collection_filtered_window_queries_total.load(Ordering::Relaxed),
+            self.collection_bounded_sort_queries_total.load(Ordering::Relaxed),
+            self.collection_full_materialization_queries_total.load(Ordering::Relaxed),
+            self.collection_source_rows_visited_total.load(Ordering::Relaxed),
+            self.collection_matched_rows_total.load(Ordering::Relaxed),
+            self.collection_sort_candidates_retained_total.load(Ordering::Relaxed),
+            self.collection_output_rows_total.load(Ordering::Relaxed),
         )
     }
 }
