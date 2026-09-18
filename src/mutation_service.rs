@@ -548,9 +548,7 @@ mod tests {
         write_json(&path, &json!([{"id": 1, "name": "Ada"}]));
         let state = test_state_for_folder(temp.path(), &["users"], Some(users_declared_schema()));
 
-        patch_item(&state, "users", "1", json!({"name": "Grace"}))
-            .await
-            .expect("patch");
+        patch_item(&state, "users", "1", json!({"name": "Grace"})).await.expect("patch");
         let loaded = load_resource(&state, "users").await.expect("read after patch");
 
         assert_eq!(loaded[0]["name"], "Grace");

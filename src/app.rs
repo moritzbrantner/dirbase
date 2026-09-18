@@ -138,10 +138,7 @@ impl SchemaStore {
 
     pub fn replace_declared(&mut self, declared: Option<DeclaredSchema>) -> Result<(), String> {
         let merged = merge_schemas(declared.as_ref(), &self.inferred)?;
-        let previous_tables = self
-            .declared
-            .as_ref()
-            .map(|schema| &schema.tables);
+        let previous_tables = self.declared.as_ref().map(|schema| &schema.tables);
         let next_tables = declared.as_ref().map(|schema| &schema.tables);
         let changed_resources = previous_tables
             .into_iter()
@@ -151,19 +148,13 @@ impl SchemaStore {
             .collect::<BTreeSet<_>>();
 
         for resource in changed_resources {
-            let previous = self
-                .declared
-                .as_ref()
-                .and_then(|schema| schema.tables.get(&resource));
-            let next = declared
-                .as_ref()
-                .and_then(|schema| schema.tables.get(&resource));
+            let previous = self.declared.as_ref().and_then(|schema| schema.tables.get(&resource));
+            let next = declared.as_ref().and_then(|schema| schema.tables.get(&resource));
             if previous == next {
                 continue;
             }
             self.next_declared_revision = self.next_declared_revision.wrapping_add(1);
-            self.declared_revisions
-                .insert(resource, self.next_declared_revision);
+            self.declared_revisions.insert(resource, self.next_declared_revision);
         }
 
         self.declared = declared;
@@ -174,9 +165,7 @@ impl SchemaStore {
     pub fn validation_snapshot(&self, resource: &str) -> (u64, Option<DeclaredTableSchema>) {
         (
             self.declared_revisions.get(resource).copied().unwrap_or(0),
-            self.declared
-                .as_ref()
-                .and_then(|schema| schema.tables.get(resource).cloned()),
+            self.declared.as_ref().and_then(|schema| schema.tables.get(resource).cloned()),
         )
     }
 }
@@ -312,14 +301,8 @@ impl AppState {
         self.validation_schema_snapshot(resource).1
     }
 
-    pub fn validation_schema_snapshot(
-        &self,
-        resource: &str,
-    ) -> (u64, Option<DeclaredTableSchema>) {
-        self.schema_store
-            .read()
-            .expect("schema store")
-            .validation_snapshot(resource)
+    pub fn validation_schema_snapshot(&self, resource: &str) -> (u64, Option<DeclaredTableSchema>) {
+        self.schema_store.read().expect("schema store").validation_snapshot(resource)
     }
 
     pub fn update_inferred_schema(&self, inferred: Schema) -> Result<(), String> {
@@ -596,11 +579,7 @@ mod tests {
                     (
                         "posts".to_string(),
                         DeclaredTableSchema {
-                            columns: BTreeMap::from([column(
-                                "title",
-                                ColumnType::String,
-                                false,
-                            )]),
+                            columns: BTreeMap::from([column("title", ColumnType::String, false)]),
                             ..DeclaredTableSchema::default()
                         },
                     ),
@@ -661,30 +640,21 @@ mod tests {
 
         assert_eq!(metrics.auth_failures.load(std::sync::atomic::Ordering::Relaxed), 1);
         assert_eq!(metrics.events_sent.load(std::sync::atomic::Ordering::Relaxed), 2);
-        assert_eq!(
-            metrics.resource_cache_hits_total.load(std::sync::atomic::Ordering::Relaxed),
-            1
-        );
+        assert_eq!(metrics.resource_cache_hits_total.load(std::sync::atomic::Ordering::Relaxed), 1);
         assert_eq!(
             metrics.resource_cache_misses_total.load(std::sync::atomic::Ordering::Relaxed),
             1
         );
         assert_eq!(
-            metrics
-                .resource_cache_revalidations_total
-                .load(std::sync::atomic::Ordering::Relaxed),
+            metrics.resource_cache_revalidations_total.load(std::sync::atomic::Ordering::Relaxed),
             1
         );
         assert_eq!(
-            metrics
-                .resource_validation_passes_total
-                .load(std::sync::atomic::Ordering::Relaxed),
+            metrics.resource_validation_passes_total.load(std::sync::atomic::Ordering::Relaxed),
             1
         );
         assert_eq!(
-            metrics
-                .resource_validation_rows_total
-                .load(std::sync::atomic::Ordering::Relaxed),
+            metrics.resource_validation_rows_total.load(std::sync::atomic::Ordering::Relaxed),
             7
         );
     }

@@ -194,9 +194,7 @@ async fn cache_item(state: &AppState, resource: &str, id: &str, item: Value) {
         }
     };
 
-    if let Err(err) =
-        write_validated_resource(state, resource, value, validation_revision).await
-    {
+    if let Err(err) = write_validated_resource(state, resource, value, validation_revision).await {
         tracing::warn!(resource, id, error = %err.message, "Failed to persist cloned item");
     }
 }

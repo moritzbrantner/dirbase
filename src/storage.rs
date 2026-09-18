@@ -11,9 +11,7 @@ use serde_json::Value;
 use crate::{
     app::{AppState, DataSource},
     error::AppError,
-    schema::{
-        infer_schema_from_data_source, infer_table_from_value, replace_inferred_tables,
-    },
+    schema::{infer_schema_from_data_source, infer_table_from_value, replace_inferred_tables},
 };
 
 pub(crate) use cache::cached_resource_from_value;
@@ -43,13 +41,8 @@ pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value
         let value = cached.value;
         let validation_revision =
             validation::validate_resource_snapshot(state, resource, value.as_ref())?;
-        cache::mark_cached_resource_validated(
-            state,
-            resource,
-            value.clone(),
-            validation_revision,
-        )
-        .await;
+        cache::mark_cached_resource_validated(state, resource, value.clone(), validation_revision)
+            .await;
         return Ok(value);
     }
 
@@ -64,7 +57,8 @@ pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value
     let value = Arc::new(io::read_resource_value(&state.data_source, &file, resource).await?);
     let validation_revision =
         validation::validate_resource_snapshot(state, resource, value.as_ref())?;
-    cache::mark_cached_resource_validated(state, resource, value.clone(), validation_revision).await;
+    cache::mark_cached_resource_validated(state, resource, value.clone(), validation_revision)
+        .await;
     Ok(value)
 }
 
@@ -140,13 +134,8 @@ async fn write_resource_snapshot(
     // If declared schema changed concurrently, the older revision remains visible and the next read
     // revalidates before trusting it.
     if let Some(validation_revision) = validation_revision {
-        cache::mark_cached_resource_validated(
-            state,
-            resource,
-            value.clone(),
-            validation_revision,
-        )
-        .await;
+        cache::mark_cached_resource_validated(state, resource, value.clone(), validation_revision)
+            .await;
     }
 
     state.invalidate_graphql_schema().await;
@@ -253,17 +242,11 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(
-            state
-                .metrics
-                .resource_cache_misses_total
-                .load(std::sync::atomic::Ordering::Relaxed),
+            state.metrics.resource_cache_misses_total.load(std::sync::atomic::Ordering::Relaxed),
             1
         );
         assert_eq!(
-            state
-                .metrics
-                .resource_cache_hits_total
-                .load(std::sync::atomic::Ordering::Relaxed),
+            state.metrics.resource_cache_hits_total.load(std::sync::atomic::Ordering::Relaxed),
             1
         );
         assert_eq!(
@@ -274,10 +257,7 @@ mod tests {
             1
         );
         assert_eq!(
-            state
-                .metrics
-                .resource_validation_rows_total
-                .load(std::sync::atomic::Ordering::Relaxed),
+            state.metrics.resource_validation_rows_total.load(std::sync::atomic::Ordering::Relaxed),
             3
         );
     }
@@ -298,9 +278,8 @@ mod tests {
             .update_declared_schema(Some(declared_users_schema(ColumnType::Integer)))
             .expect("updated declared schema");
 
-        let err = load_resource(&state, "users")
-            .await
-            .expect_err("cached snapshot must be revalidated");
+        let err =
+            load_resource(&state, "users").await.expect_err("cached snapshot must be revalidated");
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert_eq!(
             state
@@ -334,7 +313,9 @@ mod tests {
             {"id": 2, "name": "Ada"},
             {"id": 3, "name": "Lin"}
         ]);
-        write_resource(&state, resource, updated_value.clone()).await.expect("atomic write succeeds");
+        write_resource(&state, resource, updated_value.clone())
+            .await
+            .expect("atomic write succeeds");
 
         let final_text = std::fs::read_to_string(&target_file).expect("read final resource file");
         let parsed: Value =
