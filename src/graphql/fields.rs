@@ -444,6 +444,9 @@ pub(crate) fn build_collection_query_field(
                 args.pagination,
                 table.as_ref(),
             );
+            state
+                .metrics
+                .record_collection_execution(execution.plan, execution.stats);
             if execution.pagination.is_none() {
                 let pagination = Pagination {
                     page: 1,
