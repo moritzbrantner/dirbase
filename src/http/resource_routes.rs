@@ -124,6 +124,9 @@ pub async fn get_collection(
         parsed.pagination,
         None,
     );
+    state
+        .metrics
+        .record_collection_execution(execution.plan, execution.stats);
     let mut materialized = materialize_collection_result(execution);
 
     if !parsed.embeds.is_empty() {
