@@ -30,13 +30,29 @@ pub use validation::{validate_resource_data, validate_sql_identifier};
 
 pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value>, AppError> {
     let file = resource_file_path(&state.data_source, resource)?;
+    let current_validation_revision = state.validation_schema_snapshot(resource).0;
 
-    if let Some(value) =
-        state.resource_cache.read().await.get(resource).map(|cached| cached.value.clone())
-    {
+    if let Some(cached) = state.resource_cache.read().await.get(resource).cloned() {
+        if cached.validation_revision == Some(current_validation_revision) {
+            state.metrics.record_resource_cache_hit();
+            return Ok(cached.value);
+        }
+
+        state.metrics.record_resource_cache_revalidation();
+        let value = cached.value;
+        let validation_revision =
+            validation::validate_resource_snapshot(state, resource, value.as_ref())?;
+        cache::mark_cached_resource_validated(
+            state,
+            resource,
+            value.clone(),
+            validation_revision,
+        )
+        .await;
         return Ok(value);
     }
 
+    state.metrics.record_resource_cache_miss();
     if !state.resources.read().await.contains(resource) {
         return Err(AppError::new(
             StatusCode::NOT_FOUND,
@@ -45,8 +61,9 @@ pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value
     }
 
     let value = Arc::new(io::read_resource_value(&state.data_source, &file, resource).await?);
-
-    cache::update_cached_resource(state, resource, value.clone()).await;
+    let validation_revision =
+        validation::validate_resource_snapshot(state, resource, value.as_ref())?;
+    cache::mark_cached_resource_validated(state, resource, value.clone(), validation_revision).await;
     Ok(value)
 }
 
