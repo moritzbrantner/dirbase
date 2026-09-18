@@ -21,13 +21,36 @@ pub fn validate_resource_data(
     resource: &str,
     data: &Value,
 ) -> Result<(), AppError> {
-    let Some(table) = state.validation_schema_table(resource) else {
-        return Ok(());
+    validate_resource_snapshot(state, resource, data).map(|_| ())
+}
+
+/// Validates one immutable resource snapshot and returns the declared-schema revision that authorized it.
+///
+/// Read paths may reuse the snapshot without rescanning while this revision remains current.
+pub fn validate_resource_snapshot(
+    state: &AppState,
+    resource: &str,
+    data: &Value,
+) -> Result<u64, AppError> {
+    let (revision, table) = state.validation_schema_snapshot(resource);
+    let Some(table) = table else {
+        return Ok(revision);
     };
+    let rows = data.as_array().map_or(1, Vec::len);
+    state.metrics.record_resource_validation(rows);
+    validate_resource_data_with_table(resource, data, &table)?;
+    Ok(revision)
+}
+
+fn validate_resource_data_with_table(
+    resource: &str,
+    data: &Value,
+    table: &DeclaredTableSchema,
+) -> Result<(), AppError> {
     match data {
-        Value::Array(array) => validate_array_resource_data(resource, array, &table),
-        Value::Object(object) => validate_object_resource_data(resource, object, &table),
-        _ if declared_schema_expects_object(&table) => Err(AppError::new(
+        Value::Array(array) => validate_array_resource_data(resource, array, table),
+        Value::Object(object) => validate_object_resource_data(resource, object, table),
+        _ if declared_schema_expects_object(table) => Err(AppError::new(
             StatusCode::BAD_REQUEST,
             format!("Resource '{resource}' is not a JSON object"),
         )),

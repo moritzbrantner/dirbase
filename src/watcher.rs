@@ -128,10 +128,8 @@ pub fn start_resource_watcher(
                                             );
                                             app_state.emit_event("overview_changed", None);
                                             for resource in changed_resources {
-                                                app_state.emit_event(
-                                                    "resource_changed",
-                                                    Some(resource),
-                                                );
+                                                app_state
+                                                    .emit_event("resource_changed", Some(resource));
                                             }
                                             continue;
                                         }
@@ -181,10 +179,7 @@ pub fn start_resource_watcher(
                                 let replacements = changed_values
                                     .iter()
                                     .map(|(resource, value)| {
-                                        (
-                                            resource.clone(),
-                                            infer_table_from_value(resource, value),
-                                        )
+                                        (resource.clone(), infer_table_from_value(resource, value))
                                     })
                                     .collect::<BTreeMap<_, _>>();
                                 let mut store = schema_store.write().expect("schema store");
@@ -437,12 +432,7 @@ mod tests {
         let data_source = DataSource::Folder(PathBuf::from("/tmp/data"));
         let resources = BTreeSet::from(["posts".to_string(), "users".to_string()]);
 
-        assert!(!watcher_requires_full_inference(
-            &data_source,
-            &resources,
-            &resources,
-            true,
-        ));
+        assert!(!watcher_requires_full_inference(&data_source, &resources, &resources, true,));
     }
 
     #[test]
@@ -451,12 +441,7 @@ mod tests {
         let previous = BTreeSet::from(["users".to_string()]);
         let next = BTreeSet::from(["posts".to_string(), "users".to_string()]);
 
-        assert!(watcher_requires_full_inference(
-            &data_source,
-            &previous,
-            &next,
-            true,
-        ));
+        assert!(watcher_requires_full_inference(&data_source, &previous, &next, true,));
     }
 
     #[test]
@@ -464,12 +449,7 @@ mod tests {
         let data_source = DataSource::File(PathBuf::from("/tmp/db.json"));
         let resources = BTreeSet::from(["users".to_string()]);
 
-        assert!(watcher_requires_full_inference(
-            &data_source,
-            &resources,
-            &resources,
-            true,
-        ));
+        assert!(watcher_requires_full_inference(&data_source, &resources, &resources, true,));
     }
 
     #[test]
@@ -477,11 +457,6 @@ mod tests {
         let data_source = DataSource::Folder(PathBuf::from("/tmp/data"));
         let resources = BTreeSet::from(["posts".to_string(), "users".to_string()]);
 
-        assert!(watcher_requires_full_inference(
-            &data_source,
-            &resources,
-            &resources,
-            false,
-        ));
+        assert!(watcher_requires_full_inference(&data_source, &resources, &resources, false,));
     }
 }

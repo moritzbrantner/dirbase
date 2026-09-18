@@ -11,9 +11,7 @@ use serde_json::Value;
 use crate::{
     app::{AppState, DataSource},
     error::AppError,
-    schema::{
-        infer_schema_from_data_source, infer_table_from_value, replace_inferred_tables,
-    },
+    schema::{infer_schema_from_data_source, infer_table_from_value, replace_inferred_tables},
 };
 
 pub(crate) use cache::cached_resource_from_value;
@@ -26,17 +24,29 @@ pub use io::{
     create_resource_value, delete_resource_value, is_reserved_resource_name,
     is_valid_resource_name, resource_file_path, scan_resources,
 };
+pub(crate) use validation::validate_resource_snapshot;
 pub use validation::{validate_resource_data, validate_sql_identifier};
 
 pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value>, AppError> {
     let file = resource_file_path(&state.data_source, resource)?;
+    let current_validation_revision = state.validation_schema_snapshot(resource).0;
 
-    if let Some(value) =
-        state.resource_cache.read().await.get(resource).map(|cached| cached.value.clone())
-    {
+    if let Some(cached) = state.resource_cache.read().await.get(resource).cloned() {
+        if cached.validation_revision == Some(current_validation_revision) {
+            state.metrics.record_resource_cache_hit();
+            return Ok(cached.value);
+        }
+
+        state.metrics.record_resource_cache_revalidation();
+        let value = cached.value;
+        let validation_revision =
+            validation::validate_resource_snapshot(state, resource, value.as_ref())?;
+        cache::mark_cached_resource_validated(state, resource, value.clone(), validation_revision)
+            .await;
         return Ok(value);
     }
 
+    state.metrics.record_resource_cache_miss();
     if !state.resources.read().await.contains(resource) {
         return Err(AppError::new(
             StatusCode::NOT_FOUND,
@@ -45,8 +55,10 @@ pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value
     }
 
     let value = Arc::new(io::read_resource_value(&state.data_source, &file, resource).await?);
-
-    cache::update_cached_resource(state, resource, value.clone()).await;
+    let validation_revision =
+        validation::validate_resource_snapshot(state, resource, value.as_ref())?;
+    cache::mark_cached_resource_validated(state, resource, value.clone(), validation_revision)
+        .await;
     Ok(value)
 }
 
@@ -54,6 +66,24 @@ pub async fn write_resource(
     state: &AppState,
     resource: &str,
     value: Value,
+) -> Result<(), AppError> {
+    write_resource_snapshot(state, resource, value, None).await
+}
+
+pub(crate) async fn write_validated_resource(
+    state: &AppState,
+    resource: &str,
+    value: Value,
+    validation_revision: u64,
+) -> Result<(), AppError> {
+    write_resource_snapshot(state, resource, value, Some(validation_revision)).await
+}
+
+async fn write_resource_snapshot(
+    state: &AppState,
+    resource: &str,
+    value: Value,
+    validation_revision: Option<u64>,
 ) -> Result<(), AppError> {
     let file = resource_file_path(&state.data_source, resource)?;
     let can_refresh_locally =
@@ -99,6 +129,15 @@ pub async fn write_resource(
         refresh_inferred_schema(state).await?;
     }
 
+    // Rebuild cache metadata only after inferred-schema installation. A mutation may already have
+    // validated this exact snapshot; carrying that revision avoids another O(N) read-admission scan.
+    // If declared schema changed concurrently, the older revision remains visible and the next read
+    // revalidates before trusting it.
+    if let Some(validation_revision) = validation_revision {
+        cache::mark_cached_resource_validated(state, resource, value.clone(), validation_revision)
+            .await;
+    }
+
     state.invalidate_graphql_schema().await;
     state.emit_event("resource_changed", Some(resource.to_string()));
     state.emit_event("schema_changed", None);
@@ -127,7 +166,7 @@ pub(crate) async fn refresh_inferred_schema(state: &AppState) -> Result<(), AppE
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeSet, HashMap},
+        collections::{BTreeMap, BTreeSet, HashMap},
         path::PathBuf,
         sync::Arc,
     };
@@ -135,7 +174,26 @@ mod tests {
     use tokio::sync::RwLock;
 
     use super::*;
-    use crate::app::{AppState, DataSource};
+    use crate::{
+        app::{AppState, DataSource},
+        schema::{ColumnSchema, ColumnType, DeclaredSchema, DeclaredTableSchema},
+    };
+
+    fn declared_users_schema(name_type: ColumnType) -> DeclaredSchema {
+        DeclaredSchema {
+            tables: BTreeMap::from([(
+                "users".to_string(),
+                DeclaredTableSchema {
+                    primary_key: Some("id".to_string()),
+                    columns: BTreeMap::from([
+                        ("id".to_string(), ColumnSchema::new(ColumnType::Integer, false)),
+                        ("name".to_string(), ColumnSchema::new(name_type, false)),
+                    ]),
+                    ..DeclaredTableSchema::default()
+                },
+            )]),
+        }
+    }
 
     fn test_state(data_source: DataSource) -> AppState {
         AppState {
@@ -166,6 +224,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_resource_validates_immutable_snapshot_once_per_declared_revision() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.insert("users".to_string());
+        state
+            .update_declared_schema(Some(declared_users_schema(ColumnType::String)))
+            .expect("declared schema");
+        std::fs::write(
+            temp.path().join("users.json"),
+            r#"[{"id":1,"name":"Ada"},{"id":2,"name":"Grace"},{"id":3,"name":"Lin"}]"#,
+        )
+        .expect("write users");
+
+        let first = load_resource(&state, "users").await.expect("first load");
+        let second = load_resource(&state, "users").await.expect("second load");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(
+            state.metrics.resource_cache_misses_total.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state.metrics.resource_cache_hits_total.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state
+                .metrics
+                .resource_validation_passes_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state.metrics.resource_validation_rows_total.load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn declared_schema_change_revalidates_cached_snapshot_before_read() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.insert("users".to_string());
+        state
+            .update_declared_schema(Some(declared_users_schema(ColumnType::String)))
+            .expect("initial declared schema");
+        std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
+            .expect("write users");
+
+        load_resource(&state, "users").await.expect("initial valid load");
+        state
+            .update_declared_schema(Some(declared_users_schema(ColumnType::Integer)))
+            .expect("updated declared schema");
+
+        let err =
+            load_resource(&state, "users").await.expect_err("cached snapshot must be revalidated");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            state
+                .metrics
+                .resource_cache_revalidations_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state
+                .metrics
+                .resource_validation_passes_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+    }
+
+    #[tokio::test]
     async fn write_resource_survives_interrupted_temp_file_and_keeps_output_intact() {
         let temp = tempfile::tempdir().expect("create tempdir");
         let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
@@ -181,7 +313,9 @@ mod tests {
             {"id": 2, "name": "Ada"},
             {"id": 3, "name": "Lin"}
         ]);
-        write_resource(&state, resource, updated_value.clone()).await.expect("atomic write succeeds");
+        write_resource(&state, resource, updated_value.clone())
+            .await
+            .expect("atomic write succeeds");
 
         let final_text = std::fs::read_to_string(&target_file).expect("read final resource file");
         let parsed: Value =

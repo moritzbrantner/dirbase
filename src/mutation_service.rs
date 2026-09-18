@@ -7,29 +7,22 @@ use crate::{
     schema::{TableSchema, primary_key_name},
     storage::{
         coerce_id_value, find_item_index_by_key, load_resource, next_numeric_id,
-        validate_resource_data, write_resource,
+        validate_resource_snapshot, write_validated_resource,
     },
 };
-
-enum ResourceValidation {
-    BeforeAndAfter,
-    AfterOnly,
-}
 
 async fn update_locked_resource<T>(
     state: &AppState,
     resource: &str,
-    validation: ResourceValidation,
     update: impl FnOnce(&mut Value) -> Result<T, AppError>,
 ) -> Result<T, AppError> {
     let _guard = state.write_lock_for_resource(resource).await;
+    // load_resource is the immutable-snapshot validation authority. No second pre-mutation scan is
+    // needed here; only the changed snapshot must be validated before persistence.
     let mut data = load_resource(state, resource).await?.as_ref().clone();
-    if matches!(validation, ResourceValidation::BeforeAndAfter) {
-        validate_resource_data(state, resource, &data)?;
-    }
     let result = update(&mut data)?;
-    validate_resource_data(state, resource, &data)?;
-    write_resource(state, resource, data).await?;
+    let validation_revision = validate_resource_snapshot(state, resource, &data)?;
+    write_validated_resource(state, resource, data, validation_revision).await?;
     Ok(result)
 }
 
@@ -39,7 +32,7 @@ pub async fn create_item(
     mut payload: Value,
 ) -> Result<Value, AppError> {
     let table = state.schema_table(resource);
-    update_locked_resource(state, resource, ResourceValidation::BeforeAndAfter, |data| {
+    update_locked_resource(state, resource, |data| {
         let array = data.as_array_mut().ok_or_else(|| {
             AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array")
         })?;
@@ -62,7 +55,7 @@ pub async fn replace_item(
 ) -> Result<Value, AppError> {
     let table = state.schema_table(resource);
     let item_key = primary_key_name(table.as_ref()).to_string();
-    update_locked_resource(state, resource, ResourceValidation::AfterOnly, |data| {
+    update_locked_resource(state, resource, |data| {
         let array = data.as_array_mut().ok_or_else(|| {
             AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array")
         })?;
@@ -87,7 +80,7 @@ pub async fn patch_item(
 ) -> Result<Value, AppError> {
     let table = state.schema_table(resource);
     let item_key = primary_key_name(table.as_ref()).to_string();
-    update_locked_resource(state, resource, ResourceValidation::BeforeAndAfter, |data| {
+    update_locked_resource(state, resource, |data| {
         let array = data.as_array_mut().ok_or_else(|| {
             AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array")
         })?;
@@ -112,7 +105,7 @@ pub async fn patch_item(
 pub async fn delete_item(state: &AppState, resource: &str, id: &str) -> Result<(), AppError> {
     let table = state.schema_table(resource);
     let item_key = primary_key_name(table.as_ref()).to_string();
-    update_locked_resource(state, resource, ResourceValidation::BeforeAndAfter, |data| {
+    update_locked_resource(state, resource, |data| {
         let array = data.as_array_mut().ok_or_else(|| {
             AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array")
         })?;
@@ -129,7 +122,7 @@ pub async fn replace_resource_object(
     resource: &str,
     payload: Value,
 ) -> Result<Value, AppError> {
-    update_locked_resource(state, resource, ResourceValidation::AfterOnly, |data| {
+    update_locked_resource(state, resource, |data| {
         if !data.is_object() || !payload.is_object() {
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -147,7 +140,7 @@ pub async fn patch_resource_object(
     resource: &str,
     payload: Value,
 ) -> Result<Value, AppError> {
-    update_locked_resource(state, resource, ResourceValidation::AfterOnly, |data| {
+    update_locked_resource(state, resource, |data| {
         let current = data.as_object_mut().ok_or_else(|| {
             AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON object")
         })?;
@@ -545,6 +538,35 @@ mod tests {
         assert_eq!(
             read_json(&path),
             json!([{"slug": "ada", "name": "Grace", "role": "admin", "active": true}])
+        );
+    }
+
+    #[tokio::test]
+    async fn patch_item_reuses_admission_validation_and_carries_post_validation() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("users.json");
+        write_json(&path, &json!([{"id": 1, "name": "Ada"}]));
+        let state = test_state_for_folder(temp.path(), &["users"], Some(users_declared_schema()));
+
+        patch_item(&state, "users", "1", json!({"name": "Grace"})).await.expect("patch");
+        let loaded = load_resource(&state, "users").await.expect("read after patch");
+
+        assert_eq!(loaded[0]["name"], "Grace");
+        assert_eq!(
+            state
+                .metrics
+                .resource_validation_passes_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "one admission validation plus one modified-snapshot validation"
+        );
+        assert_eq!(
+            state
+                .metrics
+                .resource_cache_revalidations_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "post-validation authority should survive persistence and schema refresh"
         );
     }
 

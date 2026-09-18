@@ -180,7 +180,7 @@ jobs:
           fi
 
           mkdir -p .artifacts/runtime-profiler .artifacts/architecture/runs
-          for scenario in hot-read-small hot-read-window localized-write-small localized-write-large localized-write-ballast; do
+          for scenario in hot-read-small hot-read-window hot-read-declared-small hot-read-declared-window localized-write-small localized-write-large localized-write-ballast; do
             mkdir -p ".artifacts/runtime-profiler/$scenario" ".artifacts/architecture/runs/$scenario"
             for round in $(seq 1 "$rounds"); do
               bundle=".artifacts/runtime-profiler/$scenario/round-$round"

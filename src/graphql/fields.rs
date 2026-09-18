@@ -15,7 +15,7 @@ use crate::{
         paginate_collection_refs, sort_collection_refs,
     },
     schema::{DeclaredTableSchema, TableSchema},
-    storage::{find_item_by_key, load_resource, validate_resource_data},
+    storage::{find_item_by_key, load_resource},
 };
 
 use super::{
@@ -357,8 +357,6 @@ pub(crate) fn build_collection_root_field(
             FieldFuture::new(async move {
                 let _guard = state.read_lock_for_resource(&resource).await;
                 let data = load_resource(&state, &resource).await.map_err(app_error_to_graphql)?;
-                validate_resource_data(&state, &resource, data.as_ref())
-                    .map_err(app_error_to_graphql)?;
                 let items = data.as_array().ok_or_else(|| {
                     GraphqlError::new(format!("Resource '{resource}' is not a JSON array"))
                 })?;
@@ -399,8 +397,6 @@ pub(crate) fn build_collection_by_id_field(
             let id = graphql_argument_to_lookup_string(ctx.args.try_get("id")?.as_value())?;
             let _guard = state.read_lock_for_resource(&resource).await;
             let data = load_resource(&state, &resource).await.map_err(app_error_to_graphql)?;
-            validate_resource_data(&state, &resource, data.as_ref())
-                .map_err(app_error_to_graphql)?;
             let items = data.as_array().ok_or_else(|| {
                 GraphqlError::new(format!("Resource '{resource}' is not a JSON array"))
             })?;
@@ -426,8 +422,6 @@ pub(crate) fn build_collection_query_field(
             let args = parse_collection_query_arguments(&ctx)?;
             let _guard = state.read_lock_for_resource(&resource).await;
             let data = load_resource(&state, &resource).await.map_err(app_error_to_graphql)?;
-            validate_resource_data(&state, &resource, data.as_ref())
-                .map_err(app_error_to_graphql)?;
             let table = state.schema_table(&resource);
             let items = data.as_array().ok_or_else(|| {
                 GraphqlError::new(format!("Resource '{resource}' is not a JSON array"))
@@ -476,8 +470,6 @@ pub(crate) fn build_object_root_field(
         FieldFuture::new(async move {
             let _guard = state.read_lock_for_resource(&resource).await;
             let data = load_resource(&state, &resource).await.map_err(app_error_to_graphql)?;
-            validate_resource_data(&state, &resource, data.as_ref())
-                .map_err(app_error_to_graphql)?;
             let object = data.as_object().cloned().ok_or_else(|| {
                 GraphqlError::new(format!("Resource '{resource}' is not a JSON object"))
             })?;

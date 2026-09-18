@@ -13,6 +13,8 @@ from typing import Any
 SCENARIOS = (
     "hot-read-small",
     "hot-read-window",
+    "hot-read-declared-small",
+    "hot-read-declared-window",
     "localized-write-small",
     "localized-write-large",
     "localized-write-ballast",
@@ -23,6 +25,12 @@ AMPLIFICATION_PAIRS = (
         "hot-read-small",
         "hot-read-window",
         "8k -> 48k source rows with the same 8-row result window",
+    ),
+    (
+        "read_validation_source_size",
+        "hot-read-declared-small",
+        "hot-read-declared-window",
+        "8k -> 48k declared-schema rows with repeated reads of the same 8-row window",
     ),
     (
         "write_target_size",

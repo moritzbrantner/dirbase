@@ -13,6 +13,8 @@ from summarize_architecture_baseline import build_baseline
 SCENARIOS = (
     "hot-read-small",
     "hot-read-window",
+    "hot-read-declared-small",
+    "hot-read-declared-window",
     "localized-write-small",
     "localized-write-large",
     "localized-write-ballast",
@@ -78,6 +80,8 @@ class BaselineSummaryTests(unittest.TestCase):
             scale = {
                 "hot-read-small": 1.0,
                 "hot-read-window": 2.0,
+                "hot-read-declared-small": 1.0,
+                "hot-read-declared-window": 4.0,
                 "localized-write-small": 1.0,
                 "localized-write-large": 2.0,
                 "localized-write-ballast": 3.0,
@@ -99,6 +103,11 @@ class BaselineSummaryTests(unittest.TestCase):
             self.assertEqual(baseline["scenarios"]["hot-read-small"]["round_count"], 2)
             read_ratio = baseline["amplification"]["read_source_size"]["ratios"]
             self.assertAlmostEqual(read_ratio["server_request_median_ms"]["median"], 2.0)
+            validation_ratio = baseline["amplification"]["read_validation_source_size"]["ratios"]
+            self.assertAlmostEqual(
+                validation_ratio["server_request_median_ms"]["median"],
+                4.0,
+            )
             target_ratio = baseline["amplification"]["write_target_size"]["ratios"]
             self.assertAlmostEqual(target_ratio["server_request_median_ms"]["median"], 2.0)
             write_ratio = baseline["amplification"]["write_unrelated_state"]["ratios"]
