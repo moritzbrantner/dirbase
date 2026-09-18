@@ -24,7 +24,9 @@ The benchmark server starts with the generated fixture as its working directory.
 `hot-read-small.json` serves an 8,000-row resource and `hot-read-window.json` serves a 48,000-row resource. Both repeatedly request the same filtered, sorted eight-row page.
 
 The sixfold source-size change leaves the requested result window unchanged. Comparing the two captures makes whole-resource cloning, repeated parsing, repeated schema work, and pre-window materialization visible as source-size amplification rather than hiding those costs inside aggregate request throughput.
-Read validity is now an immutable-snapshot admission concern rather than a per-endpoint stage. When a declared schema is present, `load_resource` validates a snapshot once for the current declared-schema revision and records that authority on the cache entry. REST, GraphQL, and SQL readers reuse the admitted snapshot until a mutation installs an unvalidated revision or the declared schema revision changes. The `dirbase_resource_cache_*` and `dirbase_resource_validation_*` counters expose this admission funnel directly so repeated reads can prove they do not rescan every row merely to establish validity again.
+Read validity is now an immutable-snapshot admission concern rather than a per-endpoint stage. When a declared schema is present, `load_resource` validates a snapshot once for the current resource-specific declared-schema generation and records that authority on the cache entry. REST, GraphQL, and SQL readers reuse the admitted snapshot until a mutation installs an unvalidated revision or that resource's declared table changes. The `dirbase_resource_cache_*` and `dirbase_resource_validation_*` counters expose this admission funnel directly so repeated reads can prove they do not rescan every row merely to establish validity again.
+
+`hot-read-declared-small.json` and `hot-read-declared-window.json` repeat the same 8-row query against 8,000 and 48,000-row resources with an explicit declared schema. This pair isolates validation-stage amplification separately from the existing schema-free hot-read source-size pair.
 
 ### Localized write: target-size amplification
 
