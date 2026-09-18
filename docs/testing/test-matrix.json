@@ -1246,9 +1246,11 @@
         "next_numeric_id",
         "coerce_id_value",
         "validate_resource_data",
+        "validate_resource_snapshot",
         "validate_sql_identifier",
         "cached_resource_from_value",
         "update_cached_resource",
+        "mark_cached_resource_validated",
         "remove_cached_resource",
         "clear_resource_cache"
       ],
@@ -1275,6 +1277,25 @@
           "test_type": "unit",
           "asserts": [
             "parallel file-mode writes preserve every resource update"
+          ]
+        },
+        {
+          "test": "load_resource_validates_immutable_snapshot_once_per_declared_revision",
+          "path": "src/storage.rs",
+          "test_type": "unit",
+          "asserts": [
+            "a declared-schema resource is validated once on cache admission",
+            "subsequent reads reuse the same immutable validated snapshot",
+            "cache and validation work counters expose the admission funnel"
+          ]
+        },
+        {
+          "test": "declared_schema_change_revalidates_cached_snapshot_before_read",
+          "path": "src/storage.rs",
+          "test_type": "unit",
+          "asserts": [
+            "declared-schema revision changes invalidate prior validation authority",
+            "stale cached snapshots are revalidated before read paths can use them"
           ]
         },
         {
