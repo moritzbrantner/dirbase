@@ -771,6 +771,22 @@
           ]
         },
         {
+          "test": "filtered_window_clamps_to_short_first_page",
+          "path": "src/query/execution.rs",
+          "test_type": "unit",
+          "asserts": [
+            "late filtered pages clamp correctly even when the entire result is shorter than per_page"
+          ]
+        },
+        {
+          "test": "bounded_sorted_window_clamps_sparse_matches",
+          "path": "src/query/execution.rs",
+          "test_type": "unit",
+          "asserts": [
+            "bounded sorted execution preserves last-page clamping when filters leave fewer than per_page rows"
+          ]
+        },
+        {
           "test": "bounded_sorted_window_matches_stable_full_sort_with_ties",
           "path": "src/query/execution.rs",
           "test_type": "unit",
