@@ -542,6 +542,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn patch_item_reuses_admission_validation_and_carries_post_validation() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("users.json");
+        write_json(&path, &json!([{"id": 1, "name": "Ada"}]));
+        let state = test_state_for_folder(temp.path(), &["users"], Some(users_declared_schema()));
+
+        patch_item(&state, "users", "1", json!({"name": "Grace"}))
+            .await
+            .expect("patch");
+        let loaded = load_resource(&state, "users").await.expect("read after patch");
+
+        assert_eq!(loaded[0]["name"], "Grace");
+        assert_eq!(
+            state
+                .metrics
+                .resource_validation_passes_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "one admission validation plus one modified-snapshot validation"
+        );
+        assert_eq!(
+            state
+                .metrics
+                .resource_cache_revalidations_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "post-validation authority should survive persistence and schema refresh"
+        );
+    }
+
+    #[tokio::test]
     async fn patch_item_rejects_schema_constraint_violations_without_persisting() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("users.json");
