@@ -26,6 +26,7 @@ pub use io::{
     create_resource_value, delete_resource_value, is_reserved_resource_name,
     is_valid_resource_name, resource_file_path, scan_resources,
 };
+pub(crate) use validation::validate_resource_snapshot;
 pub use validation::{validate_resource_data, validate_sql_identifier};
 
 pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value>, AppError> {
@@ -72,6 +73,24 @@ pub async fn write_resource(
     resource: &str,
     value: Value,
 ) -> Result<(), AppError> {
+    write_resource_snapshot(state, resource, value, None).await
+}
+
+pub(crate) async fn write_validated_resource(
+    state: &AppState,
+    resource: &str,
+    value: Value,
+    validation_revision: u64,
+) -> Result<(), AppError> {
+    write_resource_snapshot(state, resource, value, Some(validation_revision)).await
+}
+
+async fn write_resource_snapshot(
+    state: &AppState,
+    resource: &str,
+    value: Value,
+    validation_revision: Option<u64>,
+) -> Result<(), AppError> {
     let file = resource_file_path(&state.data_source, resource)?;
     let can_refresh_locally =
         matches!(state.data_source.as_ref(), DataSource::Folder(_)) && state.health.is_ready();
@@ -114,6 +133,20 @@ pub async fn write_resource(
         // only a full refresh may prove that every resource is valid and mark the server ready.
         // Single-file databases also stay on the conservative full-refresh path in this slice.
         refresh_inferred_schema(state).await?;
+    }
+
+    // Rebuild cache metadata only after inferred-schema installation. A mutation may already have
+    // validated this exact snapshot; carrying that revision avoids another O(N) read-admission scan.
+    // If declared schema changed concurrently, the older revision remains visible and the next read
+    // revalidates before trusting it.
+    if let Some(validation_revision) = validation_revision {
+        cache::mark_cached_resource_validated(
+            state,
+            resource,
+            value.clone(),
+            validation_revision,
+        )
+        .await;
     }
 
     state.invalidate_graphql_schema().await;
