@@ -177,10 +177,8 @@ fn filtered_window<'a>(
         requested
     } else {
         let page_len = window.end.saturating_sub(window.start);
-        trailing
-            .into_iter()
-            .skip(pagination.per_page.saturating_sub(page_len))
-            .collect()
+        let start = trailing.len().saturating_sub(page_len);
+        trailing.into_iter().skip(start).collect()
     };
 
     CollectionExecutionResult {
@@ -228,9 +226,10 @@ fn bounded_sorted_window<'a>(
             .collect()
     } else {
         let page_len = window.end.saturating_sub(window.start);
+        let start = suffix.len().saturating_sub(page_len);
         suffix
             .into_iter()
-            .skip(pagination.per_page.saturating_sub(page_len))
+            .skip(start)
             .map(|row| row.value)
             .collect()
     };
