@@ -1247,6 +1247,7 @@
         "coerce_id_value",
         "validate_resource_data",
         "validate_resource_snapshot",
+        "write_validated_resource",
         "validate_sql_identifier",
         "cached_resource_from_value",
         "update_cached_resource",
@@ -1296,6 +1297,16 @@
           "asserts": [
             "declared-schema revision changes invalidate prior validation authority",
             "stale cached snapshots are revalidated before read paths can use them"
+          ]
+        },
+        {
+          "test": "patch_item_reuses_admission_validation_and_carries_post_validation",
+          "path": "src/mutation_service.rs",
+          "test_type": "unit",
+          "asserts": [
+            "mutation starts from the already-admitted immutable snapshot without a second pre-scan",
+            "post-mutation validation authority survives persistence and inferred-schema refresh",
+            "the first read after a successful PATCH performs no full-resource revalidation"
           ]
         },
         {
