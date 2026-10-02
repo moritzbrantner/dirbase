@@ -84,13 +84,12 @@ pub(crate) async fn fetch_collection_and_cache(
     let Ok(value) = serde_json::from_slice::<Value>(&remote.body) else {
         return Ok(remote.into_response());
     };
-    let Some(array) = value.as_array() else {
+    if !value.is_array() {
         tracing::warn!(resource, "Clone collection response was not a JSON array; skipping cache");
         return Ok(remote.into_response());
-    };
+    }
 
-    let cached = Value::Array(array.clone());
-    cache_collection(state, resource, cached).await;
+    cache_collection(state, resource, value).await;
     Ok(remote.into_response())
 }
 
@@ -115,7 +114,7 @@ pub(crate) async fn fetch_item_and_cache(
     };
     object.insert("id".to_string(), coerce_id_value(id, None));
 
-    cache_item(state, resource, id, Value::Object(object.clone())).await;
+    cache_item(state, resource, id, value).await;
     Ok(remote.into_response())
 }
 
@@ -131,7 +130,7 @@ async fn cache_collection(state: &AppState, resource: &str, value: Value) {
 
     let result = if state.resources.read().await.contains(resource) {
         let _guard = state.write_lock_for_resource(resource).await;
-        write_resource(state, resource, &value).await
+        write_resource(state, resource, value).await
     } else {
         resource_service::create_resource(state, resource, value).await.map(|_| ())
     };
@@ -189,7 +188,7 @@ async fn cache_item(state: &AppState, resource: &str, id: &str, item: Value) {
         return;
     }
 
-    if let Err(err) = write_resource(state, resource, &value).await {
+    if let Err(err) = write_resource(state, resource, value).await {
         tracing::warn!(resource, id, error = %err.message, "Failed to persist cloned item");
     }
 }

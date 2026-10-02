@@ -15,9 +15,13 @@ ui/node_modules
 /ui/coverage/
 /ui/test-results/
 /ui/playwright-report/
+/.moonlight/
 
-# Generated benchmark artifacts
+# Generated benchmark and evidence artifacts
 /benchmarks/.work/
 /benchmarks/results/*.json
 /benchmarks/results/*.md
 /benchmarks/results/suite-logs-*/
+/.artifacts/
+/.tools/
+/.architecture-baseline/

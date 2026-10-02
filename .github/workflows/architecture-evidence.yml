@@ -1,0 +1,220 @@
+name: Architecture Evidence
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/architecture_benchmark.py"
+      - "scripts/architecture-contract.sh"
+      - "scripts/moonlight-architecture-compare.sh"
+      - "scripts/moonlight.sh"
+      - "scripts/runtime-profile.sh"
+      - "scripts/summarize_architecture_baseline.py"
+      - "scripts/summarize_architecture_baseline_test.py"
+      - "profiles/runtime-profiler/**"
+      - "moonlight.eval.toml"
+      - "benchmarks/architecture.md"
+      - ".github/workflows/architecture-evidence.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/architecture_benchmark.py"
+      - "scripts/architecture-contract.sh"
+      - "scripts/moonlight-architecture-compare.sh"
+      - "scripts/moonlight.sh"
+      - "scripts/runtime-profile.sh"
+      - "scripts/summarize_architecture_baseline.py"
+      - "scripts/summarize_architecture_baseline_test.py"
+      - "profiles/runtime-profiler/**"
+      - "moonlight.eval.toml"
+      - "benchmarks/architecture.md"
+      - ".github/workflows/architecture-evidence.yml"
+  schedule:
+    - cron: "37 4 * * 2"
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: "Git ref used as the Moonlight semantic baseline"
+        required: false
+        default: "main"
+      rounds:
+        description: "Repeated architecture calibration rounds per scenario"
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  architecture-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-project
+        with:
+          bun: "false"
+          ui-deps: "false"
+
+      - name: Validate architecture harness
+        run: |
+          python3 -m py_compile \
+            scripts/architecture_benchmark.py \
+            scripts/summarize_architecture_baseline.py \
+            scripts/summarize_architecture_baseline_test.py
+          python3 scripts/summarize_architecture_baseline_test.py
+          bash -n scripts/architecture-contract.sh
+          bash -n scripts/moonlight-architecture-compare.sh
+
+      - name: Run architecture semantic contract
+        run: bash scripts/architecture-contract.sh
+
+  moonlight-architecture:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Checkout pull request baseline
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .architecture-baseline
+          persist-credentials: false
+
+      - name: Checkout configured baseline
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: .architecture-baseline
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-project
+        with:
+          bun: "false"
+          ui-deps: "false"
+
+      - name: Checkout Moonlight
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: moritzbrantner/moonlight
+          path: .tools/moonlight
+          persist-credentials: false
+
+      - name: Compare architecture semantics
+        env:
+          MOONLIGHT_ROOT: ${{ github.workspace }}/.tools/moonlight
+        run: |
+          mkdir -p .artifacts
+          bash scripts/moonlight-architecture-compare.sh \
+            "$GITHUB_WORKSPACE/.architecture-baseline" \
+            "$GITHUB_WORKSPACE" \
+            | tee .artifacts/moonlight-architecture.json
+
+      - name: Upload Moonlight comparison
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: moonlight-architecture-${{ github.run_id }}
+          path: .artifacts/moonlight-architecture.json
+          if-no-files-found: ignore
+
+  runtime-architecture-evidence:
+    if: github.event_name != 'pull_request'
+    needs: architecture-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout dirbase
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-project
+        with:
+          bun: "false"
+          ui-deps: "false"
+
+      - name: Build release binary and prepare deterministic fixtures
+        run: |
+          cargo build --release
+          python3 scripts/architecture_benchmark.py prepare-all
+
+      - name: Checkout runtime-profiler
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: moritzbrantner/runtime-profiler
+          path: .tools/runtime-profiler
+          persist-credentials: false
+
+      - name: Capture repeated architecture scenarios
+        env:
+          RUNTIME_PROFILER_ROOT: ${{ github.workspace }}/.tools/runtime-profiler
+          REQUESTED_ROUNDS: ${{ inputs.rounds }}
+        run: |
+          rounds="${REQUESTED_ROUNDS:-3}"
+          if ! [[ "$rounds" =~ ^[0-9]+$ ]] || (( rounds < 2 || rounds > 10 )); then
+            printf 'rounds must be an integer from 2 through 10; got %s\n' "$rounds" >&2
+            exit 2
+          fi
+
+          mkdir -p .artifacts/runtime-profiler .artifacts/architecture/runs
+          for scenario in hot-read-small hot-read-window localized-write-small localized-write-large localized-write-ballast; do
+            mkdir -p ".artifacts/runtime-profiler/$scenario" ".artifacts/architecture/runs/$scenario"
+            for round in $(seq 1 "$rounds"); do
+              bundle=".artifacts/runtime-profiler/$scenario/round-$round"
+              bash scripts/runtime-profile.sh \
+                "$bundle" \
+                "profiles/runtime-profiler/${scenario}.json"
+              cargo run --quiet --manifest-path "$RUNTIME_PROFILER_ROOT/Cargo.toml" -- \
+                validate --bundle "$bundle"
+              mv ".artifacts/architecture/${scenario}.json" \
+                ".artifacts/architecture/runs/${scenario}/round-${round}.json"
+            done
+          done
+          printf '%s' "$rounds" > .artifacts/architecture/round-count.txt
+
+      - name: Build descriptive architecture baseline
+        run: |
+          rounds="$(cat .artifacts/architecture/round-count.txt)"
+          python3 scripts/summarize_architecture_baseline.py \
+            --profiler-root .artifacts/runtime-profiler \
+            --server-root .artifacts/architecture/runs \
+            --source-revision "$GITHUB_SHA" \
+            --min-rounds "$rounds" \
+            --output .artifacts/architecture-baseline.json \
+            --markdown-output .artifacts/architecture-baseline.md
+          cat .artifacts/architecture-baseline.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload architecture baseline evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: architecture-baseline-${{ github.sha }}
+          path: |
+            .artifacts/runtime-profiler/
+            .artifacts/architecture/
+            .artifacts/architecture-baseline.json
+            .artifacts/architecture-baseline.md
+          if-no-files-found: ignore
