@@ -59,15 +59,15 @@
     "sort-on": "^7.0.0"
   },
   "devDependencies": {
-    "@types/node": "^25.0.8",
-    "concurrently": "^9.2.1",
-    "get-port": "^7.1.0",
-    "husky": "^9.1.7",
-    "oxfmt": "^0.24.0",
-    "oxlint": "^1.39.0",
-    "tempy": "^3.1.0",
-    "type-fest": "^5.4.0",
-    "typescript": "^5.9.3"
+    "@types/node": "25.0.8",
+    "concurrently": "9.2.1",
+    "get-port": "7.1.0",
+    "husky": "9.1.7",
+    "oxfmt": "0.24.0",
+    "oxlint": "1.39.0",
+    "tempy": "3.1.0",
+    "type-fest": "5.4.0",
+    "typescript": "5.9.3"
   },
   "engines": {
     "node": ">=22.12.0"
