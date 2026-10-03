@@ -11,9 +11,7 @@ use serde_json::Value;
 use crate::{
     app::{AppState, DataSource},
     error::AppError,
-    schema::{
-        infer_schema_from_data_source, infer_table_from_value, replace_inferred_tables,
-    },
+    schema::{infer_schema_from_data_source, infer_table_from_value, replace_inferred_tables},
 };
 
 pub(crate) use cache::cached_resource_from_value;
@@ -181,7 +179,9 @@ mod tests {
             {"id": 2, "name": "Ada"},
             {"id": 3, "name": "Lin"}
         ]);
-        write_resource(&state, resource, updated_value.clone()).await.expect("atomic write succeeds");
+        write_resource(&state, resource, updated_value.clone())
+            .await
+            .expect("atomic write succeeds");
 
         let final_text = std::fs::read_to_string(&target_file).expect("read final resource file");
         let parsed: Value =
