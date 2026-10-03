@@ -181,14 +181,17 @@ jobs:
 
                   before_files = source_metrics(baseline)
                   after_files = source_metrics(current)
+                  absent = {label: (0, 0, 0.0) for label, _ in metric_names}
                   changed = []
-                  for name in sorted(set(before_files) & set(after_files)):
+                  for name in sorted(set(before_files) | set(after_files)):
+                      before = before_files.get(name, absent)
+                      after = after_files.get(name, absent)
                       deltas = {
-                          label: covered_delta(before_files[name][label], after_files[name][label])
+                          label: covered_delta(before[label], after[label])
                           for label, _ in metric_names
                       }
                       if any(deltas.values()):
-                          changed.append((name, deltas, after_files[name]))
+                          changed.append((name, deltas, after))
 
                   summary.write("#### Production-source coverage deltas\n\n")
                   if changed:
