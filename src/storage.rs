@@ -77,13 +77,12 @@ pub async fn load_resource_unvalidated(
 ) -> Result<Arc<Value>, AppError> {
     let file = resource_file_path(&state.data_source, resource)?;
 
+    // Cache hit/miss metrics describe validated admission and are recorded only by load_resource.
     let cached = state.resource_cache.read().await.get(resource).cloned();
     if let Some(cached) = cached {
-        state.metrics.record_resource_cache_hit();
         return Ok(cached.value);
     }
 
-    state.metrics.record_resource_cache_miss();
     if !state.resources.read().await.contains(resource) {
         return Err(AppError::new(
             StatusCode::NOT_FOUND,
