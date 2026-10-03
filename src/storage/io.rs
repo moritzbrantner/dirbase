@@ -560,7 +560,8 @@ mod tests {
         let posts_source = data_source.clone();
         let settings_source = data_source.clone();
         let users_value = Arc::new(json!([{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]));
-        let posts_value = Arc::new(json!([{"id": 10, "title": "Hello"}, {"id": 11, "title": "World"}]));
+        let posts_value =
+            Arc::new(json!([{"id": 10, "title": "Hello"}, {"id": 11, "title": "World"}]));
         let settings_value = Arc::new(json!({"theme": "light", "locale": "en"}));
         let (users_result, posts_result, settings_result) = tokio::join!(
             persist_resource_value(&users_source, &users_path, "users", users_value),

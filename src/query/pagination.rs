@@ -5,6 +5,7 @@ use crate::error::AppError;
 
 use super::types::{Pagination, PaginationWindow};
 
+#[allow(dead_code)]
 pub fn paginate_collection_data(data: Value, pagination: Pagination) -> Result<Value, AppError> {
     let items = data
         .as_array()

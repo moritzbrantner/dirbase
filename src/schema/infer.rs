@@ -91,7 +91,8 @@ fn rebuild_inferred_relations(mut schema: Schema) -> Schema {
     for table in schema.tables.values_mut() {
         table.foreign_keys.clear();
         table.many_to_many.clear();
-        table.kind = if table.primary_key.is_some() { TableKind::Object } else { TableKind::Unknown };
+        table.kind =
+            if table.primary_key.is_some() { TableKind::Object } else { TableKind::Unknown };
     }
 
     let aliases = build_table_aliases(&schema.tables);
@@ -228,17 +229,11 @@ mod tests {
                 ]),
             ),
         ]));
-        assert_eq!(
-            initial.tables["posts"].foreign_keys["user_id"].target_table,
-            "users"
-        );
+        assert_eq!(initial.tables["posts"].foreign_keys["user_id"].target_table, "users");
 
-        let replacement =
-            infer_table_from_value("users", &json!([{"id": "ada"}, {"id": "grace"}]));
-        let updated = replace_inferred_tables(
-            initial,
-            BTreeMap::from([("users".to_string(), replacement)]),
-        );
+        let replacement = infer_table_from_value("users", &json!([{"id": "ada"}, {"id": "grace"}]));
+        let updated =
+            replace_inferred_tables(initial, BTreeMap::from([("users".to_string(), replacement)]));
 
         assert!(
             !updated.tables["posts"].foreign_keys.contains_key("user_id"),
