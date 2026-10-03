@@ -19,7 +19,7 @@ use crate::{
     error::AppError,
     http::html::escape_html,
     schema::{ColumnType, TableSchema, primary_key_name},
-    storage::load_resource,
+    storage::load_resource_unvalidated,
 };
 
 const OVERVIEW_CSS: &str = include_str!("../../ui/dist/overview.css");
@@ -266,7 +266,7 @@ async fn build_overview_page_data(
     let mut summaries = Vec::with_capacity(resources.len());
     let mut total_rows = 0usize;
     for resource in resources {
-        let value = load_resource(state, resource).await?;
+        let value = load_resource_unvalidated(state, resource).await?;
         let table_schema = schema.tables.get(resource.as_str());
         let summary = summarize_resource_value(value.as_ref(), table_schema);
         total_rows += summary.row_count.unwrap_or(0);

@@ -16,7 +16,7 @@ use crate::{
     error::AppError,
     resource_service,
     storage::{
-        coerce_id_value, find_item_index_by_key, is_valid_resource_name, load_resource,
+        coerce_id_value, find_item_index_by_key, is_valid_resource_name, load_resource_unvalidated,
         resource_exists, validate_resource_snapshot, write_validated_resource,
     },
 };
@@ -161,7 +161,7 @@ async fn cache_item(state: &AppState, resource: &str, id: &str, item: Value) {
     }
 
     let _guard = state.write_lock_for_resource(resource).await;
-    let value = match load_resource(state, resource).await {
+    let value = match load_resource_unvalidated(state, resource).await {
         Ok(current) => {
             let mut data = current.as_ref().clone();
             let Some(array) = data.as_array_mut() else {

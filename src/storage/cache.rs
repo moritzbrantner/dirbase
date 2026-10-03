@@ -42,6 +42,17 @@ pub async fn update_cached_resource(state: &AppState, resource: &str, value: Arc
         .insert(resource.to_string(), cached_resource_from_value(value, table.as_ref()));
 }
 
+/// Installs an unvalidated snapshot read from disk unless another task already cached one.
+pub async fn insert_cached_resource_if_absent(state: &AppState, resource: &str, value: Arc<Value>) {
+    let table = state.schema_table(resource);
+    state
+        .resource_cache
+        .write()
+        .await
+        .entry(resource.to_string())
+        .or_insert_with(|| cached_resource_from_value(value, table.as_ref()));
+}
+
 /// Marks a specific immutable snapshot as validated for the supplied declared-schema revision.
 ///
 /// If a concurrent writer has replaced the snapshot, its newer value is left untouched.
@@ -53,18 +64,17 @@ pub async fn mark_cached_resource_validated(
 ) {
     let table = state.schema_table(resource);
     let mut cache = state.resource_cache.write().await;
-    match cache.get(resource) {
-        Some(current) if !Arc::ptr_eq(&current.value, &value) => return,
-        _ => {
-            cache.insert(
-                resource.to_string(),
-                cached_resource_from_value_at_revision(
-                    value,
-                    table.as_ref(),
-                    Some(validation_revision),
-                ),
-            );
-        }
+    let replaced_concurrently =
+        cache.get(resource).is_some_and(|current| !Arc::ptr_eq(&current.value, &value));
+    if !replaced_concurrently {
+        cache.insert(
+            resource.to_string(),
+            cached_resource_from_value_at_revision(
+                value,
+                table.as_ref(),
+                Some(validation_revision),
+            ),
+        );
     }
 }
 

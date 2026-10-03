@@ -7,7 +7,7 @@ use crate::{
     app::AppState,
     error::AppError,
     relations::{build_relation_lookup, resolve_related_row_in_lookup},
-    storage::load_resource,
+    storage::load_resource_unvalidated,
 };
 
 pub(crate) fn embed_lock_resources(
@@ -63,8 +63,10 @@ pub(crate) async fn embed_collection_data(
             )
         })?;
         if !target_resources.contains_key(&fk.target_table) {
-            target_resources
-                .insert(fk.target_table.clone(), load_resource(state, &fk.target_table).await?);
+            target_resources.insert(
+                fk.target_table.clone(),
+                load_resource_unvalidated(state, &fk.target_table).await?,
+            );
         }
         let target_items = target_resources
             .get(&fk.target_table)

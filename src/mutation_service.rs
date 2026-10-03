@@ -6,20 +6,32 @@ use crate::{
     error::AppError,
     schema::{TableSchema, primary_key_name},
     storage::{
-        coerce_id_value, find_item_index_by_key, load_resource, next_numeric_id,
-        validate_resource_snapshot, write_validated_resource,
+        coerce_id_value, find_item_index_by_key, load_resource, load_resource_unvalidated,
+        next_numeric_id, validate_resource_snapshot, write_validated_resource,
     },
 };
+
+enum ResourceValidation {
+    /// The current snapshot must pass admission validation before it is modified.
+    BeforeAndAfter,
+    /// Whole-value replacements may repair an invalid snapshot, so only the result is validated.
+    AfterOnly,
+}
 
 async fn update_locked_resource<T>(
     state: &AppState,
     resource: &str,
+    validation: ResourceValidation,
     update: impl FnOnce(&mut Value) -> Result<T, AppError>,
 ) -> Result<T, AppError> {
     let _guard = state.write_lock_for_resource(resource).await;
     // load_resource is the immutable-snapshot validation authority. No second pre-mutation scan is
     // needed here; only the changed snapshot must be validated before persistence.
-    let mut data = load_resource(state, resource).await?.as_ref().clone();
+    let current = match validation {
+        ResourceValidation::BeforeAndAfter => load_resource(state, resource).await?,
+        ResourceValidation::AfterOnly => load_resource_unvalidated(state, resource).await?,
+    };
+    let mut data = current.as_ref().clone();
     let result = update(&mut data)?;
     let validation_revision = validate_resource_snapshot(state, resource, &data)?;
     write_validated_resource(state, resource, data, validation_revision).await?;
@@ -32,7 +44,7 @@ pub async fn create_item(
     mut payload: Value,
 ) -> Result<Value, AppError> {
     let table = state.schema_table(resource);
-    update_locked_resource(state, resource, |data| {
+    update_locked_resource(state, resource, ResourceValidation::BeforeAndAfter, |data| {
         let array = data.as_array_mut().ok_or_else(|| {
             AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array")
         })?;
@@ -55,7 +67,7 @@ pub async fn replace_item(
 ) -> Result<Value, AppError> {
     let table = state.schema_table(resource);
     let item_key = primary_key_name(table.as_ref()).to_string();
-    update_locked_resource(state, resource, |data| {
+    update_locked_resource(state, resource, ResourceValidation::AfterOnly, |data| {
         let array = data.as_array_mut().ok_or_else(|| {
             AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array")
         })?;
@@ -80,7 +92,7 @@ pub async fn patch_item(
 ) -> Result<Value, AppError> {
     let table = state.schema_table(resource);
     let item_key = primary_key_name(table.as_ref()).to_string();
-    update_locked_resource(state, resource, |data| {
+    update_locked_resource(state, resource, ResourceValidation::BeforeAndAfter, |data| {
         let array = data.as_array_mut().ok_or_else(|| {
             AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array")
         })?;
@@ -105,7 +117,7 @@ pub async fn patch_item(
 pub async fn delete_item(state: &AppState, resource: &str, id: &str) -> Result<(), AppError> {
     let table = state.schema_table(resource);
     let item_key = primary_key_name(table.as_ref()).to_string();
-    update_locked_resource(state, resource, |data| {
+    update_locked_resource(state, resource, ResourceValidation::BeforeAndAfter, |data| {
         let array = data.as_array_mut().ok_or_else(|| {
             AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array")
         })?;
@@ -122,7 +134,7 @@ pub async fn replace_resource_object(
     resource: &str,
     payload: Value,
 ) -> Result<Value, AppError> {
-    update_locked_resource(state, resource, |data| {
+    update_locked_resource(state, resource, ResourceValidation::AfterOnly, |data| {
         if !data.is_object() || !payload.is_object() {
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -140,7 +152,7 @@ pub async fn patch_resource_object(
     resource: &str,
     payload: Value,
 ) -> Result<Value, AppError> {
-    update_locked_resource(state, resource, |data| {
+    update_locked_resource(state, resource, ResourceValidation::AfterOnly, |data| {
         let current = data.as_object_mut().ok_or_else(|| {
             AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON object")
         })?;
@@ -880,5 +892,38 @@ mod tests {
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(err.message.contains("Resource is not a JSON object"));
         assert_eq!(read_json(&path), json!([{"id": 1}]));
+    }
+
+    #[tokio::test]
+    async fn whole_value_replacement_repairs_invalid_snapshot_but_patch_rejects_it() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let users = temp.path().join("users.json");
+        let profile = temp.path().join("profile.json");
+        write_json(&users, &json!([{"id": 1, "name": 7}]));
+        write_json(&profile, &json!({"name": "Ada", "theme": 3}));
+        let tables = users_declared_schema()
+            .tables
+            .into_iter()
+            .chain(profile_declared_schema().tables)
+            .collect();
+        let state = test_state_for_folder(
+            temp.path(),
+            &["users", "profile"],
+            Some(DeclaredSchema { tables }),
+        );
+
+        let err = patch_item(&state, "users", "1", json!({"id": 1}))
+            .await
+            .expect_err("patch requires a valid current snapshot");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        replace_item(&state, "users", "1", json!({"id": 1, "name": "Ada"}))
+            .await
+            .expect("replace item");
+        replace_resource_object(&state, "profile", json!({"name": "Ada", "theme": "dark"}))
+            .await
+            .expect("replace object");
+        assert_eq!(read_json(&users), json!([{"id": 1, "name": "Ada"}]));
+        assert_eq!(read_json(&profile), json!({"name": "Ada", "theme": "dark"}));
     }
 }

@@ -36,9 +36,9 @@ pub fn validate_resource_snapshot(
     let Some(table) = table else {
         return Ok(revision);
     };
+    validate_resource_data_with_table(resource, data, &table)?;
     let rows = data.as_array().map_or(1, Vec::len);
     state.metrics.record_resource_validation(rows);
-    validate_resource_data_with_table(resource, data, &table)?;
     Ok(revision)
 }
 

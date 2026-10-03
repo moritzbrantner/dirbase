@@ -7,7 +7,7 @@ use crate::{
     app::AppState,
     error::AppError,
     schema::{ColumnSchema, ColumnType},
-    storage::load_resource,
+    storage::load_resource_unvalidated,
 };
 
 use super::types::SqlExportDialect;
@@ -25,7 +25,7 @@ pub(crate) async fn build_sql_export(
         }
     )];
     for resource in resources {
-        let data = load_resource(state, &resource).await?;
+        let data = load_resource_unvalidated(state, &resource).await?;
         append_table_export(&mut chunks, state, &resource, data.as_ref(), dialect)?;
     }
     Ok(chunks.concat())
