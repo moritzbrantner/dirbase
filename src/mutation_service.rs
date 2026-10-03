@@ -6,13 +6,15 @@ use crate::{
     error::AppError,
     schema::{TableSchema, primary_key_name},
     storage::{
-        coerce_id_value, find_item_index_by_key, load_resource, next_numeric_id,
-        validate_resource_data, write_resource,
+        coerce_id_value, find_item_index_by_key, load_resource, load_resource_unvalidated,
+        next_numeric_id, validate_resource_snapshot, write_validated_resource,
     },
 };
 
 enum ResourceValidation {
+    /// The current snapshot must pass admission validation before it is modified.
     BeforeAndAfter,
+    /// Whole-value replacements may repair an invalid snapshot, so only the result is validated.
     AfterOnly,
 }
 
@@ -23,13 +25,16 @@ async fn update_locked_resource<T>(
     update: impl FnOnce(&mut Value) -> Result<T, AppError>,
 ) -> Result<T, AppError> {
     let _guard = state.write_lock_for_resource(resource).await;
-    let mut data = load_resource(state, resource).await?.as_ref().clone();
-    if matches!(validation, ResourceValidation::BeforeAndAfter) {
-        validate_resource_data(state, resource, &data)?;
-    }
+    // load_resource is the immutable-snapshot validation authority. No second pre-mutation scan is
+    // needed here; only the changed snapshot must be validated before persistence.
+    let current = match validation {
+        ResourceValidation::BeforeAndAfter => load_resource(state, resource).await?,
+        ResourceValidation::AfterOnly => load_resource_unvalidated(state, resource).await?,
+    };
+    let mut data = current.as_ref().clone();
     let result = update(&mut data)?;
-    validate_resource_data(state, resource, &data)?;
-    write_resource(state, resource, data).await?;
+    let validation_revision = validate_resource_snapshot(state, resource, &data)?;
+    write_validated_resource(state, resource, data, validation_revision).await?;
     Ok(result)
 }
 
@@ -549,6 +554,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn patch_item_reuses_admission_validation_and_carries_post_validation() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("users.json");
+        write_json(&path, &json!([{"id": 1, "name": "Ada"}]));
+        let state = test_state_for_folder(temp.path(), &["users"], Some(users_declared_schema()));
+
+        patch_item(&state, "users", "1", json!({"name": "Grace"})).await.expect("patch");
+        let loaded = load_resource(&state, "users").await.expect("read after patch");
+
+        assert_eq!(loaded[0]["name"], "Grace");
+        assert_eq!(
+            state
+                .metrics
+                .resource_validation_passes_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "one admission validation plus one modified-snapshot validation"
+        );
+        assert_eq!(
+            state
+                .metrics
+                .resource_cache_revalidations_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "post-validation authority should survive persistence and schema refresh"
+        );
+    }
+
+    #[tokio::test]
     async fn patch_item_rejects_schema_constraint_violations_without_persisting() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("users.json");
@@ -858,5 +892,38 @@ mod tests {
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(err.message.contains("Resource is not a JSON object"));
         assert_eq!(read_json(&path), json!([{"id": 1}]));
+    }
+
+    #[tokio::test]
+    async fn whole_value_replacement_repairs_invalid_snapshot_but_patch_rejects_it() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let users = temp.path().join("users.json");
+        let profile = temp.path().join("profile.json");
+        write_json(&users, &json!([{"id": 1, "name": 7}]));
+        write_json(&profile, &json!({"name": "Ada", "theme": 3}));
+        let tables = users_declared_schema()
+            .tables
+            .into_iter()
+            .chain(profile_declared_schema().tables)
+            .collect();
+        let state = test_state_for_folder(
+            temp.path(),
+            &["users", "profile"],
+            Some(DeclaredSchema { tables }),
+        );
+
+        let err = patch_item(&state, "users", "1", json!({"id": 1}))
+            .await
+            .expect_err("patch requires a valid current snapshot");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        replace_item(&state, "users", "1", json!({"id": 1, "name": "Ada"}))
+            .await
+            .expect("replace item");
+        replace_resource_object(&state, "profile", json!({"name": "Ada", "theme": "dark"}))
+            .await
+            .expect("replace object");
+        assert_eq!(read_json(&users), json!([{"id": 1, "name": "Ada"}]));
+        assert_eq!(read_json(&profile), json!({"name": "Ada", "theme": "dark"}));
     }
 }

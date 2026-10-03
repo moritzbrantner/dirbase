@@ -24,15 +24,63 @@ pub use io::{
     create_resource_value, delete_resource_value, is_reserved_resource_name,
     is_valid_resource_name, resource_file_path, scan_resources,
 };
+pub(crate) use validation::validate_resource_snapshot;
 pub use validation::{validate_resource_data, validate_sql_identifier};
 
 pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value>, AppError> {
     let file = resource_file_path(&state.data_source, resource)?;
+    let current_validation_revision = state.validation_schema_snapshot(resource).0;
 
-    if let Some(value) =
-        state.resource_cache.read().await.get(resource).map(|cached| cached.value.clone())
-    {
+    // Bind the snapshot first so the cache read guard is released before revalidation re-locks
+    // the cache for writing; an `if let` scrutinee would keep the guard alive and deadlock.
+    let cached = state.resource_cache.read().await.get(resource).cloned();
+    if let Some(cached) = cached {
+        if cached.validation_revision == Some(current_validation_revision) {
+            state.metrics.record_resource_cache_hit();
+            return Ok(cached.value);
+        }
+
+        state.metrics.record_resource_cache_revalidation();
+        let value = cached.value;
+        let validation_revision =
+            validation::validate_resource_snapshot(state, resource, value.as_ref())?;
+        cache::mark_cached_resource_validated(state, resource, value.clone(), validation_revision)
+            .await;
         return Ok(value);
+    }
+
+    state.metrics.record_resource_cache_miss();
+    if !state.resources.read().await.contains(resource) {
+        return Err(AppError::new(
+            StatusCode::NOT_FOUND,
+            format!("Resource '{resource}' not found"),
+        ));
+    }
+
+    let value = Arc::new(io::read_resource_value(&state.data_source, &file, resource).await?);
+    let validation_revision =
+        validation::validate_resource_snapshot(state, resource, value.as_ref())?;
+    cache::mark_cached_resource_validated(state, resource, value.clone(), validation_revision)
+        .await;
+    Ok(value)
+}
+
+/// Loads the current immutable snapshot without declared-schema admission validation.
+///
+/// Only metadata consumers (OpenAPI, GraphQL schema building, overview summaries, SQL export,
+/// embeds) and mutations that may repair an invalid snapshot use this; data reads must use
+/// [`load_resource`]. A snapshot cached here carries no validation revision, so the next
+/// validated read still performs one admission validation.
+pub async fn load_resource_unvalidated(
+    state: &AppState,
+    resource: &str,
+) -> Result<Arc<Value>, AppError> {
+    let file = resource_file_path(&state.data_source, resource)?;
+
+    // Cache hit/miss metrics describe validated admission and are recorded only by load_resource.
+    let cached = state.resource_cache.read().await.get(resource).cloned();
+    if let Some(cached) = cached {
+        return Ok(cached.value);
     }
 
     if !state.resources.read().await.contains(resource) {
@@ -43,15 +91,34 @@ pub async fn load_resource(state: &AppState, resource: &str) -> Result<Arc<Value
     }
 
     let value = Arc::new(io::read_resource_value(&state.data_source, &file, resource).await?);
-
-    cache::update_cached_resource(state, resource, value.clone()).await;
+    cache::insert_cached_resource_if_absent(state, resource, value.clone()).await;
     Ok(value)
 }
 
+/// Persists an unvalidated snapshot; production writers use `write_validated_resource`.
+#[cfg(test)]
 pub async fn write_resource(
     state: &AppState,
     resource: &str,
     value: Value,
+) -> Result<(), AppError> {
+    write_resource_snapshot(state, resource, value, None).await
+}
+
+pub(crate) async fn write_validated_resource(
+    state: &AppState,
+    resource: &str,
+    value: Value,
+    validation_revision: u64,
+) -> Result<(), AppError> {
+    write_resource_snapshot(state, resource, value, Some(validation_revision)).await
+}
+
+async fn write_resource_snapshot(
+    state: &AppState,
+    resource: &str,
+    value: Value,
+    validation_revision: Option<u64>,
 ) -> Result<(), AppError> {
     let file = resource_file_path(&state.data_source, resource)?;
     let can_refresh_locally =
@@ -97,6 +164,15 @@ pub async fn write_resource(
         refresh_inferred_schema(state).await?;
     }
 
+    // Rebuild cache metadata only after inferred-schema installation. A mutation may already have
+    // validated this exact snapshot; carrying that revision avoids another O(N) read-admission scan.
+    // If declared schema changed concurrently, the older revision remains visible and the next read
+    // revalidates before trusting it.
+    if let Some(validation_revision) = validation_revision {
+        cache::mark_cached_resource_validated(state, resource, value.clone(), validation_revision)
+            .await;
+    }
+
     state.invalidate_graphql_schema().await;
     state.emit_event("resource_changed", Some(resource.to_string()));
     state.emit_event("schema_changed", None);
@@ -125,7 +201,7 @@ pub(crate) async fn refresh_inferred_schema(state: &AppState) -> Result<(), AppE
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeSet, HashMap},
+        collections::{BTreeMap, BTreeSet, HashMap},
         path::PathBuf,
         sync::Arc,
     };
@@ -133,7 +209,26 @@ mod tests {
     use tokio::sync::RwLock;
 
     use super::*;
-    use crate::app::{AppState, DataSource};
+    use crate::{
+        app::{AppState, DataSource},
+        schema::{ColumnSchema, ColumnType, DeclaredSchema, DeclaredTableSchema},
+    };
+
+    fn declared_users_schema(name_type: ColumnType) -> DeclaredSchema {
+        DeclaredSchema {
+            tables: BTreeMap::from([(
+                "users".to_string(),
+                DeclaredTableSchema {
+                    primary_key: Some("id".to_string()),
+                    columns: BTreeMap::from([
+                        ("id".to_string(), ColumnSchema::new(ColumnType::Integer, false)),
+                        ("name".to_string(), ColumnSchema::new(name_type, false)),
+                    ]),
+                    ..DeclaredTableSchema::default()
+                },
+            )]),
+        }
+    }
 
     fn test_state(data_source: DataSource) -> AppState {
         AppState {
@@ -161,6 +256,133 @@ mod tests {
             health: Arc::new(crate::app::HealthState::new(true, None)),
             event_bus: tokio::sync::broadcast::channel(16).0,
         }
+    }
+
+    #[tokio::test]
+    async fn load_resource_validates_immutable_snapshot_once_per_declared_revision() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.insert("users".to_string());
+        state
+            .update_declared_schema(Some(declared_users_schema(ColumnType::String)))
+            .expect("declared schema");
+        std::fs::write(
+            temp.path().join("users.json"),
+            r#"[{"id":1,"name":"Ada"},{"id":2,"name":"Grace"},{"id":3,"name":"Lin"}]"#,
+        )
+        .expect("write users");
+
+        let first = load_resource(&state, "users").await.expect("first load");
+        let second = load_resource(&state, "users").await.expect("second load");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(
+            state.metrics.resource_cache_misses_total.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state.metrics.resource_cache_hits_total.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state
+                .metrics
+                .resource_validation_passes_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state.metrics.resource_validation_rows_total.load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_revalidation_of_unvalidated_cache_entry_does_not_deadlock() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.insert("users".to_string());
+        let value = Arc::new(serde_json::json!([{"id": 1, "name": "Ada"}]));
+        update_cached_resource(&state, "users", value.clone()).await;
+
+        let loaded =
+            tokio::time::timeout(std::time::Duration::from_secs(5), load_resource(&state, "users"))
+                .await
+                .expect("revalidation must not deadlock on the cache lock")
+                .expect("load");
+
+        assert!(Arc::ptr_eq(&loaded, &value));
+        assert_eq!(
+            state
+                .metrics
+                .resource_cache_revalidations_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn declared_schema_change_revalidates_cached_snapshot_before_read() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.insert("users".to_string());
+        state
+            .update_declared_schema(Some(declared_users_schema(ColumnType::String)))
+            .expect("initial declared schema");
+        std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
+            .expect("write users");
+
+        load_resource(&state, "users").await.expect("initial valid load");
+        state
+            .update_declared_schema(Some(declared_users_schema(ColumnType::Integer)))
+            .expect("updated declared schema");
+
+        let err =
+            load_resource(&state, "users").await.expect_err("cached snapshot must be revalidated");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            state
+                .metrics
+                .resource_cache_revalidations_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state
+                .metrics
+                .resource_validation_passes_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "a failed revalidation is not a validation admission"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_validation_is_not_recorded_as_admission() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let state = test_state(DataSource::Folder(temp.path().to_path_buf()));
+        state.resources.write().await.insert("users".to_string());
+        state
+            .update_declared_schema(Some(declared_users_schema(ColumnType::Integer)))
+            .expect("declared schema");
+        std::fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#)
+            .expect("write users");
+
+        for _ in 0..2 {
+            let err = load_resource(&state, "users").await.expect_err("invalid snapshot");
+            assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(
+            state
+                .metrics
+                .resource_validation_passes_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            state.metrics.resource_validation_rows_total.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
     }
 
     #[tokio::test]

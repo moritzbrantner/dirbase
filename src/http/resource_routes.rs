@@ -22,7 +22,7 @@ use crate::{
     },
     resource_service,
     schema::primary_key_name,
-    storage::{find_item_by_key, load_resource, validate_resource_data},
+    storage::{find_item_by_key, load_resource},
 };
 
 #[derive(Deserialize)]
@@ -104,7 +104,6 @@ pub async fn get_collection(
     let _guards = state.read_locks_for_resources(&lock_resources).await;
 
     let data = load_resource(&state, &resource).await?;
-    validate_resource_data(&state, &resource, data.as_ref())?;
     if !data.is_array() {
         if !collection_query_operators_present(&parsed) {
             return Ok(Json(data.as_ref().clone()).into_response());
@@ -228,7 +227,6 @@ async fn get_local_item_value(
 ) -> Result<Value, AppError> {
     let _guard = state.read_lock_for_resource(resource).await;
     let data = load_resource(state, resource).await?;
-    validate_resource_data(state, resource, data.as_ref())?;
     let array = data
         .as_array()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;

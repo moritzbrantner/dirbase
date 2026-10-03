@@ -10,7 +10,7 @@ use crate::{
     query::filters::value_to_filter_string,
     relations::{build_relation_lookup, resolve_related_row_in_lookup},
     schema::ManyToManyRelation,
-    storage::{load_resource, validate_resource_data},
+    storage::load_resource,
 };
 
 use super::{
@@ -80,8 +80,6 @@ pub(crate) async fn resolve_graphql_many_to_many_rows(
     let through_resource = load_cached_graphql_resource(cache, state, &relation.through_table)
         .await
         .map_err(app_error_to_graphql)?;
-    validate_resource_data(state, &relation.through_table, through_resource.as_ref())
-        .map_err(app_error_to_graphql)?;
     let through_items = through_resource.as_array().ok_or_else(|| {
         GraphqlError::new(format!("Resource '{}' is not a JSON array", relation.through_table))
     })?;
@@ -115,8 +113,6 @@ pub(crate) async fn resolve_graphql_many_to_many_rows(
 
     let target_resource = load_cached_graphql_resource(cache, state, &relation.target_table)
         .await
-        .map_err(app_error_to_graphql)?;
-    validate_resource_data(state, &relation.target_table, target_resource.as_ref())
         .map_err(app_error_to_graphql)?;
     let target_items = target_resource.as_array().ok_or_else(|| {
         GraphqlError::new(format!("Resource '{}' is not a JSON array", relation.target_table))

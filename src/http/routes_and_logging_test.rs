@@ -202,6 +202,14 @@ fn create_suffix_serves_item_creation_form_for_array_resources() {
     assert!(create_form.contains("\"field_type\":\"boolean\""), "{create_form}");
     assert!(create_form.contains("method: 'POST'"), "{create_form}");
 
+    let warm_create_form = http_request(&bind_addr, "GET", "/posts/create", None);
+    assert!(warm_create_form.starts_with("HTTP/1.1 200 OK\r\n"), "{warm_create_form}");
+    let metrics = http_request(&bind_addr, "GET", "/metrics", None);
+    assert!(
+        metrics.contains("dirbase_resource_validation_passes_total 1\n"),
+        "create forms must reuse the admission validation of the cached snapshot: {metrics}"
+    );
+
     let object_create = http_request(&bind_addr, "GET", "/profile/create", None);
     assert!(object_create.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{object_create}");
     assert!(

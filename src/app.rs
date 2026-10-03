@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::PathBuf,
     sync::{
         Arc, RwLock as StdRwLock,
@@ -47,6 +47,10 @@ pub struct CachedResource {
     pub value: Arc<Value>,
     pub id_index: Option<HashMap<String, usize>>,
     pub primary_key: String,
+    /// Declared-schema revision this immutable snapshot was validated against.
+    /// `None` means the producer already validated the mutation before persistence but the cached
+    /// snapshot still needs one admission validation before read paths may trust it.
+    pub validation_revision: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -54,6 +58,8 @@ pub struct SchemaStore {
     pub declared: Option<DeclaredSchema>,
     pub inferred: Schema,
     pub merged: Schema,
+    declared_revisions: BTreeMap<String, u64>,
+    next_declared_revision: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -92,6 +98,11 @@ pub struct MetricsStore {
     pub responses_error: AtomicU64,
     pub auth_failures: AtomicU64,
     pub events_sent: AtomicU64,
+    pub resource_cache_hits_total: AtomicU64,
+    pub resource_cache_misses_total: AtomicU64,
+    pub resource_cache_revalidations_total: AtomicU64,
+    pub resource_validation_passes_total: AtomicU64,
+    pub resource_validation_rows_total: AtomicU64,
 }
 
 #[derive(Debug, Default)]
@@ -110,7 +121,13 @@ pub struct ServerEvent {
 impl SchemaStore {
     pub fn new(declared: Option<DeclaredSchema>, inferred: Schema) -> Result<Self, String> {
         let merged = merge_schemas(declared.as_ref(), &inferred)?;
-        Ok(Self { declared, inferred, merged })
+        Ok(Self {
+            declared,
+            inferred,
+            merged,
+            declared_revisions: BTreeMap::new(),
+            next_declared_revision: 0,
+        })
     }
 
     pub fn replace_inferred(&mut self, inferred: Schema) -> Result<(), String> {
@@ -120,9 +137,36 @@ impl SchemaStore {
     }
 
     pub fn replace_declared(&mut self, declared: Option<DeclaredSchema>) -> Result<(), String> {
+        let merged = merge_schemas(declared.as_ref(), &self.inferred)?;
+        let previous_tables = self.declared.as_ref().map(|schema| &schema.tables);
+        let next_tables = declared.as_ref().map(|schema| &schema.tables);
+        let changed_resources = previous_tables
+            .into_iter()
+            .flat_map(|tables| tables.keys())
+            .chain(next_tables.into_iter().flat_map(|tables| tables.keys()))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        for resource in changed_resources {
+            let previous = self.declared.as_ref().and_then(|schema| schema.tables.get(&resource));
+            let next = declared.as_ref().and_then(|schema| schema.tables.get(&resource));
+            if previous == next {
+                continue;
+            }
+            self.next_declared_revision = self.next_declared_revision.wrapping_add(1);
+            self.declared_revisions.insert(resource, self.next_declared_revision);
+        }
+
         self.declared = declared;
-        self.merged = merge_schemas(self.declared.as_ref(), &self.inferred)?;
+        self.merged = merged;
         Ok(())
+    }
+
+    pub fn validation_snapshot(&self, resource: &str) -> (u64, Option<DeclaredTableSchema>) {
+        (
+            self.declared_revisions.get(resource).copied().unwrap_or(0),
+            self.declared.as_ref().and_then(|schema| schema.tables.get(resource).cloned()),
+        )
     }
 }
 
@@ -146,6 +190,24 @@ impl MetricsStore {
         self.events_sent.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_resource_cache_hit(&self) {
+        self.resource_cache_hits_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_resource_cache_miss(&self) {
+        self.resource_cache_misses_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_resource_cache_revalidation(&self) {
+        self.resource_cache_revalidations_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_resource_validation(&self, rows: usize) {
+        self.resource_validation_passes_total.fetch_add(1, Ordering::Relaxed);
+        self.resource_validation_rows_total
+            .fetch_add(u64::try_from(rows).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
     pub fn render_prometheus(&self) -> String {
         format!(
             concat!(
@@ -163,13 +225,33 @@ impl MetricsStore {
                 "dirbase_auth_failures_total {}\n",
                 "# HELP dirbase_events_sent_total Total SSE events published.\n",
                 "# TYPE dirbase_events_sent_total counter\n",
-                "dirbase_events_sent_total {}\n"
+                "dirbase_events_sent_total {}\n",
+                "# HELP dirbase_resource_cache_hits_total Validated immutable resource-cache hits.\n",
+                "# TYPE dirbase_resource_cache_hits_total counter\n",
+                "dirbase_resource_cache_hits_total {}\n",
+                "# HELP dirbase_resource_cache_misses_total Resource-cache misses requiring storage reads.\n",
+                "# TYPE dirbase_resource_cache_misses_total counter\n",
+                "dirbase_resource_cache_misses_total {}\n",
+                "# HELP dirbase_resource_cache_revalidations_total Cached snapshots revalidated after mutation or declared-schema change.\n",
+                "# TYPE dirbase_resource_cache_revalidations_total counter\n",
+                "dirbase_resource_cache_revalidations_total {}\n",
+                "# HELP dirbase_resource_validation_passes_total Full resource validation admissions.\n",
+                "# TYPE dirbase_resource_validation_passes_total counter\n",
+                "dirbase_resource_validation_passes_total {}\n",
+                "# HELP dirbase_resource_validation_rows_total Rows examined by full resource validation admissions.\n",
+                "# TYPE dirbase_resource_validation_rows_total counter\n",
+                "dirbase_resource_validation_rows_total {}\n"
             ),
             self.requests_total.load(Ordering::Relaxed),
             self.responses_total.load(Ordering::Relaxed),
             self.responses_error.load(Ordering::Relaxed),
             self.auth_failures.load(Ordering::Relaxed),
             self.events_sent.load(Ordering::Relaxed),
+            self.resource_cache_hits_total.load(Ordering::Relaxed),
+            self.resource_cache_misses_total.load(Ordering::Relaxed),
+            self.resource_cache_revalidations_total.load(Ordering::Relaxed),
+            self.resource_validation_passes_total.load(Ordering::Relaxed),
+            self.resource_validation_rows_total.load(Ordering::Relaxed),
         )
     }
 }
@@ -216,8 +298,11 @@ impl AppState {
     }
 
     pub fn validation_schema_table(&self, resource: &str) -> Option<DeclaredTableSchema> {
-        let store = self.schema_store.read().expect("schema store");
-        store.declared.as_ref().and_then(|schema| schema.tables.get(resource).cloned())
+        self.validation_schema_snapshot(resource).1
+    }
+
+    pub fn validation_schema_snapshot(&self, resource: &str) -> (u64, Option<DeclaredTableSchema>) {
+        self.schema_store.read().expect("schema store").validation_snapshot(resource)
     }
 
     pub fn update_inferred_schema(&self, inferred: Schema) -> Result<(), String> {
@@ -486,6 +571,39 @@ mod tests {
     }
 
     #[test]
+    fn declared_validation_revisions_only_advance_for_changed_resources() {
+        let mut store = SchemaStore::new(
+            Some(DeclaredSchema {
+                tables: BTreeMap::from([
+                    ("users".to_string(), declared_schema().tables["users"].clone()),
+                    (
+                        "posts".to_string(),
+                        DeclaredTableSchema {
+                            columns: BTreeMap::from([column("title", ColumnType::String, false)]),
+                            ..DeclaredTableSchema::default()
+                        },
+                    ),
+                ]),
+            }),
+            inferred_schema(),
+        )
+        .expect("schema store");
+        let users_before = store.validation_snapshot("users").0;
+        let posts_before = store.validation_snapshot("posts").0;
+
+        let mut next = store.declared.clone().expect("declared schema");
+        next.tables
+            .get_mut("users")
+            .expect("users")
+            .columns
+            .insert("active".to_string(), ColumnSchema::new(ColumnType::Boolean, true));
+        store.replace_declared(Some(next)).expect("replace declared");
+
+        assert_ne!(store.validation_snapshot("users").0, users_before);
+        assert_eq!(store.validation_snapshot("posts").0, posts_before);
+    }
+
+    #[test]
     fn schema_store_propagates_merge_errors() {
         let err = SchemaStore::new(Some(invalid_declared_schema()), inferred_schema())
             .expect_err("error");
@@ -515,9 +633,30 @@ mod tests {
         metrics.record_auth_failure();
         metrics.record_event();
         metrics.record_event();
+        metrics.record_resource_cache_hit();
+        metrics.record_resource_cache_miss();
+        metrics.record_resource_cache_revalidation();
+        metrics.record_resource_validation(7);
 
         assert_eq!(metrics.auth_failures.load(std::sync::atomic::Ordering::Relaxed), 1);
         assert_eq!(metrics.events_sent.load(std::sync::atomic::Ordering::Relaxed), 2);
+        assert_eq!(metrics.resource_cache_hits_total.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(
+            metrics.resource_cache_misses_total.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics.resource_cache_revalidations_total.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics.resource_validation_passes_total.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics.resource_validation_rows_total.load(std::sync::atomic::Ordering::Relaxed),
+            7
+        );
     }
 
     #[test]
@@ -534,6 +673,11 @@ mod tests {
         assert!(rendered.contains("dirbase_responses_error_total 1"));
         assert!(rendered.contains("dirbase_auth_failures_total 1"));
         assert!(rendered.contains("dirbase_events_sent_total 1"));
+        assert!(rendered.contains("dirbase_resource_cache_hits_total 0"));
+        assert!(rendered.contains("dirbase_resource_cache_misses_total 0"));
+        assert!(rendered.contains("dirbase_resource_cache_revalidations_total 0"));
+        assert!(rendered.contains("dirbase_resource_validation_passes_total 0"));
+        assert!(rendered.contains("dirbase_resource_validation_rows_total 0"));
     }
 
     #[test]

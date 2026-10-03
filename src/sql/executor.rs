@@ -11,7 +11,7 @@ use crate::{
         FilterCondition, SortColumn, filter_collection_data, get_value_at_path,
         sort_collection_data,
     },
-    storage::{load_resource, validate_resource_data},
+    storage::load_resource,
 };
 
 use super::{
@@ -113,7 +113,6 @@ async fn materialize_sql_rows(
 ) -> Result<Vec<Value>, AppError> {
     let base = load_resource(state, &parsed.resource).await?;
     let base_value = base.as_ref().clone();
-    validate_resource_data(state, &parsed.resource, &base_value)?;
     let base_rows = base_value
         .as_array()
         .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?;
@@ -138,7 +137,6 @@ async fn materialize_sql_rows(
         }
         let resource = load_resource(state, &join.resource).await?;
         let data = resource.as_ref().clone();
-        validate_resource_data(state, &join.resource, &data)?;
         let rows = data
             .as_array()
             .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, "Resource is not a JSON array"))?

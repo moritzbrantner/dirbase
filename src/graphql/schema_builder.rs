@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use async_graphql::dynamic::{Object, Scalar, Schema as DynamicSchema};
 use serde_json::Value as JsonValue;
 
-use crate::{app::AppState, schema::primary_key_name, storage::load_resource};
+use crate::{app::AppState, schema::primary_key_name, storage::load_resource_unvalidated};
 
 use super::{
     fields::{
@@ -32,7 +32,7 @@ pub async fn build_schema(state: &AppState) -> Result<DynamicSchema, String> {
     let mut loaded_resources = Vec::with_capacity(resources.len());
 
     for resource in &resources {
-        let value = load_resource(state, resource).await.map_err(|err| {
+        let value = load_resource_unvalidated(state, resource).await.map_err(|err| {
             format!("GraphQL schema build failed for resource '{resource}': {}", err.message)
         })?;
         let value = value.as_ref().clone();

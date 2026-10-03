@@ -13,7 +13,7 @@ use crate::{
     error::AppError,
     http::html::{encode_path_segment, escape_html},
     schema::{ColumnType, TableSchema, primary_key_name},
-    storage::{load_resource, validate_resource_data},
+    storage::load_resource,
 };
 
 pub async fn get_resource_editor(
@@ -42,7 +42,6 @@ pub async fn get_create_item_form(
 ) -> Result<Html<String>, AppError> {
     let _guard = state.read_lock_for_resource(&resource).await;
     let data = load_resource(&state, &resource).await?;
-    validate_resource_data(&state, &resource, data.as_ref())?;
     let items = data.as_array().ok_or_else(|| {
         AppError::new(StatusCode::BAD_REQUEST, "Create forms require a JSON array resource")
     })?;

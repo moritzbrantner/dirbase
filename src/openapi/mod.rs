@@ -7,7 +7,7 @@ use crate::{
     app::AppState,
     error::{AppError, ERROR_CODE_UNAUTHORIZED},
     schema::{ColumnSchema, ColumnType, Schema, TableSchema, primary_key_name},
-    storage::load_resource,
+    storage::load_resource_unvalidated,
 };
 
 enum ResourceShape {
@@ -82,7 +82,7 @@ async fn resource_document_spec(
     resource: &str,
     operation_stem: String,
 ) -> Result<ResourceDocumentSpec, AppError> {
-    let data = load_resource(state, resource).await?;
+    let data = load_resource_unvalidated(state, resource).await?;
     let table = schema.tables.get(resource);
     let shape = if data.is_array() {
         ResourceShape::Array
