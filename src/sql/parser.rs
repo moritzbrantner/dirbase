@@ -56,7 +56,9 @@ pub(crate) async fn parse_sql_query(
             let pagination = match (limit, offset) {
                 (None, None) => None,
                 (Some(per_page), Some(offset)) => {
-                    Some(Pagination { page: (offset / per_page) + 1, per_page })
+                    // LIMIT 0 selects no rows; there is no page to derive from OFFSET.
+                    let page = offset.checked_div(per_page).map_or(1, |page| page + 1);
+                    Some(Pagination { page, per_page })
                 }
                 (Some(per_page), None) => Some(Pagination { page: 1, per_page }),
                 (None, Some(_)) => {
@@ -578,9 +580,6 @@ fn parse_sql_usize_literal(expr: &Expr, clause: &str) -> Result<usize, AppError>
     let parsed = value.parse::<usize>().map_err(|_| {
         AppError::new(StatusCode::BAD_REQUEST, format!("{clause} must be a non-negative integer"))
     })?;
-    if parsed == 0 && clause == "LIMIT" {
-        return Err(AppError::new(StatusCode::BAD_REQUEST, "LIMIT must be greater than 0"));
-    }
     Ok(parsed)
 }
 

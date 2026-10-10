@@ -358,7 +358,6 @@ fn sql_rejects_statement_and_limit_edge_cases() {
         "invalid_sql",
         "OFFSET requires LIMIT",
     );
-    assert_sql_error(&bind_addr, "SELECT * FROM users LIMIT 0", "", "LIMIT must be greater than 0");
     assert_sql_error(
         &bind_addr,
         "SELECT * FROM users LIMIT -1",
