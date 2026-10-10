@@ -40,11 +40,7 @@ fn xml_mode_returns_collection_responses_as_xml() {
 #[test]
 fn xml_mode_keeps_browser_resource_editor_responses_as_html() {
     let temp = tempfile::tempdir().expect("create temp directory");
-    fs::write(
-        temp.path().join("users.json"),
-        r#"[{"id":1,"name":"Ada"}]"#,
-    )
-    .expect("write users");
+    fs::write(temp.path().join("users.json"), r#"[{"id":1,"name":"Ada"}]"#).expect("write users");
 
     let (_child, bind_addr) = spawn_folder_server_with_args(temp.path(), &["--xml"]);
     let response = http_request_with_headers(
