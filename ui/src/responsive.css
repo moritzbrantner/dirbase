@@ -86,4 +86,13 @@
   .schema-sidebar-item:hover {
     transform: none;
   }
+
+  /*
+    Tailwind 4 emits the hover lift (hover:-translate-y-px) as the individual
+    translate property; clear it for every hovered element, including the
+    toggle/tab/sticky-action buttons that share the lift rule.
+  */
+  :hover {
+    translate: none;
+  }
 }

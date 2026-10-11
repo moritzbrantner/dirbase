@@ -1,6 +1,62 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+@source '../../src/http/**/*.rs';
+
+@theme {
+  --color-sand-50: #fbf8f3;
+  --color-sand-100: #f3ede2;
+  --color-sand-200: #e7dcc8;
+  --color-sand-300: #d7c4a4;
+
+  --color-stoneink-700: #48504a;
+  --color-stoneink-800: #28302c;
+  --color-stoneink-900: #161d1a;
+
+  --color-tealbrand-500: #0f766e;
+  --color-tealbrand-600: #0b5e58;
+  --color-tealbrand-700: #0a4d48;
+
+  --shadow-panel: 0 18px 45px rgba(22, 29, 26, 0.08);
+  --shadow-float: 0 14px 34px rgba(15, 118, 110, 0.1);
+
+  /*
+    v4 uses unitless line-height ratios, which children with an arbitrary
+    font size (e.g. text-[0.68rem] labels) inherit and shrink. Keep the v3
+    absolute line heights so the layout is unchanged.
+  */
+  --text-xs--line-height: 1rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl--line-height: 2.25rem;
+  --text-4xl--line-height: 2.5rem;
+}
+
+/*
+  Tailwind CSS v4 changed the default border color to currentcolor and the
+  default placeholder color; keep the v3 defaults this UI was designed with.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-gray-400);
+  }
+
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+}
 
 @layer base {
   * {
@@ -58,7 +114,7 @@
   }
 
   .shell-card {
-    @apply rounded-3xl border border-stone-900/10 bg-white/75 shadow-panel backdrop-blur-sm;
+    @apply rounded-3xl border border-stone-900/10 bg-white/75 shadow-panel backdrop-blur-xs;
   }
 
   .shell-subtle {
@@ -194,7 +250,7 @@
   .overview-input,
   .overview-select,
   .schema-editor {
-    @apply w-full rounded-2xl border border-stone-900/10 bg-white/80 px-3 py-2.5 text-sm text-stoneink-900 outline-none ring-0 placeholder:text-stoneink-700/60 focus:border-tealbrand-500/40;
+    @apply w-full rounded-2xl border border-stone-900/10 bg-white/80 px-3 py-2.5 text-sm text-stoneink-900 outline-hidden ring-0 placeholder:text-stoneink-700/60 focus:border-tealbrand-500/40;
   }
 
   .schema-editor {
@@ -231,7 +287,7 @@
   }
 
   .workspace-main .explorer-header {
-    @apply sticky top-0 z-10 rounded-2xl border-b border-stone-900/10 bg-white/80 px-1 pb-4 pt-1 backdrop-blur;
+    @apply sticky top-0 z-10 rounded-2xl border-b border-stone-900/10 bg-white/80 px-1 pb-4 pt-1 backdrop-blur-sm;
   }
 
   .explorer-header-summary,
@@ -413,7 +469,7 @@
   }
 
   .result-card:focus-visible {
-    @apply outline-none ring-2 ring-tealbrand-500/40 ring-offset-2 ring-offset-sand-50;
+    @apply outline-hidden ring-2 ring-tealbrand-500/40 ring-offset-2 ring-offset-sand-50;
   }
 
   .result-card-title {
@@ -450,7 +506,7 @@
   }
 
   .dialog-backdrop {
-    @apply fixed inset-0 z-40 flex items-center justify-center bg-stone-950/50 p-4 backdrop-blur-sm;
+    @apply fixed inset-0 z-40 flex items-center justify-center bg-stone-950/50 p-4 backdrop-blur-xs;
   }
 
   .mutation-dialog {
@@ -480,7 +536,7 @@
   }
 
   .mobile-sticky-actions {
-    @apply sticky bottom-4 z-20 mx-auto hidden w-fit rounded-2xl border border-stone-900/10 bg-white/90 p-2 shadow-panel backdrop-blur;
+    @apply sticky bottom-4 z-20 mx-auto hidden w-fit rounded-2xl border border-stone-900/10 bg-white/90 p-2 shadow-panel backdrop-blur-sm;
   }
 
   .overview-root-hero {
@@ -787,7 +843,7 @@
   }
 
   .schema-mobile-surface-bar {
-    @apply sticky bottom-4 z-20 mx-auto hidden w-fit rounded-2xl border border-slate-900/10 bg-white/95 p-2 shadow-panel backdrop-blur;
+    @apply sticky bottom-4 z-20 mx-auto hidden w-fit rounded-2xl border border-slate-900/10 bg-white/95 p-2 shadow-panel backdrop-blur-sm;
   }
 
   .schema-mobile-surface-bar button {
@@ -875,7 +931,7 @@
 }
 
 mark {
-  @apply rounded bg-amber-200/70 px-0.5 text-inherit;
+  @apply rounded-sm bg-amber-200/70 px-0.5 text-inherit;
 }
 
 @keyframes shimmer {
