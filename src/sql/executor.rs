@@ -88,10 +88,10 @@ fn parse_exact_sql_offset(query: &str) -> Result<usize, AppError> {
     let Some(Statement::Query(query)) = statements.into_iter().next() else {
         return Ok(0);
     };
-    let Some(offset) = query.offset else {
+    let Some(offset) = super::parser::sql_query_limit_offset(&query).1 else {
         return Ok(0);
     };
-    offset.value.to_string().parse::<usize>().map_err(|_| {
+    offset.to_string().parse::<usize>().map_err(|_| {
         AppError::new(StatusCode::BAD_REQUEST, "OFFSET must be a non-negative integer")
             .with_code(crate::error::ERROR_CODE_INVALID_SQL)
     })
