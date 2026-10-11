@@ -1,6 +1,7 @@
 {
   "exclude": ["src/**/*.test.ts"],
   "compilerOptions": {
+    "rootDir": "./src",
     "outDir": "./lib",
     "target": "esnext",
     "module": "nodenext",
