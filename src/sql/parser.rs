@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use axum::http::StatusCode;
 use sqlparser::{
     ast::{
-        BinaryOperator, Expr, Ident, Join, JoinConstraint, JoinOperator, Select, SelectItem,
-        SetExpr, Statement, TableFactor, Value as SqlValue,
+        BinaryOperator, Expr, Ident, Join, JoinConstraint, JoinOperator, LimitClause,
+        ObjectNamePart, OrderByKind, OrderBySort, Query, Select, SelectItem, SetExpr, Statement,
+        TableFactor, Value as SqlValue,
     },
     dialect::GenericDialect,
     parser::Parser as SqlParser,
@@ -47,12 +48,9 @@ pub(crate) async fn parse_sql_query(
     let statement = statements.into_iter().next().expect("single statement");
     match statement {
         Statement::Query(query_box) => {
-            let offset = query_box
-                .offset
-                .map(|o| parse_sql_usize_literal(&o.value, "OFFSET"))
-                .transpose()?;
-            let limit =
-                query_box.limit.map(|e| parse_sql_usize_literal(&e, "LIMIT")).transpose()?;
+            let (limit, offset) = sql_query_limit_offset(&query_box);
+            let offset = offset.map(|o| parse_sql_usize_literal(o, "OFFSET")).transpose()?;
+            let limit = limit.map(|e| parse_sql_usize_literal(e, "LIMIT")).transpose()?;
             let pagination = match (limit, offset) {
                 (None, None) => None,
                 (Some(per_page), Some(offset)) => {
@@ -158,12 +156,13 @@ async fn parse_sql_select(
 fn parse_sql_table_factor(relation: &TableFactor) -> Result<(String, String), AppError> {
     match relation {
         TableFactor::Table { name, alias, .. } => {
+            let mut resource = None;
             for part in &name.0 {
-                validate_sql_ast_identifier(part, "resource")?;
+                let ident = sql_object_name_part_ident(part)?;
+                validate_sql_ast_identifier(ident, "resource")?;
+                resource = Some(ident);
             }
-            let resource = name
-                .0
-                .last()
+            let resource = resource
                 .ok_or_else(|| {
                     AppError::new(StatusCode::BAD_REQUEST, "Missing table/resource name")
                         .with_code(crate::error::ERROR_CODE_INVALID_SQL)
@@ -210,8 +209,10 @@ async fn parse_sql_joins(
             .with_code(crate::error::ERROR_CODE_INVALID_SQL));
         }
         let (left_alias, left_column, right_alias, right_column) = match &join.join_operator {
-            JoinOperator::Inner(JoinConstraint::On(expr)) => parse_sql_join_on(expr)?,
-            JoinOperator::Inner(_) => {
+            // sqlparser 0.54+ distinguishes a bare `JOIN` from `INNER JOIN`; both are inner joins.
+            JoinOperator::Inner(JoinConstraint::On(expr))
+            | JoinOperator::Join(JoinConstraint::On(expr)) => parse_sql_join_on(expr)?,
+            JoinOperator::Inner(_) | JoinOperator::Join(_) => {
                 return Err(AppError::new(
                     StatusCode::BAD_REQUEST,
                     "INNER JOIN requires an ON clause",
@@ -452,10 +453,10 @@ fn parse_sql_where(expr: &Expr) -> Result<Vec<FilterCondition>, AppError> {
             ])
         }
         Expr::Like { negated, any, expr, pattern, escape_char } => {
-            parse_sql_like(expr, pattern, *negated, *any, escape_char.as_deref())
+            parse_sql_like(expr, pattern, *negated, *any, escape_char.is_some())
         }
         Expr::ILike { negated, any, expr, pattern, escape_char } => {
-            parse_sql_like(expr, pattern, *negated, *any, escape_char.as_deref())
+            parse_sql_like(expr, pattern, *negated, *any, escape_char.is_some())
         }
         Expr::IsNull(expr) => Ok(vec![FilterCondition::new(
             parse_sql_column_expr(expr)?,
@@ -479,7 +480,7 @@ fn parse_sql_like(
     pattern: &Expr,
     negated: bool,
     any: bool,
-    escape_char: Option<&str>,
+    has_escape_char: bool,
 ) -> Result<Vec<FilterCondition>, AppError> {
     if negated {
         return Err(AppError::new(StatusCode::BAD_REQUEST, "NOT LIKE is not supported")
@@ -489,7 +490,7 @@ fn parse_sql_like(
         return Err(AppError::new(StatusCode::BAD_REQUEST, "LIKE ANY is not supported")
             .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
     }
-    if escape_char.is_some() {
+    if has_escape_char {
         return Err(AppError::new(StatusCode::BAD_REQUEST, "LIKE ESCAPE is not supported")
             .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
     }
@@ -564,16 +565,47 @@ fn parse_sql_order_by(
     let Some(order_by) = order_by else {
         return Ok(Vec::new());
     };
-    order_by
-        .exprs
+    let OrderByKind::Expressions(exprs) = &order_by.kind else {
+        return Err(AppError::new(StatusCode::BAD_REQUEST, "ORDER BY ALL is not supported")
+            .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
+    };
+    exprs
         .iter()
         .map(|expr| {
-            Ok(SortColumn {
-                field_path: parse_sql_column_expr(&expr.expr)?,
-                descending: expr.asc == Some(false),
-            })
+            let descending = match &expr.options.sort {
+                None | Some(OrderBySort::Asc) => false,
+                Some(OrderBySort::Desc) => true,
+                Some(OrderBySort::Using(_)) => {
+                    return Err(AppError::new(
+                        StatusCode::BAD_REQUEST,
+                        "ORDER BY ... USING is not supported",
+                    )
+                    .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
+                }
+            };
+            Ok(SortColumn { field_path: parse_sql_column_expr(&expr.expr)?, descending })
         })
         .collect()
+}
+
+/// `LIMIT`/`OFFSET` expressions of a query, including MySQL's `LIMIT <offset>, <limit>` form,
+/// which the parser already accepted before it gained a dedicated AST variant.
+pub(super) fn sql_query_limit_offset(query: &Query) -> (Option<&Expr>, Option<&Expr>) {
+    match &query.limit_clause {
+        None => (None, None),
+        Some(LimitClause::LimitOffset { limit, offset, .. }) => {
+            (limit.as_ref(), offset.as_ref().map(|offset| &offset.value))
+        }
+        Some(LimitClause::OffsetCommaLimit { offset, limit }) => (Some(limit), Some(offset)),
+    }
+}
+
+fn sql_object_name_part_ident(part: &ObjectNamePart) -> Result<&Ident, AppError> {
+    match part {
+        ObjectNamePart::Identifier(ident) => Ok(ident),
+        _ => Err(AppError::bad_request("Only plain identifiers are supported in table names")
+            .with_code(crate::error::ERROR_CODE_INVALID_SQL)),
+    }
 }
 fn parse_sql_usize_literal(expr: &Expr, clause: &str) -> Result<usize, AppError> {
     let value = parse_sql_literal(expr)?;
@@ -606,9 +638,8 @@ mod tests {
     };
     use tokio::sync::RwLock;
 
-    #[test]
-    fn parses_select_projection() {
-        let state = AppState {
+    fn test_state() -> AppState {
+        AppState {
             data_source: Arc::new(crate::app::DataSource::Folder(PathBuf::from("."))),
             config: Arc::new(crate::app::AppConfig {
                 readonly: false,
@@ -632,7 +663,12 @@ mod tests {
             metrics: Arc::new(crate::app::MetricsStore::default()),
             health: Arc::new(crate::app::HealthState::new(true, None)),
             event_bus: tokio::sync::broadcast::channel(16).0,
-        };
+        }
+    }
+
+    #[test]
+    fn parses_select_projection() {
+        let state = test_state();
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
         let parsed =
             runtime.block_on(parse_sql_query("SELECT id FROM users", &state)).expect("parse");
@@ -641,5 +677,17 @@ mod tests {
             parsed.selected_columns.expect("columns"),
             vec![ParsedSqlProjection { source: "id".to_string(), output: "id".to_string() }]
         );
+    }
+
+    #[test]
+    fn limit_offset_comma_form_matches_limit_offset() {
+        let state = test_state();
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        for sql in ["SELECT id FROM users LIMIT 20, 10", "SELECT id FROM users LIMIT 10 OFFSET 20"]
+        {
+            let parsed = runtime.block_on(parse_sql_query(sql, &state)).expect("parse");
+            let pagination = parsed.pagination.expect("pagination");
+            assert_eq!((pagination.page, pagination.per_page), (3, 10), "{sql}");
+        }
     }
 }
