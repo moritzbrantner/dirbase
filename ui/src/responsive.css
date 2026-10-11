@@ -85,5 +85,9 @@
   .overview-icon-button:hover,
   .schema-sidebar-item:hover {
     transform: none;
+    /* Tailwind 4 translate/scale/rotate utilities use the individual properties. */
+    translate: none;
+    scale: none;
+    rotate: none;
   }
 }
