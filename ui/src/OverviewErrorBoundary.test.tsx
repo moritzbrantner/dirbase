@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,7 +12,7 @@ describe('OverviewErrorBoundary', () => {
   it('shows a usable recovery surface when a child render throws', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    function BrokenOverview() {
+    function BrokenOverview(): ReactNode {
       throw new Error('render exploded');
     }
 
