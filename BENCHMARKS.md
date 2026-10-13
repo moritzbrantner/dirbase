@@ -16,29 +16,12 @@ scripts/benchmark_vs_json_server.sh
 
 The latest generated reports are written to `benchmarks/results/benchmark-report-<timestamp>.md`, with raw `autocannon` JSON beside them.
 
-## Latest Local Results
+## Historical Committed Results
 
-Latest run: `benchmarks/results/benchmark-report-20260420-115936.md`
+The most recent **tracked** six-resource benchmark snapshot is [`benchmarks/results/benchmark-report-20260416-132545.md`](./benchmarks/results/benchmark-report-20260416-132545.md). An earlier run and PokeAPI comparisons are also retained in `benchmarks/results/` for historical evidence. These measurements are dated local runs, not current throughput claims; some older reports use the former project name `folder-server`.
 
-- Generated: 2026-04-20 10:20:39 UTC
-- Command: `FORCE_REBUILD_DATA=1 scripts/benchmark_vs_json_server.sh`
-- Dataset: 92,252 rows across 6 resources
-- Configuration: 3 runs per scenario, 10s duration, 50 connections, 3s warm-up at 1 connection, `json-server@0.17.4`
-- Result quality: 0 non-2xx responses, 0 errors, and 0 timeouts across both modes
+New benchmark results are generated under the ignored `benchmarks/results/` paths and published by CI. Regenerate a report before citing current numbers rather than linking to a local-only timestamped artifact.
 
-Median throughput multiples, comparing `dirbase` request rate against `json-server`:
-
-| Mode | Median `dirbase` throughput multiple | Range |
-| --- | ---: | ---: |
-| With warm-up | 15.08x | 5.37x-98.48x |
-| Without warm-up | 16.92x | 4.85x-107.11x |
-
-Median latency multiples, comparing `json-server` latency against `dirbase` latency:
-
-| Mode | Median latency multiple | Range |
-| --- | ---: | ---: |
-| With warm-up | 13.10x | 5.41x-249.82x |
-| Without warm-up | 13.62x | 4.87x-316.47x |
 
 ## What To Compare
 
