@@ -431,4 +431,4 @@ A reproducible benchmark script is available at [`scripts/benchmark_vs_json_serv
 
 - Comparison guide and methodology: [`BENCHMARKS.md`](./BENCHMARKS.md)
 - Usage and methodology: [`benchmarks/README.md`](./benchmarks/README.md)
-- Historical comparison note: [`benchmarks/comparison.md`](./benchmarks/comparison.md)
+- Historical measurements: [`benchmarks/results/benchmark-report-20260416-132545.md`](./benchmarks/results/benchmark-report-20260416-132545.md) (dated snapshot; fresh run results are generated artifacts)
