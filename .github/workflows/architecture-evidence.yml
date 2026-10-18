@@ -76,21 +76,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Checkout pull request baseline
-        if: github.event_name == 'pull_request'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: .architecture-baseline
-          persist-credentials: false
-
-      - name: Checkout configured baseline
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ inputs.baseline_ref }}
-          path: .architecture-baseline
-          persist-credentials: false
+      - name: Check out exact baseline without persisting credentials
+        env:
+          BASELINE_REF: ${{ github.event.pull_request.base.sha || inputs.baseline_ref }}
+        run: |
+          git fetch --no-tags -- origin "$BASELINE_REF"
+          git worktree add --detach .architecture-baseline FETCH_HEAD
 
       - name: Setup Rust
         uses: ./.github/actions/setup-project
