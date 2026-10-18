@@ -1,22 +1,7 @@
 name: Architecture Evidence
 
 on:
-  pull_request:
-    paths:
-      - "src/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "scripts/architecture_benchmark.py"
-      - "scripts/architecture-contract.sh"
-      - "scripts/moonlight-architecture-compare.sh"
-      - "scripts/moonlight.sh"
-      - "scripts/runtime-profile.sh"
-      - "scripts/summarize_architecture_baseline.py"
-      - "scripts/summarize_architecture_baseline_test.py"
-      - "profiles/runtime-profiler/**"
-      - "moonlight.eval.toml"
-      - "benchmarks/architecture.md"
-      - ".github/workflows/architecture-evidence.yml"
+  workflow_call:
   push:
     branches: [main]
     paths:
