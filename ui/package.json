@@ -36,6 +36,7 @@
   },
   "overrides": {
     "postcss": "^8.5.10",
-    "vite": "^8.0.5"
+    "vite": "^8.0.5",
+    "@parcel/watcher": "2.6.0"
   }
 }
