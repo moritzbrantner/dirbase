@@ -41,6 +41,8 @@ jobs:
           trap restore_head EXIT
 
           git checkout --detach "$BASE_SHA"
+          # Exercise both revisions with the same watcher polling harness.
+          git restore --source="$HEAD_SHA" -- src/watcher_behavior_test.rs
           cargo llvm-cov clean --workspace
           cargo llvm-cov --all-features --no-report -- --test-threads=1
           cargo llvm-cov report --lcov --output-path "$baseline_dir/lcov.info"
