@@ -36,6 +36,7 @@ jobs:
           mkdir -p "$baseline_dir"
 
           restore_head() {
+            git restore --source=HEAD -- src/watcher_behavior_test.rs
             git checkout --detach "$HEAD_SHA"
           }
           trap restore_head EXIT
