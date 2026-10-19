@@ -1,0 +1,3 @@
+[submodule "benchmarks/json-graphql-server"]
+	path = benchmarks/json-graphql-server
+	url = https://github.com/marmelab/json-graphql-server.git
