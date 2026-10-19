@@ -60,13 +60,13 @@
   },
   "devDependencies": {
     "@types/node": "26.6.5",
-    "concurrently": "9.2.1",
-    "get-port": "7.1.0",
+    "concurrently": "9.2.5",
+    "get-port": "7.2.0",
     "husky": "9.1.7",
-    "oxfmt": "0.24.0",
-    "oxlint": "1.39.0",
-    "tempy": "3.1.0",
-    "type-fest": "5.4.0",
+    "oxfmt": "0.73.0",
+    "oxlint": "1.88.0",
+    "tempy": "3.2.0",
+    "type-fest": "5.10.0",
     "typescript": "6.0.3"
   },
   "engines": {
