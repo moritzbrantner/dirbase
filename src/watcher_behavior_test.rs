@@ -78,8 +78,8 @@ fn watcher_handles_rapid_burst_resource_changes() {
     fs::remove_file(temp.path().join("teams.json")).expect("delete teams");
 
     let overview = wait_for_json(&bind_addr, "GET", "/overview.json", None, |payload| {
-        let names = overview_resource_names(payload);
-        names == vec!["users".to_string(), "work".to_string()]
+        payload["resources"].is_array()
+            && overview_resource_names(payload) == vec!["users".to_string(), "work".to_string()]
     });
     assert_eq!(overview_resource_names(&overview), vec!["users".to_string(), "work".to_string()]);
 

@@ -1,7 +1,22 @@
 name: Architecture Evidence
 
 on:
-  workflow_call:
+  pull_request:
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/architecture_benchmark.py"
+      - "scripts/architecture-contract.sh"
+      - "scripts/moonlight-architecture-compare.sh"
+      - "scripts/moonlight.sh"
+      - "scripts/runtime-profile.sh"
+      - "scripts/summarize_architecture_baseline.py"
+      - "scripts/summarize_architecture_baseline_test.py"
+      - "profiles/runtime-profiler/**"
+      - "moonlight.eval.toml"
+      - "benchmarks/architecture.md"
+      - ".github/workflows/architecture-evidence.yml"
   push:
     branches: [main]
     paths:
@@ -76,11 +91,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check out exact baseline without persisting credentials
+      - name: Prepare architecture baseline
         env:
           BASELINE_REF: ${{ github.event.pull_request.base.sha || inputs.baseline_ref }}
         run: |
-          git fetch --no-tags -- origin "$BASELINE_REF"
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASELINE_REF"
           git worktree add --detach .architecture-baseline FETCH_HEAD
 
       - name: Setup Rust
