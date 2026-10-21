@@ -1,20 +1,7 @@
 name: Benchmarks
 
 on:
-  pull_request:
-    paths:
-      - "src/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "scripts/benchmark*"
-      - "scripts/moonlight*.sh"
-      - "scripts/runtime-profile.sh"
-      - "scripts/profile_benchmark_servers.py"
-      - "scripts/run_query_correctness.py"
-      - "scripts/run_write_benchmark.py"
-      - "benchmarks/**"
-      - "profiles/runtime-profiler/**"
-      - ".github/workflows/benchmarks.yml"
+  workflow_call:
   schedule:
     - cron: "17 4 * * 1"
   workflow_dispatch:

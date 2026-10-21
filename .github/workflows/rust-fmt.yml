@@ -1,9 +1,7 @@
 name: Rust Format Check
 
 on:
-  push:
-    branches: ["**"]
-  pull_request:
+  workflow_call:
 
 permissions:
   contents: read

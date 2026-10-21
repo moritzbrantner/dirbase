@@ -2,13 +2,50 @@ name: Rust Tests
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
+  validation-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      benchmarks: ${{ steps.scope.outputs.benchmarks }}
+      architecture-evidence: ${{ steps.scope.outputs.architecture-evidence }}
+      allow-skipped: ${{ steps.scope.outputs.allow-skipped }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - id: scope
+        shell: python
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          import json
+          import os
+          import re
+          import subprocess
+
+          # GitHub path filters: '*' stays within a segment; '**' crosses segments.
+          def matches(path, pattern):
+              parts = re.split(r"(\*\*/|\*\*|\*|\?)", pattern)
+              expression = "".join({"**/": "(?:.*/)?", "**": ".*", "*": "[^/]*", "?": "[^/]"}.get(part, re.escape(part)) for part in parts)
+              return re.fullmatch(expression, path) is not None
+
+          groups = {'benchmarks': ['src/**', 'Cargo.toml', 'Cargo.lock', 'scripts/benchmark*', 'scripts/moonlight*.sh', 'scripts/runtime-profile.sh', 'scripts/profile_benchmark_servers.py', 'scripts/run_query_correctness.py', 'scripts/run_write_benchmark.py', 'benchmarks/**', 'profiles/runtime-profiler/**', '.github/workflows/benchmarks.yml'], 'architecture-evidence': ['src/**', 'Cargo.toml', 'Cargo.lock', 'scripts/architecture_benchmark.py', 'scripts/architecture-contract.sh', 'scripts/moonlight-architecture-compare.sh', 'scripts/moonlight.sh', 'scripts/runtime-profile.sh', 'scripts/summarize_architecture_baseline.py', 'scripts/summarize_architecture_baseline_test.py', 'profiles/runtime-profiler/**', 'moonlight.eval.toml', 'benchmarks/architecture.md', '.github/workflows/architecture-evidence.yml']}
+          required = {name: False for name in groups}
+          if os.environ["GITHUB_EVENT_NAME"] == "pull_request":
+              paths = subprocess.check_output(["git", "diff", "--name-only", "--no-renames", "-z", os.environ["BASE_SHA"] + "..." + os.environ["HEAD_SHA"]]).decode().split("\0")
+              required = {name: any(matches(path, pattern) for path in paths for pattern in patterns) for name, patterns in groups.items()}
+          skipped = [name for name, enabled in required.items() if not enabled]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              for name, enabled in required.items():
+                  print(f"{name}={str(enabled).lower()}", file=output)
+              print(f"allow-skipped={json.dumps(skipped)}", file=output)
   rust-test:
     runs-on: ubuntu-latest
 
@@ -25,3 +62,58 @@ jobs:
         run: |
           rm -rf ui/dist
           DIRBASE_REBUILD_UI=1 cargo test --all-features --verbose -- --test-threads=1
+
+  ui-test:
+    uses: ./.github/workflows/ui-test.yml
+    secrets: inherit
+
+  secret-scan:
+    uses: ./.github/workflows/secret-scan.yml
+    secrets: inherit
+
+  rust-fmt:
+    uses: ./.github/workflows/rust-fmt.yml
+    secrets: inherit
+
+  rust-clippy:
+    uses: ./.github/workflows/rust-clippy.yml
+    secrets: inherit
+
+  dependency-security:
+    uses: ./.github/workflows/dependency-security.yml
+    secrets: inherit
+
+  coverage:
+    uses: ./.github/workflows/coverage.yml
+    secrets: inherit
+
+  codeql:
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+    secrets: inherit
+
+  benchmarks:
+    needs: validation-scope
+    if: needs.validation-scope.outputs.benchmarks == 'true'
+    uses: ./.github/workflows/benchmarks.yml
+    secrets: inherit
+
+  architecture-evidence:
+    needs: validation-scope
+    if: needs.validation-scope.outputs.architecture-evidence == 'true'
+    uses: ./.github/workflows/architecture-evidence.yml
+    secrets: inherit
+
+  merge-ready:
+    name: merge-ready
+    if: always()
+    needs: ["rust-test", "validation-scope", "ui-test", "secret-scan", "rust-fmt", "rust-clippy", "dependency-security", "coverage", "codeql", "benchmarks", "architecture-evidence"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: moritzbrantner/reusable-workflows/.github/actions/merge-ready@b0f25f241d76af2584dfc9e375084ff5c5cb97da
+        with:
+          needs: ${{ toJSON(needs) }}
+          required: '["rust-test", "validation-scope", "ui-test", "secret-scan", "rust-fmt", "rust-clippy", "dependency-security", "coverage", "codeql", "benchmarks", "architecture-evidence"]'
+          allow-skipped: ${{ needs.validation-scope.outputs.allow-skipped || '[]' }}
