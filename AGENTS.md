@@ -17,7 +17,7 @@
 
 ## Commands
 
-Use Bun 1.3.14 from `.bun-version` for JS/UI commands and the Rust toolchain from `rust-toolchain.toml`.
+Use the latest stable Bun for JS/UI commands and the Rust toolchain from `rust-toolchain.toml`.
 
 - Install UI dependencies: `bun install --cwd ui --frozen-lockfile`
 - Install JS wrapper dependencies: `bun install --cwd js --frozen-lockfile`
