@@ -7,7 +7,7 @@ inputs:
     default: "true"
   rust-toolchain:
     description: Rust toolchain version to install.
-    default: "1.89.0"
+    default: "stable"
   rust-components:
     description: Comma-separated Rust toolchain components to install.
     default: ""
@@ -48,7 +48,7 @@ runs:
       if: inputs.bun == 'true'
       uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
       with:
-        bun-version-file: ${{ github.workspace }}/.bun-version
+        bun-version: latest
 
     - name: Install UI dependencies
       if: inputs.bun == 'true' && inputs.ui-deps == 'true'
