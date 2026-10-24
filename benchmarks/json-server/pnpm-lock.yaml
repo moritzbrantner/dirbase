@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@tinyhttp/app':
         specifier: ^3.0.1
-        version: 3.0.12
+        version: 3.0.13
       '@tinyhttp/cors':
         specifier: ^2.0.1
         version: 2.0.1
@@ -329,8 +329,8 @@ packages:
     resolution: {integrity: sha512-hQrRevKhof6o3zapU6AqWw6X5UEt09dS6pY3OsRROXlugm6hYMAVwVuamKUVOpokP/eLL7RMW3X5l8P+9vft3g==}
     engines: {node: '>=14.13.1'}
 
-  '@tinyhttp/app@3.0.12':
-    resolution: {integrity: sha512-oMjiggdo/KR4Z8DL1/k5V/P41kUMqruVVScJ3rje18r+lRoCtwYZSZoA1pCvkZ1QweFcuRsSHgKbjyhlfE6pfQ==}
+  '@tinyhttp/app@3.0.13':
+    resolution: {integrity: sha512-xi33ncEUvOgfiTH9sFbg5p9MULvnpdfrtwf9UbTeEEMMbg3afvVuDen9z5f9UnKLnL7v5SzQsmnfzeXkmT/lZQ==}
     engines: {node: '>=16.10.0'}
 
   '@tinyhttp/content-disposition@2.2.4':
@@ -377,8 +377,8 @@ packages:
     resolution: {integrity: sha512-E2SAtPu/44VtC6jFcdZilqU60duUAjOApGz2r5TSj1HSLJnF9OdD/lB0lnKinSI8yxdYtYnpFZ8/0wQsc1Jl5A==}
     engines: {node: '>=14.13.1'}
 
-  '@tinyhttp/res@2.2.15':
-    resolution: {integrity: sha512-YSYFbzV80zokgUV6ML6k37hNIOsRF30sFlhEkaD9y/tmWq55n7q4Up8FWePiXCgmRirXsaNzAx5oRoJBjaeTkg==}
+  '@tinyhttp/res@2.2.16':
+    resolution: {integrity: sha512-0+SZJYEIs2y9dfwiLcON6L3onWNuXWqXxtODftLaJbKUn5zrR1rJqWZ4hP/DKQu7/IekQFyTmP/SUeyrlM/9Qw==}
     engines: {node: '>=14.13.1'}
 
   '@tinyhttp/router@2.2.5':
@@ -787,13 +787,13 @@ snapshots:
     dependencies:
       mrmime: 2.0.1
 
-  '@tinyhttp/app@3.0.12':
+  '@tinyhttp/app@3.0.13':
     dependencies:
       '@tinyhttp/accepts': 2.3.1
       '@tinyhttp/cookie': 2.1.1
       '@tinyhttp/proxy-addr': 3.0.1
       '@tinyhttp/req': 2.2.10
-      '@tinyhttp/res': 2.2.15
+      '@tinyhttp/res': 2.2.16
       '@tinyhttp/router': 2.2.5
       regexparam: 3.0.0
 
@@ -832,7 +832,7 @@ snapshots:
       '@tinyhttp/url': 2.1.1
       header-range-parser: 2.0.0
 
-  '@tinyhttp/res@2.2.15':
+  '@tinyhttp/res@2.2.16':
     dependencies:
       '@tinyhttp/content-disposition': 2.2.4
       '@tinyhttp/cookie': 2.1.1
