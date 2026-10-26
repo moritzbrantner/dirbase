@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "JavaScript wrapper around the dirbase Rust binary",
   "type": "module",
-  "packageManager": "bun@1.4.3",
+  "packageManager": "bun@1.4.4",
   "bin": {
     "dirbase": "dist/cli.js"
   },
