@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@tinyhttp/app':
         specifier: ^3.0.1
-        version: 3.0.13
+        version: 3.0.14
       '@tinyhttp/cors':
         specifier: ^2.0.1
         version: 2.0.1
@@ -329,8 +329,8 @@ packages:
     resolution: {integrity: sha512-hQrRevKhof6o3zapU6AqWw6X5UEt09dS6pY3OsRROXlugm6hYMAVwVuamKUVOpokP/eLL7RMW3X5l8P+9vft3g==}
     engines: {node: '>=14.13.1'}
 
-  '@tinyhttp/app@3.0.13':
-    resolution: {integrity: sha512-xi33ncEUvOgfiTH9sFbg5p9MULvnpdfrtwf9UbTeEEMMbg3afvVuDen9z5f9UnKLnL7v5SzQsmnfzeXkmT/lZQ==}
+  '@tinyhttp/app@3.0.14':
+    resolution: {integrity: sha512-adhJGgWhz3KqPVP5RGAMyna0CERDeEqvXtwmGniz6upH/HsbMvTFDBZLTEo4GcNDvIhCtnE98SoZHTDgZBdzlw==}
     engines: {node: '>=16.10.0'}
 
   '@tinyhttp/content-disposition@2.2.4':
@@ -787,7 +787,7 @@ snapshots:
     dependencies:
       mrmime: 2.0.1
 
-  '@tinyhttp/app@3.0.13':
+  '@tinyhttp/app@3.0.14':
     dependencies:
       '@tinyhttp/accepts': 2.3.1
       '@tinyhttp/cookie': 2.1.1
