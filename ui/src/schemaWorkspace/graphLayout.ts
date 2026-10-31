@@ -1,4 +1,5 @@
-import { deriveSchemaGraphRelations, deriveSchemaGraphTables } from './graph';
+import { buildSchemaGraphTables, deriveSchemaGraphRelations } from './graph';
+import type { SchemaGraphRelation, SchemaGraphTable } from './graph';
 import type { ResourceOverview, SchemaTable } from '../types';
 
 const SCHEMA_GRAPH_NODE_WIDTH = 260;
@@ -11,10 +12,11 @@ export function getSchemaGraphAutoLayout(
   effectiveTables: Record<string, SchemaTable>,
   options?: { minimizedTables?: Iterable<string> }
 ): Record<string, { x: number; y: number }> {
-  const graphTables = deriveSchemaGraphTables(resources, effectiveTables);
+  const relations = deriveSchemaGraphRelations(resources, effectiveTables);
+  const graphTables = buildSchemaGraphTables(resources, effectiveTables, relations);
   const minimizedTables = new Set(options?.minimizedTables ?? []);
   const tableNames = resources.map((resource) => resource.name);
-  const groupedByRank = rankSchemaGraphTables(resources, effectiveTables);
+  const groupedByRank = rankSchemaGraphTables(resources, relations, graphTables);
   const positions: Record<string, { x: number; y: number }> = {};
   let xCursor = 0;
 
@@ -49,13 +51,13 @@ export function getSchemaGraphAutoLayout(
 
 function rankSchemaGraphTables(
   resources: ResourceOverview[],
-  effectiveTables: Record<string, SchemaTable>
+  relations: SchemaGraphRelation[],
+  graphTables: Record<string, SchemaGraphTable>
 ): string[][] {
   const tableNames = resources.map((resource) => resource.name);
   const incomingCounts = new Map<string, number>(tableNames.map((tableName) => [tableName, 0]));
   const outgoing = new Map<string, Set<string>>(tableNames.map((tableName) => [tableName, new Set()]));
   const ranks = new Map<string, number>(tableNames.map((tableName) => [tableName, 0]));
-  const relations = deriveSchemaGraphRelations(resources, effectiveTables);
 
   for (const relation of relations) {
     const neighbors = outgoing.get(relation.sourceTable) ?? new Set<string>();
@@ -90,7 +92,6 @@ function rankSchemaGraphTables(
       });
   }
 
-  const graphTables = deriveSchemaGraphTables(resources, effectiveTables);
   const relationCounts = relations.reduce<Map<string, number>>((counts, relation) => {
     counts.set(relation.sourceTable, (counts.get(relation.sourceTable) ?? 0) + 1);
     return counts;

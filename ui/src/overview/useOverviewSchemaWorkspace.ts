@@ -44,7 +44,11 @@ export function useOverviewSchemaWorkspace({
     () => mergeSchemaEditorPayload(snapshot.inferred, lastValidDeclaredDraft),
     [lastValidDeclaredDraft, snapshot.inferred]
   );
-  const schemaValidationError = parsedJsonError ?? validateSchemaDraft(snapshot.inferred, lastValidDeclaredDraft);
+  const draftValidationError = useMemo(
+    () => validateSchemaDraft(snapshot.inferred, lastValidDeclaredDraft),
+    [lastValidDeclaredDraft, snapshot.inferred]
+  );
+  const schemaValidationError = parsedJsonError ?? draftValidationError;
 
   const saveSchemaMutation = useMutation({
     mutationFn: saveSchemaDocument,

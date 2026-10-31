@@ -29,8 +29,19 @@ export function deriveSchemaGraphTables(
   resources: ResourceOverview[],
   effectiveTables: Record<string, SchemaTable>
 ): Record<string, SchemaGraphTable> {
+  return buildSchemaGraphTables(
+    resources,
+    effectiveTables,
+    deriveSchemaGraphRelations(resources, effectiveTables)
+  );
+}
+
+export function buildSchemaGraphTables(
+  resources: ResourceOverview[],
+  effectiveTables: Record<string, SchemaTable>,
+  relations: SchemaGraphRelation[]
+): Record<string, SchemaGraphTable> {
   const knownTableNames = new Set(resources.map((resource) => resource.name));
-  const relations = deriveSchemaGraphRelations(resources, effectiveTables);
   const relationKindsByTable = new Map<string, Map<string, SchemaGraphColumn['relation']>>();
   for (const relation of relations) {
     const columns = relationKindsByTable.get(relation.sourceTable) ?? new Map();
@@ -56,6 +67,35 @@ export function deriveSchemaGraphTables(
         columnType: column.column_type
       }));
   });
+  // Results depend only on the column type, so each distinct type is scanned once.
+  const compatiblePrimaryKeysByType = new Map<string, typeof primaryKeys>();
+  const getCompatiblePrimaryKeys = (columnType: string) => {
+    let compatible = compatiblePrimaryKeysByType.get(columnType);
+    if (!compatible) {
+      compatible = primaryKeys.filter((target) =>
+        columnTypesAreCompatible(columnType, target.columnType)
+      );
+      compatiblePrimaryKeysByType.set(columnType, compatible);
+    }
+    return compatible;
+  };
+  const compatibleSourceByType = new Map<string, boolean>();
+  const hasCompatibleSourceColumn = (columnType: string) => {
+    let compatible = compatibleSourceByType.get(columnType);
+    if (compatible === undefined) {
+      compatible = resources.some((candidateResource) => {
+        const candidateColumns = baseColumnsByTable[candidateResource.name] ?? [];
+        return candidateColumns.some(
+          (candidateColumn) =>
+            !candidateColumn.is_primary_key &&
+            isKnownComparableColumnType(candidateColumn.column_type) &&
+            columnTypesAreCompatible(candidateColumn.column_type, columnType)
+        );
+      });
+      compatibleSourceByType.set(columnType, compatible);
+    }
+    return compatible;
+  };
   const targetedColumns = new Map<string, Set<string>>();
 
   for (const relation of relations) {
@@ -74,23 +114,13 @@ export function deriveSchemaGraphTables(
         const hasCompatiblePrimaryTarget =
           !column.is_primary_key &&
           isKnownComparableColumnType(column.column_type) &&
-          primaryKeys.some(
-            (target) =>
-              (target.tableName !== resource.name || target.columnName !== column.name) &&
-              columnTypesAreCompatible(column.column_type, target.columnType)
+          getCompatiblePrimaryKeys(column.column_type).some(
+            (target) => target.tableName !== resource.name || target.columnName !== column.name
           );
         const hasCompatibleSource =
           column.is_primary_key &&
           isKnownComparableColumnType(column.column_type) &&
-          resources.some((candidateResource) => {
-            const candidateColumns = baseColumnsByTable[candidateResource.name] ?? [];
-            return candidateColumns.some(
-              (candidateColumn) =>
-                !candidateColumn.is_primary_key &&
-                isKnownComparableColumnType(candidateColumn.column_type) &&
-                columnTypesAreCompatible(candidateColumn.column_type, column.column_type)
-            );
-          });
+          hasCompatibleSourceColumn(column.column_type);
         const canSource =
           column.relation === 'foreign'
             ? true
@@ -137,9 +167,18 @@ export function deriveSchemaGraphRelations(
   const knownTableNames = new Set(resourceNames);
   const aliases = buildSchemaGraphTableAliases(resourceNames);
   const relations = new Map<string, SchemaGraphRelation>();
+  const normalizedTables = new Map<string, SchemaTable>();
+  const getNormalizedTable = (tableName: string) => {
+    let table = normalizedTables.get(tableName);
+    if (!table) {
+      table = normalizeSchemaTable(effectiveTables[tableName]);
+      normalizedTables.set(tableName, table);
+    }
+    return table;
+  };
 
   for (const sourceTable of resourceNames) {
-    const table = normalizeSchemaTable(effectiveTables[sourceTable]);
+    const table = getNormalizedTable(sourceTable);
 
     for (const [sourceColumn, foreignKey] of Object.entries(table.foreign_keys ?? {})) {
       if (!knownTableNames.has(foreignKey.target_table)) {
@@ -164,7 +203,7 @@ export function deriveSchemaGraphRelations(
       const relation = inferOneToManyGraphRelation(
         sourceTable,
         sourceColumn,
-        effectiveTables,
+        getNormalizedTable,
         aliases
       );
       if (relation) {
@@ -217,7 +256,7 @@ function normalizeSchemaGraphAlias(value: string): string {
 function inferOneToManyGraphRelation(
   sourceTable: string,
   sourceColumn: string,
-  tables: Record<string, SchemaTable>,
+  getNormalizedTable: (tableName: string) => SchemaTable,
   aliases: Map<string, string>
 ): SchemaGraphRelation | null {
   const rawTargetAlias = sourceColumn.endsWith('_ids')
@@ -235,7 +274,7 @@ function inferOneToManyGraphRelation(
     return null;
   }
 
-  const targetTable = normalizeSchemaTable(tables[targetTableName]);
+  const targetTable = getNormalizedTable(targetTableName);
   if (!targetTable.primary_key || !targetTable.columns?.[targetTable.primary_key]) {
     return null;
   }

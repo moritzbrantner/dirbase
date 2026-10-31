@@ -79,15 +79,7 @@ export function cleanDeclaredTable(table: DeclaredSchemaTable): DeclaredSchemaTa
     }
   }
 
-  const foreignKeys: Record<string, SchemaForeignKey> = {};
-  for (const [columnName, foreignKeyValue] of Object.entries(table.foreign_keys ?? {})) {
-    if (isValidForeignKey(foreignKeyValue)) {
-      foreignKeys[columnName] = {
-        target_table: foreignKeyValue.target_table,
-        target_column: foreignKeyValue.target_column
-      };
-    }
-  }
+  const foreignKeys = cleanForeignKeys(table.foreign_keys);
   const suppressed_foreign_keys = [...new Set((table.suppressed_foreign_keys ?? []).filter(Boolean))].sort();
   const unique = cleanUniqueConstraints(table.unique);
 
@@ -116,44 +108,15 @@ export function isDeclaredTableEmpty(table: DeclaredSchemaTable): boolean {
 }
 
 export function cleanSchemaTable(table: SchemaTable): SchemaTable {
-  const columns: Record<string, SchemaColumn> = {};
-  for (const [columnName, columnValue] of Object.entries(table.columns ?? {})) {
-    columns[columnName] = cleanSchemaColumn(columnValue);
-  }
-
-  const foreignKeys: Record<string, SchemaForeignKey> = {};
-  for (const [columnName, foreignKeyValue] of Object.entries(table.foreign_keys ?? {})) {
-    if (isValidForeignKey(foreignKeyValue)) {
-      foreignKeys[columnName] = {
-        target_table: foreignKeyValue.target_table,
-        target_column: foreignKeyValue.target_column
-      };
-    }
-  }
-
-  const manyToMany: Record<string, SchemaManyToManyRelation> = {};
-  for (const [relationName, relationValue] of Object.entries(table.many_to_many ?? {})) {
-    if (isValidManyToManyRelation(relationValue)) {
-      manyToMany[relationName] = {
-        through_table: relationValue.through_table,
-        source_column: relationValue.source_column,
-        source_target_column: relationValue.source_target_column,
-        target_table: relationValue.target_table,
-        target_column: relationValue.target_column,
-        through_target_column: relationValue.through_target_column
-      };
-    }
-  }
-  const unique = cleanUniqueConstraints(table.unique);
-
   return {
     ...table,
     kind: normalizeTableKind(table.kind) ?? 'unknown',
     primary_key:
       typeof table.primary_key === 'string' && table.primary_key.trim() ? table.primary_key : null,
-    columns,
-    foreign_keys: foreignKeys,
-    many_to_many: manyToMany
+    // A malformed column becomes an empty column whose fields are explicitly undefined.
+    columns: cleanColumns(table.columns, (column) => cleanSchemaColumn(isRecord(column) ? column : {})),
+    foreign_keys: cleanForeignKeys(table.foreign_keys),
+    many_to_many: cleanManyToMany(table.many_to_many)
   };
 }
 
@@ -162,24 +125,8 @@ export function normalizeDeclaredTable(table: unknown): DeclaredSchemaTable {
     return {};
   }
 
-  const columns: Record<string, SchemaColumn> = {};
-  if (isRecord(table.columns)) {
-    for (const [columnName, columnValue] of Object.entries(table.columns)) {
-      columns[columnName] = cleanSchemaColumn(columnValue);
-    }
-  }
-
-  const foreignKeys: Record<string, SchemaForeignKey> = {};
-  if (isRecord(table.foreign_keys)) {
-    for (const [columnName, foreignKeyValue] of Object.entries(table.foreign_keys)) {
-      if (isValidForeignKey(foreignKeyValue)) {
-        foreignKeys[columnName] = {
-          target_table: foreignKeyValue.target_table,
-          target_column: foreignKeyValue.target_column
-        };
-      }
-    }
-  }
+  const columns = cleanColumns(table.columns);
+  const foreignKeys = cleanForeignKeys(table.foreign_keys);
   const unique = cleanUniqueConstraints(table.unique);
 
   return {
@@ -201,16 +148,26 @@ export function normalizeSchemaTable(table: unknown): SchemaTable {
     return { kind: 'unknown', primary_key: null, columns: {}, foreign_keys: {}, many_to_many: {} };
   }
 
+  return cleanSchemaTable(table);
+}
+
+function cleanColumns(
+  value: unknown,
+  cleanColumn: (column: unknown) => SchemaColumn = cleanSchemaColumn
+): Record<string, SchemaColumn> {
   const columns: Record<string, SchemaColumn> = {};
-  if (isRecord(table.columns)) {
-    for (const [columnName, columnValue] of Object.entries(table.columns)) {
-      columns[columnName] = cleanSchemaColumn(columnValue);
+  if (isRecord(value)) {
+    for (const [columnName, columnValue] of Object.entries(value)) {
+      columns[columnName] = cleanColumn(columnValue);
     }
   }
+  return columns;
+}
 
+function cleanForeignKeys(value: unknown): Record<string, SchemaForeignKey> {
   const foreignKeys: Record<string, SchemaForeignKey> = {};
-  if (isRecord(table.foreign_keys)) {
-    for (const [columnName, foreignKeyValue] of Object.entries(table.foreign_keys)) {
+  if (isRecord(value)) {
+    for (const [columnName, foreignKeyValue] of Object.entries(value)) {
       if (isValidForeignKey(foreignKeyValue)) {
         foreignKeys[columnName] = {
           target_table: foreignKeyValue.target_table,
@@ -219,10 +176,13 @@ export function normalizeSchemaTable(table: unknown): SchemaTable {
       }
     }
   }
+  return foreignKeys;
+}
 
+function cleanManyToMany(value: unknown): Record<string, SchemaManyToManyRelation> {
   const manyToMany: Record<string, SchemaManyToManyRelation> = {};
-  if (isRecord(table.many_to_many)) {
-    for (const [relationName, relationValue] of Object.entries(table.many_to_many)) {
+  if (isRecord(value)) {
+    for (const [relationName, relationValue] of Object.entries(value)) {
       if (isValidManyToManyRelation(relationValue)) {
         manyToMany[relationName] = {
           through_table: relationValue.through_table,
@@ -235,16 +195,7 @@ export function normalizeSchemaTable(table: unknown): SchemaTable {
       }
     }
   }
-
-  return cleanSchemaTable({
-    ...table,
-    kind: normalizeTableKind(table.kind) ?? 'unknown',
-    primary_key:
-      typeof table.primary_key === 'string' && table.primary_key.trim() ? table.primary_key : null,
-    columns,
-    foreign_keys: foreignKeys,
-    many_to_many: manyToMany
-  });
+  return manyToMany;
 }
 
 export function cleanSchemaColumn(column: unknown): SchemaColumn {

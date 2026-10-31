@@ -1,4 +1,10 @@
-import { cleanSchemaTable, normalizeDeclaredSchema, normalizeDeclaredTable, normalizeSchema, normalizeSchemaTable } from './normalize';
+import {
+  cleanSchemaTable,
+  normalizeDeclaredSchema,
+  normalizeDeclaredTable,
+  normalizeSchema,
+  normalizeSchemaTable
+} from './normalize';
 import type {
   DeclaredSchemaResponse,
   SchemaEditorPayload,

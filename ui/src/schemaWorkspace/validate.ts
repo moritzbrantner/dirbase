@@ -1,4 +1,9 @@
-import { columnTypesAreCompatible, isBoundedColumnType, isNumericLikeColumnType, isStringBackedColumnType } from './columnTypes';
+import {
+  columnTypesAreCompatible,
+  isBoundedColumnType,
+  isNumericLikeColumnType,
+  isStringBackedColumnType
+} from './columnTypes';
 import { mergeSchemaEditorPayload } from './merge';
 import { normalizeDeclaredSchema, normalizeDeclaredTable, normalizeSchemaTable } from './normalize';
 import type {
@@ -14,8 +19,11 @@ export function validateSchemaDraft(
   const effective = mergeSchemaEditorPayload(inferredInput, declaredInput);
   const declared = normalizeDeclaredSchema(declaredInput);
 
-  for (const [tableName, tableValue] of Object.entries(effective.tables ?? {})) {
-    const table = normalizeSchemaTable(tableValue);
+  // The merge already normalized its own tables; a target name that only resolves through the
+  // prototype chain (such as 'constructor') is not one of them.
+  const effectiveTables = new Map(Object.entries(effective.tables ?? {}));
+
+  for (const [tableName, table] of effectiveTables) {
     if (table.primary_key && !table.columns?.[table.primary_key]) {
       return `table '${tableName}' declares primary key '${table.primary_key}' but no such column exists`;
     }
@@ -37,7 +45,9 @@ export function validateSchemaDraft(
         return `table '${tableName}' foreign key '${sourceColumn}' targets unknown table '${foreignKeyValue.target_table}'`;
       }
 
-      const targetColumn = normalizeSchemaTable(targetTable).columns?.[foreignKeyValue.target_column];
+      const targetColumn = (
+        effectiveTables.get(foreignKeyValue.target_table) ?? normalizeSchemaTable(targetTable)
+      ).columns?.[foreignKeyValue.target_column];
       if (!targetColumn) {
         return `table '${tableName}' foreign key '${sourceColumn}' targets unknown column '${foreignKeyValue.target_table}.${foreignKeyValue.target_column}'`;
       }
