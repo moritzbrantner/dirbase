@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use axum::http::StatusCode;
 use sqlparser::{
     ast::{
-        BinaryOperator, Expr, Ident, Join, JoinConstraint, JoinOperator, LimitClause,
+        BinaryOperator, Expr, Ident, InTarget, Join, JoinConstraint, JoinOperator, LimitClause,
         ObjectNamePart, OrderByKind, OrderBySort, Query, Select, SelectItem, SetExpr, Statement,
         TableFactor, Value as SqlValue,
     },
@@ -420,7 +420,7 @@ fn parse_sql_where(expr: &Expr) -> Result<Vec<FilterCondition>, AppError> {
             }
             Ok(vec![FilterCondition::new(field_path, operator, value)])
         }
-        Expr::InList { expr, list, negated } => {
+        Expr::In { expr, target: InTarget::List(list), negated, global: false } => {
             if *negated {
                 return Err(AppError::new(StatusCode::BAD_REQUEST, "NOT IN is not supported")
                     .with_code(crate::error::ERROR_CODE_UNSUPPORTED_FEATURE));
